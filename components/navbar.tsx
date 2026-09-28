@@ -1,0 +1,1643 @@
+"use client";
+
+import { useRouter, usePathname } from "next/navigation";
+import { Button } from "./ui/button";
+import Image from "next/image";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState, useRef, useEffect } from "react";
+import { tradeItems } from "@/lib/constants";
+import { useTheme } from "@/contexts/theme-context";
+import { useMarginAccountInfoStore } from "@/store/margin-account-info-store";
+import { useWallet } from "@/hooks/use-wallet";
+import { useViewportScale } from "@/lib/hooks/useViewportScale";
+import { FaucetPopup } from "./faucet/faucet-popup";
+import { NETWORK_LABEL, explorerUrl } from "@/lib/solana/config";
+
+interface Navbar {
+  /** Nav entries; `group` ("primary" | "bordered" | "secondary") controls placement/styling. */
+  items: {
+    title: string;
+    link: string;
+    group: string;
+  }[];
+}
+
+/**
+ * Resolves whether a nav item is the active route. Handles the special cases:
+ * Trade is active for any `/trade/*` route or sub-item, and Margin lives at both `/`
+ * and `/margin`.
+ */
+function isNavItemActive(
+  pathname: string,
+  item: { title: string; link: string }
+): boolean {
+  if (item.title === "Trade") {
+    return (
+      pathname === item.link ||
+      pathname.startsWith(`${item.link}/`) ||
+      tradeItems.some((tradeItem) => pathname === tradeItem.link)
+    );
+  }
+  if (item.title === "Margin") {
+    return pathname === "/" || pathname === "/margin";
+  }
+  return (
+    pathname === item.link ||
+    (item.link !== "/" && pathname.startsWith(`${item.link}/`))
+  );
+}
+
+/**
+ * Active nav pill. The pink was a light-mode literal, so on the dark bar it lit up as a
+ * near-white chip — the one thing in the header brighter than the logo. Dark gets the
+ * deep rose the rest of the dark palette is built on, with the same brand pink ink.
+ */
+function activePillClass(isDark: boolean): string {
+  return isDark ? "bg-[#3A0F27] text-[#FF3D91]" : "bg-[#FFE6F2] text-[#FF007A]";
+}
+
+/**
+ * Top application navigation bar. Renders the logo, grouped nav items (with a
+ * hover/focus Trade dropdown), and the right-hand cluster: fork faucet
+ * (wallet-gated), the "Solana Mainnet Fork" network badge, wallet connect /
+ * account menu, theme toggle, and the responsive mobile hamburger panel.
+ *
+ * The wallet menu surfaces the connected address plus the derived margin account
+ * PDA (copyable, with an explorer link pointed at the local fork). Wallet
+ * selection uses the wallet-adapter modal (Wallet Standard autodetect: Phantom,
+ * Backpack, Solflare). The whole bar is scaled via `useViewportScale` for
+ * consistent layout across zoom levels.
+ */
+export const Navbar = (props: Navbar) => {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { isDark, toggleTheme } = useTheme();
+  const zoom = useViewportScale(1440);
+  const { address, walletName, connectWallet, disconnectWallet, isLoading } = useWallet();
+  const walletLabel = walletName ? `${walletName} Wallet` : "Solana Wallet";
+  const marginAccountAddress = useMarginAccountInfoStore((s) => s.marginAccountAddress);
+  const [marginCopied, setMarginCopied] = useState(false);
+  const handleCopyMarginAddress = () => {
+    if (!marginAccountAddress) return;
+    navigator.clipboard.writeText(marginAccountAddress).catch(() => {});
+    setMarginCopied(true);
+    window.setTimeout(() => setMarginCopied(false), 1500);
+  };
+
+  const filteredItems = props.items;
+
+  const groupedItems = {
+    primary: filteredItems.filter((item) => item.group === "primary"),
+    bordered: filteredItems.filter((item) => item.group === "bordered"),
+    secondary: filteredItems.filter((item) => item.group === "secondary"),
+  };
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isWalletDropdownOpen, setIsWalletDropdownOpen] = useState(false);
+  const [isFaucetOpen, setIsFaucetOpen] = useState(false);
+  const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const walletMenuRef = useRef<HTMLDivElement>(null);
+  const walletMenuMobileRef = useRef<HTMLDivElement>(null);
+  const walletCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+      if (walletCloseTimeoutRef.current)
+        clearTimeout(walletCloseTimeoutRef.current);
+    };
+  }, []);
+
+  // Close wallet menu on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inDesktop = walletMenuRef.current?.contains(target);
+      const inMobile = walletMenuMobileRef.current?.contains(target);
+      if (!inDesktop && !inMobile) setIsWalletDropdownOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const handleNavItemClickWithLink = (item: {
+    title: string;
+    link: string;
+  }) => {
+    if (item.title === "Trade") return;
+    router.push(item.link);
+  };
+
+  const handleMouseEnter = (item: { title: string; link: string }) => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    if (item.title === "Trade") setIsDropdownOpen(true);
+  };
+
+  const handleMouseLeave = () => {
+    closeTimeoutRef.current = setTimeout(() => {
+      setIsDropdownOpen(false);
+    }, 150);
+  };
+
+  const handleDropdownMouseEnter = () => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+  };
+
+  const handleDropdownMouseLeave = () => {
+    setIsDropdownOpen(false);
+  };
+
+  const handleWalletClick = () => {
+    setIsWalletDropdownOpen(!isWalletDropdownOpen);
+  };
+  const handleDisconnect = () => {
+    disconnectWallet();
+    setIsWalletDropdownOpen(false);
+  };
+  /** Opens the wallet-adapter selection modal (Phantom / Backpack / Solflare …). */
+  const openConnectModal = () => {
+    void connectWallet();
+  };
+
+  const handleNavKeyDown =
+    (item: { title: string; link: string }) => (event: React.KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        handleNavItemClickWithLink(item);
+      }
+      if (event.key === "Escape") setIsDropdownOpen(false);
+    };
+
+  return (
+    <div
+      className={`sticky top-0 z-[1000] ${
+        isDark
+          ? "bg-[#111111] border-b border-[rgba(255,255,255,0.06)]"
+          : "bg-white border-b border-[#EBEBEB]"
+      }`}
+      style={{ zoom }}
+    >
+      <motion.div
+        className="h-[56px] xl:h-[72px] px-4 sm:px-8 xl:px-[48px] w-full flex items-center overflow-visible"
+        initial={{ y: -100, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+      >
+        {/* Logo section */}
+        <div className="flex-1 flex items-center gap-3 min-w-0">
+          <motion.a
+            href="/"
+            className="cursor-pointer shrink-0"
+            aria-label="Vanna home page"
+            initial={{
+              scale: 0,
+              rotate: -180,
+              opacity: 0,
+            }}
+            animate={{
+              scale: 1,
+              rotate: 0,
+              opacity: 1,
+            }}
+            transition={{
+              type: "spring",
+              stiffness: 260,
+              damping: 20,
+              duration: 0.8,
+            }}
+            whileHover={{
+              scale: 1.05,
+              rotate: [0, -5, 5, -5, 0],
+              transition: {
+                rotate: {
+                  duration: 0.5,
+                  ease: "easeInOut",
+                },
+                scale: {
+                  type: "spring",
+                  stiffness: 400,
+                  damping: 17,
+                },
+              },
+            }}
+            whileTap={{ scale: 0.95 }}
+          >
+            {/* Desktop: full logo */}
+            <Image
+              alt="Vanna"
+              width={307}
+              height={96}
+              className="hidden sm:block h-[36px] w-auto xl:h-[46px]"
+              src={isDark ? "/logos/vanna-white.png" : "/logos/vanna.png"}
+            />
+            {/* Mobile: icon only */}
+            <Image
+              alt="Vanna"
+              width={96}
+              height={96}
+              className="sm:hidden h-[28px] w-[28px]"
+              src="/logos/vanna-icon.png"
+            />
+          </motion.a>
+          {/* Mobile: current page name */}
+          <span
+            className={`sm:hidden text-[15px] font-bold ${
+              isDark ? "text-white" : "text-[#111111]"
+            }`}
+          >
+            {(() => {
+              if (pathname === "/" || pathname === "/margin") return "Margin";
+              if (pathname.startsWith("/trade/spot")) return "Spot";
+              if (pathname.startsWith("/trade")) return "Trade";
+              if (pathname.startsWith("/farm")) return "Farm";
+              if (pathname.startsWith("/earn")) return "Earn";
+              if (pathname.startsWith("/portfolio")) return "Portfolio";
+              return "";
+            })()}
+          </span>
+        </div>
+
+        {/* Navigation items — desktop only */}
+        <div className="hidden xl:flex gap-2 items-center">
+          {groupedItems.primary.map((item, idx) => {
+            const isActive = isNavItemActive(pathname, item);
+            return (
+              <motion.div
+                key={item.link}
+                onClick={() => {
+                  handleNavItemClickWithLink(item);
+                }}
+                onKeyDown={handleNavKeyDown(item)}
+                role="button"
+                tabIndex={0}
+                className={`rounded-[8px] py-[9px] px-[16px] text-[14px] font-semibold group flex gap-1.5 items-center hover:text-[#FF007A] cursor-pointer transition-colors ${
+                  isActive
+                    ? activePillClass(isDark)
+                    : isDark
+                    ? "text-white"
+                    : ""
+                }`}
+                aria-label={`Navigate to ${item.title}`}
+                aria-current={isActive ? "page" : undefined}
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.3,
+                  delay: idx * 0.1,
+                  ease: "easeOut",
+                }}
+                whileHover={{
+                  scale: 0.95,
+                  transition: { type: "spring", stiffness: 300, damping: 15 },
+                }}
+                whileTap={{ scale: 0.95 }}
+              >
+                {item.title}
+              </motion.div>
+            );
+          })}
+          <div
+            className={`rounded-[8px] border-[1px] ${
+              isDark ? "border-[#2A2A2A]" : "border-[#E5E7EB]"
+            } p-1 flex gap-1 overflow-visible`}
+          >
+            {groupedItems.bordered.map((item, idx) => {
+              const isActive = isNavItemActive(pathname, item);
+
+              if (item.title === "Trade") {
+                return (
+                  <div key={item.link} className="relative">
+                    <motion.div
+                      onHoverStart={() => handleMouseEnter(item)}
+                      onHoverEnd={handleMouseLeave}
+                      onClick={() => handleNavItemClickWithLink(item)}
+                      onKeyDown={handleNavKeyDown(item)}
+                      role="button"
+                      tabIndex={0}
+                      className={`rounded-[8px] py-[9px] px-[16px] text-[14px] font-semibold group flex gap-1.5 items-center hover:text-[#FF007A] cursor-pointer transition-colors ${
+                        isActive
+                          ? activePillClass(isDark)
+                          : isDark
+                          ? "text-white"
+                          : ""
+                      }`}
+                      aria-haspopup="menu"
+                      aria-expanded={isDropdownOpen}
+                      aria-controls="trade-menu"
+                      aria-label="Navigate to Trade"
+                      aria-current={isActive ? "page" : undefined}
+                      initial={{ opacity: 0, y: -20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.3,
+                        delay: idx * 0.1,
+                        ease: "easeOut",
+                      }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      {item.title}
+                      <motion.div
+                        className="w-3 h-3 flex justify-center items-center"
+                        animate={{ rotate: isDropdownOpen ? 180 : 0 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <svg width="10" height="6" viewBox="0 0 18 10" fill="none">
+                          <path
+                            d="M17 1L9 9L0.999999 1"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className={
+                              isActive
+                                ? "stroke-[#FF007A]"
+                                : isDark
+                                ? "stroke-white group-hover:stroke-[#FF007A]"
+                                : "stroke-black group-hover:stroke-[#FF007A]"
+                            }
+                          />
+                        </svg>
+                      </motion.div>
+                    </motion.div>
+
+                    {/* Floating card dropdown */}
+                    <AnimatePresence>
+                      {isDropdownOpen && (
+                        <motion.div
+                          id="trade-menu"
+                          role="menu"
+                          aria-label="Trade menu"
+                          initial={{ opacity: 0, y: 6, scale: 0.97 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                          transition={{ duration: 0.18, ease: "easeOut" }}
+                          onMouseEnter={handleDropdownMouseEnter}
+                          onMouseLeave={handleDropdownMouseLeave}
+                          className={`absolute top-[calc(100%+10px)] left-1/2 -translate-x-1/2 z-50 w-[200px] rounded-[14px] overflow-hidden ${
+                            isDark
+                              ? "bg-[#161616] border border-[#2A2A2A]"
+                              : "bg-white border border-[#E8E8E8]"
+                          }`}
+                          style={{
+                            boxShadow: isDark
+                              ? "0 12px 40px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(255,255,255,0.04)"
+                              : "0 12px 40px rgba(0,0,0,0.1), 0 0 0 0.5px rgba(0,0,0,0.04)",
+                          }}
+                        >
+                          <div className="p-[6px]">
+                            {tradeItems.map((tradeItem) => {
+                              const isTradeActive =
+                                pathname === tradeItem.link;
+                              return (
+                                <motion.div
+                                  key={tradeItem.link}
+                                  role="menuitem"
+                                  tabIndex={0}
+                                  onClick={() =>
+                                    handleNavItemClickWithLink(tradeItem)
+                                  }
+                                  onKeyDown={handleNavKeyDown(tradeItem)}
+                                  className={`flex items-center gap-3 px-3 py-[10px] rounded-[10px] cursor-pointer transition-colors ${
+                                    isTradeActive
+                                      ? isDark
+                                        ? "bg-[#1E1E1E] text-[#FF007A]"
+                                        : "bg-[#FFF0F6] text-[#FF007A]"
+                                      : isDark
+                                      ? "text-[#C0C0C0] hover:bg-[#1E1E1E] hover:text-white"
+                                      : "text-[#3A3A3A] hover:bg-[#F5F5F5] hover:text-[#111]"
+                                  }`}
+                                  whileHover={{ x: 2 }}
+                                  whileTap={{ scale: 0.98 }}
+                                  transition={{ duration: 0.12 }}
+                                >
+                                  {/* Icon */}
+                                  <div
+                                    className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                                      isDark ? "bg-[#242424]" : "bg-[#F0F0F0]"
+                                    }`}
+                                  >
+                                    {tradeItem.title === "Spot" ? (
+                                      <svg
+                                        width="16"
+                                        height="16"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                      >
+                                        <circle
+                                          cx="12"
+                                          cy="12"
+                                          r="4"
+                                          stroke={
+                                            isTradeActive
+                                              ? "#FF007A"
+                                              : isDark
+                                              ? "#A0A0A0"
+                                              : "#666"
+                                          }
+                                          strokeWidth="2"
+                                        />
+                                        <path
+                                          d="M12 2v3M12 19v3M2 12h3M19 12h3"
+                                          stroke={
+                                            isTradeActive
+                                              ? "#FF007A"
+                                              : isDark
+                                              ? "#A0A0A0"
+                                              : "#666"
+                                          }
+                                          strokeWidth="2"
+                                          strokeLinecap="round"
+                                        />
+                                      </svg>
+                                    ) : (
+                                      <svg
+                                        width="16"
+                                        height="16"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                      >
+                                        <path
+                                          d="M3 17l4-8 4 4 4-6 4 10"
+                                          stroke={
+                                            isTradeActive
+                                              ? "#FF007A"
+                                              : isDark
+                                              ? "#A0A0A0"
+                                              : "#666"
+                                          }
+                                          strokeWidth="2"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                      </svg>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-[13px] font-semibold leading-tight">
+                                      {tradeItem.title}
+                                    </p>
+                                    <p
+                                      className={`text-[11px] mt-0.5 whitespace-nowrap ${
+                                        isDark ? "text-[#666]" : "text-[#999]"
+                                      }`}
+                                    >
+                                      {tradeItem.title === "Spot"
+                                        ? "Leveraged Spot"
+                                        : "Leverage over Leverage"}
+                                    </p>
+                                  </div>
+                                </motion.div>
+                              );
+                            })}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              }
+
+              return (
+                <motion.div
+                  key={item.link}
+                  onClick={() => handleNavItemClickWithLink(item)}
+                  onKeyDown={handleNavKeyDown(item)}
+                  role="button"
+                  tabIndex={0}
+                  className={`rounded-[8px] py-[9px] px-[16px] text-[14px] font-semibold group flex gap-1.5 items-center hover:text-[#FF007A] cursor-pointer transition-colors ${
+                    isActive
+                      ? activePillClass(isDark)
+                      : isDark
+                      ? "text-white"
+                      : ""
+                  }`}
+                  aria-label={`Navigate to ${item.title}`}
+                  aria-current={isActive ? "page" : undefined}
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{
+                    duration: 0.3,
+                    delay: idx * 0.1,
+                    ease: "easeOut",
+                  }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  {item.title == "Margin" && (
+                    <div className="w-4 h-4 flex flex-col justify-center items-center">
+                      <svg
+                        width="8"
+                        height="13"
+                        viewBox="0 0 8 13"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          opacity="0.3"
+                          d="M7.33332 4L3.99999 0.666672L0.666656 4"
+                          className={`transition-colors ${
+                            isActive
+                              ? "stroke-[#FF007A]"
+                              : isDark
+                              ? "stroke-white group-hover:stroke-[#FF007A]"
+                              : "stroke-black group-hover:stroke-[#FF007A]"
+                          }`}
+                          strokeWidth="1.33333"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          opacity="0.6"
+                          d="M7.33332 8L3.99999 4.66667L0.666656 8"
+                          className={`transition-colors ${
+                            isActive
+                              ? "stroke-[#FF007A]"
+                              : isDark
+                              ? "stroke-white group-hover:stroke-[#FF007A]"
+                              : "stroke-black group-hover:stroke-[#FF007A]"
+                          }`}
+                          strokeWidth="1.33333"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M7.33332 12L3.99999 8.66667L0.666656 12"
+                          className={`transition-colors ${
+                            isActive
+                              ? "stroke-[#FF007A]"
+                              : isDark
+                              ? "stroke-white group-hover:stroke-[#FF007A]"
+                              : "stroke-black group-hover:stroke-[#FF007A]"
+                          }`}
+                          strokeWidth="1.33333"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                  )}
+                  {item.title}
+                </motion.div>
+              );
+            })}
+          </div>
+          {groupedItems.secondary.map((item, idx) => {
+            const isActive = isNavItemActive(pathname, item);
+            return (
+              <motion.div
+                key={item.link}
+                onClick={() => {
+                  handleNavItemClickWithLink(item);
+                }}
+                onKeyDown={handleNavKeyDown(item)}
+                role="button"
+                tabIndex={0}
+                className={`rounded-[8px] py-[9px] px-[16px] text-[14px] font-semibold group flex gap-1.5 items-center hover:text-[#FF007A] cursor-pointer transition-colors ${
+                  isActive
+                    ? activePillClass(isDark)
+                    : isDark
+                    ? "text-white"
+                    : ""
+                }`}
+                aria-label={`Navigate to ${item.title}`}
+                aria-current={isActive ? "page" : undefined}
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.3,
+                  delay: idx * 0.1,
+                  ease: "easeOut",
+                }}
+                whileHover={{
+                  scale: 0.95,
+                  transition: { type: "spring", stiffness: 300, damping: 15 },
+                }}
+                whileTap={{ scale: 0.95 }}
+              >
+                {item.title}
+              </motion.div>
+            );
+          })}
+        </div>
+
+        <div className="flex-1 flex items-center justify-end">
+          {/* Right section — xl+: deposit + wallet menu */}
+          <motion.div
+            className="hidden xl:flex items-center gap-3"
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.3, ease: "easeOut" }}
+          >
+            {/* Network badge — the app only ever talks to the local Surfpool mainnet fork. */}
+            <span
+              className={`flex items-center gap-1.5 py-[6px] px-2.5 rounded-lg text-[11px] font-semibold whitespace-nowrap ${
+                isDark ? "bg-[#1C1C1C] border border-[#2A2A2A] text-[#A7A7A7]" : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#5C5B5B]"
+              }`}
+              title="All transactions go to a local Surfpool fork of Solana mainnet"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+              {NETWORK_LABEL}
+            </span>
+            {/* Faucet — fork-only helper that tops up SOL, USDC, USDT, JitoSOL and
+                JupSOL in one popup. Hidden until a wallet is connected because every
+                faucet path needs a destination address. */}
+            {address && (
+              <motion.button
+                type="button"
+                onClick={() => setIsFaucetOpen(true)}
+                whileTap={{ scale: 0.97 }}
+                aria-label="Open fork faucet"
+                className={`flex items-center gap-2 py-[10px] px-3 rounded-xl font-semibold text-[13px] cursor-pointer transition-colors ${
+                  isDark
+                    ? "bg-[#1C1C1C] border border-[#2A2A2A] text-white hover:border-[#3A3A3A]"
+                    : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#1F1F1F] hover:border-[#BFBFBF]"
+                }`}
+              >
+                <svg width="16" height="16" viewBox="0 0 512.001 512.001" fill="currentColor" aria-hidden="true">
+                  <path d="M433.416,396.756c-3.024,0-5.907,1.279-7.936,3.522c-6.359,7.026-38.082,43.216-38.082,65.704 c0,25.376,20.643,46.019,46.018,46.019s46.019-20.644,46.019-46.019c0-22.489-31.724-58.678-38.083-65.704 C439.323,398.034,436.439,396.756,433.416,396.756z M433.416,490.592c-13.57,0-24.61-11.04-24.61-24.611 c0-7.878,11.678-26.176,24.61-42.073c12.933,15.896,24.611,34.194,24.611,42.073 C458.027,479.552,446.987,490.592,433.416,490.592z" />
+                  <path d="M482.721,289.004h-12.398v-75.462c0-20.657-16.806-37.463-37.463-37.463h-93.837v-7.849 c0-5.912-4.793-10.704-10.704-10.704h-42.815V77.603h60.388c13.919,0,25.243-11.325,25.243-25.243V33.271 c0-13.919-11.324-25.243-25.243-25.243h-67.549C271.095,2.826,262.383,0,253.391,0s-17.704,2.826-24.951,8.028h-67.549 c-13.919,0-25.243,11.325-25.243,25.243v19.088c0,13.919,11.324,25.243,25.243,25.243h60.388v79.922h-42.815 c-5.911,0-10.704,4.792-10.704,10.704v7.849H93.503V101.15c0-5.912-4.793-10.704-10.704-10.704H29.28 c-5.911,0-10.704,4.792-10.704,10.704v224.781c0,5.912,4.793,10.704,10.704,10.704H82.8c5.911,0,10.704-4.792,10.704-10.704 v-74.927h74.257v8.207c0,5.912,4.793,10.704,10.704,10.704h149.854c5.911,0,10.704-4.792,10.704-10.704v-8.206h56.374v37.999 h-14.361c-5.911,0-10.704,4.792-10.704,10.704v53.519c0,5.912,4.793,10.704,10.704,10.704h101.686 c5.911,0,10.704-4.792,10.704-10.704v-53.519C493.425,293.796,488.631,289.004,482.721,289.004z M72.096,315.228H39.984V111.855 h32.112V315.228z M167.76,229.597H93.503v-32.112h74.257V229.597z M160.892,56.194c-2.115,0.001-3.835-1.719-3.835-3.834V33.271 c0-2.115,1.72-3.835,3.835-3.835h71.27c2.607,0,5.125-0.952,7.081-2.676c3.911-3.451,8.937-5.352,14.148-5.352 c5.212,0,10.236,1.9,14.148,5.352c1.956,1.724,4.474,2.676,7.081,2.676h71.27c2.115,0,3.835,1.72,3.835,3.835v19.088 c0,2.115-1.72,3.835-3.835,3.835h-71.27c-2.607,0-5.125,0.952-7.081,2.676c-3.911,3.451-8.937,5.352-14.148,5.352 c-5.212,0-10.236-1.9-14.148-5.352c-1.956-1.724-4.474-2.676-7.081-2.676H160.892z M264.095,84.263v73.261h-21.408V84.263 c3.47,0.897,7.063,1.368,10.704,1.368S260.625,85.16,264.095,84.263z M317.614,248.508H189.168v-24.084h31.755 c5.911,0,10.704-4.792,10.704-10.704c0-5.912-4.793-10.704-10.704-10.704h-31.755v-24.084h128.446V248.508z M339.022,229.597 v-32.112h93.837c8.853,0,16.056,7.203,16.056,16.056v75.462h-32.112v-48.702c0-5.912-4.793-10.704-10.704-10.704H339.022z M472.017,342.523h-80.279v-32.112h80.279V342.523z" />
+                  <path d="M268.734,224.245h2.476c5.911,0,10.704-4.792,10.704-10.704s-4.793-10.704-10.704-10.704h-2.476 c-5.911,0-10.704,4.792-10.704,10.704S262.822,224.245,268.734,224.245z" />
+                </svg>
+                Faucet
+              </motion.button>
+            )}
+            {/* Wallet / Login */}
+            {!address ? (
+              <div className="hidden xl:block">
+                <Button
+                  size="small"
+                  type="navbar"
+                  disabled={isLoading}
+                  onClick={openConnectModal}
+                  text={isLoading ? "Connecting..." : "Connect Wallet"}
+                  ariaLabel="Connect a wallet"
+                />
+              </div>
+            ) : (
+              <div className="hidden xl:block relative" ref={walletMenuRef}>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleWalletClick}
+                  className={`flex items-center gap-2.5 py-[10px] pl-3 pr-4 rounded-xl font-semibold text-[13px] cursor-pointer transition-colors ${
+                    isDark
+                      ? "bg-[#1C1C1C] border border-[#2A2A2A] text-white hover:border-[#3A3A3A]"
+                      : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#1F1F1F] hover:border-[#BFBFBF]"
+                  }`}
+                >
+                  <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 overflow-hidden">
+                    <Image
+                      src="/coins/sol.png"
+                      width={24}
+                      height={24}
+                      alt="Solana"
+                    />
+                  </div>
+                  <span className="font-mono text-[14px]">
+                    {address.slice(0, 6) + "..." + address.slice(-4)}
+                  </span>
+                  <motion.svg
+                    animate={{ rotate: isWalletDropdownOpen ? 180 : 0 }}
+                    transition={{ duration: 0.2 }}
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    className={isDark ? "text-[#595959]" : "text-[#949494]"}
+                  >
+                    <path
+                      d="M3 4.5L6 7.5L9 4.5"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </motion.svg>
+                </motion.button>
+                <AnimatePresence>
+                  {isWalletDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                      className={`absolute right-0 top-full mt-[10px] w-[280px] rounded-[14px] overflow-hidden z-50 ${
+                        isDark
+                          ? "bg-[#161616] border border-[#2A2A2A]"
+                          : "bg-white border border-[#E8E8E8]"
+                      }`}
+                      style={{
+                        boxShadow: isDark
+                          ? "0 12px 40px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(255,255,255,0.04)"
+                          : "0 12px 40px rgba(0,0,0,0.1), 0 0 0 0.5px rgba(0,0,0,0.04)",
+                      }}
+                    >
+                      {/* User info header */}
+                      <div
+                        className={`px-4 py-3 border-b ${
+                          isDark ? "border-[#222222]" : "border-[#F0F0F0]"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                            style={{
+                              background:
+                                "linear-gradient(135deg, #FC5457 10%, #703AE6 80%)",
+                            }}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <rect
+                                x="2"
+                                y="6"
+                                width="20"
+                                height="14"
+                                rx="3"
+                                stroke="white"
+                                strokeWidth="2"
+                              />
+                              <circle
+                                cx="7"
+                                cy="16"
+                                r="1.5"
+                                fill="white"
+                              />
+                            </svg>
+                          </div>
+                          <div>
+                            <p
+                              className={`text-[13px] font-semibold ${
+                                isDark ? "text-white" : "text-[#111]"
+                              }`}
+                            >
+                              {walletLabel}
+                            </p>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(address);
+                              }}
+                              className={`flex items-center gap-1 text-[11px] font-mono mt-0.5 cursor-pointer ${
+                                isDark
+                                  ? "text-[#666] hover:text-[#9F7BEE]"
+                                  : "text-[#999] hover:text-[#703AE6]"
+                              }`}
+                            >
+                              {address.slice(0, 6) +
+                                "..." +
+                                address.slice(-4)}
+                              <svg
+                                width="10"
+                                height="10"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <rect
+                                  x="9"
+                                  y="9"
+                                  width="13"
+                                  height="13"
+                                  rx="2"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                />
+                                <path
+                                  d="M5 15V5C5 3.89 5.89 3 7 3H17"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-[6px]">
+                        {/* Margin Account */}
+                        {marginAccountAddress && (
+                          <div
+                            className={`flex items-center gap-3 px-3 py-[10px] rounded-[10px] ${
+                              isDark ? "text-[#C0C0C0]" : "text-[#3A3A3A]"
+                            }`}
+                          >
+                            <div
+                              className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                                isDark ? "bg-[#2A1A3E]" : "bg-[#F1EBFD]"
+                              }`}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path
+                                  d="M2 5V11C2 11.5523 2.44772 12 3 12H13C13.5523 12 14 11.5523 14 11V5C14 4.44772 13.5523 4 13 4H3C2.44772 4 2 4.44772 2 5Z"
+                                  stroke="#703AE6"
+                                  strokeWidth="1.5"
+                                />
+                                <path
+                                  d="M11 8.5C11.2761 8.5 11.5 8.27614 11.5 8C11.5 7.72386 11.2761 7.5 11 7.5C10.7239 7.5 10.5 7.72386 10.5 8C10.5 8.27614 10.7239 8.5 11 8.5Z"
+                                  fill="#703AE6"
+                                />
+                              </svg>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[13px] font-semibold leading-tight">
+                                Margin Account
+                              </p>
+                              <button
+                                type="button"
+                                onClick={handleCopyMarginAddress}
+                                className={`flex items-center gap-1 text-[11px] font-mono mt-0.5 cursor-pointer ${
+                                  isDark
+                                    ? "text-[#666] hover:text-[#9F7BEE]"
+                                    : "text-[#999] hover:text-[#703AE6]"
+                                }`}
+                                title={marginCopied ? "Copied!" : "Copy address"}
+                              >
+                                {marginAccountAddress.slice(0, 6) + "..." + marginAccountAddress.slice(-4)}
+                                {marginCopied ? (
+                                  <svg width="10" height="10" viewBox="0 0 14 14" fill="none">
+                                    <path d="M3 7.5L6 10.5L11 4.5" stroke="#10B981" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                ) : (
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="2" />
+                                    <path d="M5 15V5C5 3.89 5.89 3 7 3H17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                  </svg>
+                                )}
+                              </button>
+                            </div>
+                            <a
+                              href={explorerUrl("address", marginAccountAddress)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`text-[10px] font-semibold transition-colors ${
+                                isDark ? "text-[#9F7BEE] hover:text-white" : "text-[#703AE6] hover:text-[#5C30C0]"
+                              }`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              View ↗
+                            </a>
+                          </div>
+                        )}
+                        {/* Network */}
+                        <div
+                          className={`flex items-center gap-3 px-3 py-[10px] rounded-[10px] ${
+                            isDark ? "text-[#C0C0C0]" : "text-[#3A3A3A]"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark ? "bg-[#242424]" : "bg-[#F0F0F0]"
+                            }`}
+                          >
+                            <Image
+                              src="/coins/sol.png"
+                              width={16}
+                              height={16}
+                              alt="Network"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-[13px] font-semibold leading-tight">
+                              {NETWORK_LABEL}
+                            </p>
+                            <p
+                              className={`text-[11px] mt-0.5 ${
+                                isDark ? "text-[#666]" : "text-[#999]"
+                              }`}
+                            >
+                              Network
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-500">
+                            Active
+                          </span>
+                        </div>
+                        {/* Dark Mode */}
+                        <button
+                          onClick={toggleTheme}
+                          className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-[10px] cursor-pointer transition-colors ${
+                            isDark
+                              ? "text-[#C0C0C0] hover:bg-[#1E1E1E]"
+                              : "text-[#3A3A3A] hover:bg-[#F5F5F5]"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark ? "bg-[#242424]" : "bg-[#F0F0F0]"
+                            }`}
+                          >
+                            {isDark ? (
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <circle
+                                  cx="12"
+                                  cy="12"
+                                  r="4"
+                                  stroke="#A0A0A0"
+                                  strokeWidth="1.5"
+                                />
+                                <path
+                                  d="M12 2V4M12 20V22M4.22 4.22L5.64 5.64M18.36 18.36L19.78 19.78M2 12H4M20 12H22M4.22 19.78L5.64 18.36M18.36 5.64L19.78 4.22"
+                                  stroke="#A0A0A0"
+                                  strokeWidth="1.5"
+                                  strokeLinecap="round"
+                                />
+                              </svg>
+                            ) : (
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <path
+                                  d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
+                                  stroke="#666"
+                                  strokeWidth="1.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="flex-1 text-left">
+                            <p className="text-[13px] font-semibold leading-tight">
+                              Dark Mode
+                            </p>
+                            <p
+                              className={`text-[11px] mt-0.5 ${
+                                isDark ? "text-[#666]" : "text-[#999]"
+                              }`}
+                            >
+                              {isDark ? "On" : "Off"}
+                            </p>
+                          </div>
+                          <div
+                            role="switch"
+                            aria-checked={isDark}
+                            className={`relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0 ${
+                              isDark ? "bg-[#703AE6]" : "bg-[#D1D5DB]"
+                            }`}
+                          >
+                            <span
+                              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                                isDark ? "translate-x-4" : "translate-x-0"
+                              }`}
+                            />
+                          </div>
+                        </button>
+                      </div>
+                      {/* Disconnect */}
+                      <div
+                        className={`border-t mx-1.5 pt-1.5 pb-1.5 ${
+                          isDark ? "border-[#222]" : "border-[#F0F0F0]"
+                        }`}
+                      >
+                        <button
+                          onClick={handleDisconnect}
+                          className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-[10px] cursor-pointer transition-colors ${
+                            isDark
+                              ? "text-[#FC5457] hover:bg-[#FC5457]/10"
+                              : "text-[#FC5457] hover:bg-[#FC5457]/5"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark
+                                ? "bg-[#FC5457]/10"
+                                : "bg-[#FC5457]/5"
+                            }`}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <path
+                                d="M9 21H5C3.89 21 3 20.1 3 19V5C3 3.89 3.89 3 5 3H9"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                              <path
+                                d="M16 17L21 12L16 7"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                              <path
+                                d="M21 12H9"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </div>
+                          <p className="text-[13px] font-semibold">
+                            Disconnect
+                          </p>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+          </motion.div>
+
+          {/* Right section — below xl: login/wallet + hamburger */}
+          <motion.div
+            className="flex xl:hidden gap-[8px] items-center flex-shrink-0"
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.3, ease: "easeOut" }}
+          >
+            {address && (
+              <button
+                type="button"
+                onClick={() => setIsFaucetOpen(true)}
+                aria-label="Open fork faucet"
+                className={`flex items-center justify-center w-8 h-8 rounded-lg cursor-pointer ${
+                  isDark
+                    ? "bg-[#1C1C1C] border border-[#2A2A2A] text-white"
+                    : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#1F1F1F]"
+                }`}
+              >
+                <svg width="14" height="14" viewBox="0 0 512.001 512.001" fill="currentColor" aria-hidden="true">
+                  <path d="M433.416,396.756c-3.024,0-5.907,1.279-7.936,3.522c-6.359,7.026-38.082,43.216-38.082,65.704 c0,25.376,20.643,46.019,46.018,46.019s46.019-20.644,46.019-46.019c0-22.489-31.724-58.678-38.083-65.704 C439.323,398.034,436.439,396.756,433.416,396.756z M433.416,490.592c-13.57,0-24.61-11.04-24.61-24.611 c0-7.878,11.678-26.176,24.61-42.073c12.933,15.896,24.611,34.194,24.611,42.073 C458.027,479.552,446.987,490.592,433.416,490.592z" />
+                  <path d="M482.721,289.004h-12.398v-75.462c0-20.657-16.806-37.463-37.463-37.463h-93.837v-7.849 c0-5.912-4.793-10.704-10.704-10.704h-42.815V77.603h60.388c13.919,0,25.243-11.325,25.243-25.243V33.271 c0-13.919-11.324-25.243-25.243-25.243h-67.549C271.095,2.826,262.383,0,253.391,0s-17.704,2.826-24.951,8.028h-67.549 c-13.919,0-25.243,11.325-25.243,25.243v19.088c0,13.919,11.324,25.243,25.243,25.243h60.388v79.922h-42.815 c-5.911,0-10.704,4.792-10.704,10.704v7.849H93.503V101.15c0-5.912-4.793-10.704-10.704-10.704H29.28 c-5.911,0-10.704,4.792-10.704,10.704v224.781c0,5.912,4.793,10.704,10.704,10.704H82.8c5.911,0,10.704-4.792,10.704-10.704 v-74.927h74.257v8.207c0,5.912,4.793,10.704,10.704,10.704h149.854c5.911,0,10.704-4.792,10.704-10.704v-8.206h56.374v37.999 h-14.361c-5.911,0-10.704,4.792-10.704,10.704v53.519c0,5.912,4.793,10.704,10.704,10.704h101.686 c5.911,0,10.704-4.792,10.704-10.704v-53.519C493.425,293.796,488.631,289.004,482.721,289.004z M72.096,315.228H39.984V111.855 h32.112V315.228z M167.76,229.597H93.503v-32.112h74.257V229.597z M160.892,56.194c-2.115,0.001-3.835-1.719-3.835-3.834V33.271 c0-2.115,1.72-3.835,3.835-3.835h71.27c2.607,0,5.125-0.952,7.081-2.676c3.911-3.451,8.937-5.352,14.148-5.352 c5.212,0,10.236,1.9,14.148,5.352c1.956,1.724,4.474,2.676,7.081,2.676h71.27c2.115,0,3.835,1.72,3.835,3.835v19.088 c0,2.115-1.72,3.835-3.835,3.835h-71.27c-2.607,0-5.125,0.952-7.081,2.676c-3.911,3.451-8.937,5.352-14.148,5.352 c-5.212,0-10.236-1.9-14.148-5.352c-1.956-1.724-4.474-2.676-7.081-2.676H160.892z M264.095,84.263v73.261h-21.408V84.263 c3.47,0.897,7.063,1.368,10.704,1.368S260.625,85.16,264.095,84.263z M317.614,248.508H189.168v-24.084h31.755 c5.911,0,10.704-4.792,10.704-10.704c0-5.912-4.793-10.704-10.704-10.704h-31.755v-24.084h128.446V248.508z M339.022,229.597 v-32.112h93.837c8.853,0,16.056,7.203,16.056,16.056v75.462h-32.112v-48.702c0-5.912-4.793-10.704-10.704-10.704H339.022z M472.017,342.523h-80.279v-32.112h80.279V342.523z" />
+                  <path d="M268.734,224.245h2.476c5.911,0,10.704-4.792,10.704-10.704s-4.793-10.704-10.704-10.704h-2.476 c-5.911,0-10.704,4.792-10.704,10.704S262.822,224.245,268.734,224.245z" />
+                </svg>
+              </button>
+            )}
+            {!address ? (
+              <Button
+                size="small"
+                type="gradient"
+                disabled={isLoading}
+                onClick={openConnectModal}
+                text={isLoading ? "..." : "Connect"}
+                ariaLabel="Connect a wallet"
+              />
+            ) : (
+              <div className="relative" ref={walletMenuMobileRef}>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleWalletClick}
+                  className={`flex items-center gap-1.5 py-1.5 pl-2 pr-2.5 rounded-lg text-[12px] font-semibold cursor-pointer ${
+                    isDark
+                      ? "bg-[#1C1C1C] border border-[#2A2A2A] text-white"
+                      : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#1F1F1F]"
+                  }`}
+                >
+                  <Image
+                    src="/coins/sol.png"
+                    width={16}
+                    height={16}
+                    alt="Solana"
+                    className="rounded-full"
+                  />
+                  <span className="font-mono">
+                    {address.slice(0, 4) + "..." + address.slice(-3)}
+                  </span>
+                </motion.button>
+                <AnimatePresence>
+                  {isWalletDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                      className={`absolute right-0 top-full mt-[10px] w-[280px] rounded-[14px] overflow-hidden z-50 ${
+                        isDark
+                          ? "bg-[#161616] border border-[#2A2A2A]"
+                          : "bg-white border border-[#E8E8E8]"
+                      }`}
+                      style={{
+                        boxShadow: isDark
+                          ? "0 12px 40px rgba(0,0,0,0.5), 0 0 0 0.5px rgba(255,255,255,0.04)"
+                          : "0 12px 40px rgba(0,0,0,0.1), 0 0 0 0.5px rgba(0,0,0,0.04)",
+                      }}
+                    >
+                      <div
+                        className={`px-4 py-3 border-b ${
+                          isDark ? "border-[#222222]" : "border-[#F0F0F0]"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                            style={{
+                              background:
+                                "linear-gradient(135deg, #FC5457 10%, #703AE6 80%)",
+                            }}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <rect
+                                x="2"
+                                y="6"
+                                width="20"
+                                height="14"
+                                rx="3"
+                                stroke="white"
+                                strokeWidth="2"
+                              />
+                              <circle
+                                cx="7"
+                                cy="16"
+                                r="1.5"
+                                fill="white"
+                              />
+                            </svg>
+                          </div>
+                          <div>
+                            <p
+                              className={`text-[13px] font-semibold ${
+                                isDark ? "text-white" : "text-[#111]"
+                              }`}
+                            >
+                              {walletLabel}
+                            </p>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(address);
+                              }}
+                              className={`flex items-center gap-1 text-[11px] font-mono mt-0.5 cursor-pointer ${
+                                isDark
+                                  ? "text-[#666] hover:text-[#9F7BEE]"
+                                  : "text-[#999] hover:text-[#703AE6]"
+                              }`}
+                            >
+                              {address.slice(0, 6) +
+                                "..." +
+                                address.slice(-4)}
+                              <svg
+                                width="10"
+                                height="10"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <rect
+                                  x="9"
+                                  y="9"
+                                  width="13"
+                                  height="13"
+                                  rx="2"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                />
+                                <path
+                                  d="M5 15V5C5 3.89 5.89 3 7 3H17"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-[6px]">
+                        {/* Margin Account */}
+                        {marginAccountAddress && (
+                          <div
+                            className={`flex items-center gap-3 px-3 py-[10px] rounded-[10px] ${
+                              isDark ? "text-[#C0C0C0]" : "text-[#3A3A3A]"
+                            }`}
+                          >
+                            <div
+                              className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                                isDark ? "bg-[#2A1A3E]" : "bg-[#F1EBFD]"
+                              }`}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path
+                                  d="M2 5V11C2 11.5523 2.44772 12 3 12H13C13.5523 12 14 11.5523 14 11V5C14 4.44772 13.5523 4 13 4H3C2.44772 4 2 4.44772 2 5Z"
+                                  stroke="#703AE6"
+                                  strokeWidth="1.5"
+                                />
+                                <path
+                                  d="M11 8.5C11.2761 8.5 11.5 8.27614 11.5 8C11.5 7.72386 11.2761 7.5 11 7.5C10.7239 7.5 10.5 7.72386 10.5 8C10.5 8.27614 10.7239 8.5 11 8.5Z"
+                                  fill="#703AE6"
+                                />
+                              </svg>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[13px] font-semibold leading-tight">
+                                Margin Account
+                              </p>
+                              <button
+                                type="button"
+                                onClick={handleCopyMarginAddress}
+                                className={`flex items-center gap-1 text-[11px] font-mono mt-0.5 cursor-pointer ${
+                                  isDark
+                                    ? "text-[#666] hover:text-[#9F7BEE]"
+                                    : "text-[#999] hover:text-[#703AE6]"
+                                }`}
+                                title={marginCopied ? "Copied!" : "Copy address"}
+                              >
+                                {marginAccountAddress.slice(0, 6) + "..." + marginAccountAddress.slice(-4)}
+                                {marginCopied ? (
+                                  <svg width="10" height="10" viewBox="0 0 14 14" fill="none">
+                                    <path d="M3 7.5L6 10.5L11 4.5" stroke="#10B981" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                ) : (
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="2" />
+                                    <path d="M5 15V5C5 3.89 5.89 3 7 3H17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                  </svg>
+                                )}
+                              </button>
+                            </div>
+                            <a
+                              href={explorerUrl("address", marginAccountAddress)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`text-[10px] font-semibold transition-colors ${
+                                isDark ? "text-[#9F7BEE] hover:text-white" : "text-[#703AE6] hover:text-[#5C30C0]"
+                              }`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              View ↗
+                            </a>
+                          </div>
+                        )}
+                        <div
+                          className={`flex items-center gap-3 px-3 py-[10px] rounded-[10px] ${
+                            isDark ? "text-[#C0C0C0]" : "text-[#3A3A3A]"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark ? "bg-[#242424]" : "bg-[#F0F0F0]"
+                            }`}
+                          >
+                            <Image
+                              src="/coins/sol.png"
+                              width={16}
+                              height={16}
+                              alt="Network"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-[13px] font-semibold leading-tight">
+                              {NETWORK_LABEL}
+                            </p>
+                            <p
+                              className={`text-[11px] mt-0.5 ${
+                                isDark ? "text-[#666]" : "text-[#999]"
+                              }`}
+                            >
+                              Network
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-500">
+                            Active
+                          </span>
+                        </div>
+                        <button
+                          onClick={toggleTheme}
+                          className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-[10px] cursor-pointer transition-colors ${
+                            isDark
+                              ? "text-[#C0C0C0] hover:bg-[#1E1E1E]"
+                              : "text-[#3A3A3A] hover:bg-[#F5F5F5]"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark ? "bg-[#242424]" : "bg-[#F0F0F0]"
+                            }`}
+                          >
+                            {isDark ? (
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <circle
+                                  cx="12"
+                                  cy="12"
+                                  r="4"
+                                  stroke="#A0A0A0"
+                                  strokeWidth="1.5"
+                                />
+                                <path
+                                  d="M12 2V4M12 20V22M4.22 4.22L5.64 5.64M18.36 18.36L19.78 19.78M2 12H4M20 12H22M4.22 19.78L5.64 18.36M18.36 5.64L19.78 4.22"
+                                  stroke="#A0A0A0"
+                                  strokeWidth="1.5"
+                                  strokeLinecap="round"
+                                />
+                              </svg>
+                            ) : (
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <path
+                                  d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
+                                  stroke="#666"
+                                  strokeWidth="1.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="flex-1 text-left">
+                            <p className="text-[13px] font-semibold leading-tight">
+                              Dark Mode
+                            </p>
+                            <p
+                              className={`text-[11px] mt-0.5 ${
+                                isDark ? "text-[#666]" : "text-[#999]"
+                              }`}
+                            >
+                              {isDark ? "On" : "Off"}
+                            </p>
+                          </div>
+                          <div
+                            role="switch"
+                            aria-checked={isDark}
+                            className={`relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0 ${
+                              isDark ? "bg-[#703AE6]" : "bg-[#D1D5DB]"
+                            }`}
+                          >
+                            <span
+                              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                                isDark ? "translate-x-4" : "translate-x-0"
+                              }`}
+                            />
+                          </div>
+                        </button>
+                      </div>
+                      <div
+                        className={`border-t mx-1.5 pt-1.5 pb-1.5 ${
+                          isDark ? "border-[#222]" : "border-[#F0F0F0]"
+                        }`}
+                      >
+                        <button
+                          onClick={handleDisconnect}
+                          className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-[10px] cursor-pointer transition-colors ${
+                            isDark
+                              ? "text-[#FC5457] hover:bg-[#FC5457]/10"
+                              : "text-[#FC5457] hover:bg-[#FC5457]/5"
+                          }`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 ${
+                              isDark
+                                ? "bg-[#FC5457]/10"
+                                : "bg-[#FC5457]/5"
+                            }`}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <path
+                                d="M9 21H5C3.89 21 3 20.1 3 19V5C3 3.89 3.89 3 5 3H9"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                              <path
+                                d="M16 17L21 12L16 7"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                              <path
+                                d="M21 12H9"
+                                stroke="#FC5457"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </div>
+                          <p className="text-[13px] font-semibold">
+                            Disconnect
+                          </p>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+            {/* Hamburger menu button */}
+            <motion.button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="flex flex-col justify-center items-center rounded-[8px] py-1.5 px-2 h-8.5 border cursor-pointer"
+              aria-label="Toggle mobile menu"
+              aria-expanded={isMobileMenuOpen}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <div className="w-4.5 h-4.5 flex flex-col justify-center items-center gap-1">
+                <motion.span
+                  className={`w-full h-[2px] rounded-full ${
+                    isDark ? "bg-white" : "bg-black"
+                  }`}
+                  animate={{
+                    rotate: isMobileMenuOpen ? 45 : 0,
+                    y: isMobileMenuOpen ? 6 : 0,
+                  }}
+                  transition={{ duration: 0.2 }}
+                />
+                <motion.span
+                  className={`w-full h-[2px] rounded-full ${
+                    isDark ? "bg-white" : "bg-black"
+                  }`}
+                  animate={{ opacity: isMobileMenuOpen ? 0 : 1 }}
+                  transition={{ duration: 0.2 }}
+                />
+                <motion.span
+                  className={`w-full h-[2px] rounded-full ${
+                    isDark ? "bg-white" : "bg-black"
+                  }`}
+                  animate={{
+                    rotate: isMobileMenuOpen ? -45 : 0,
+                    y: isMobileMenuOpen ? -6 : 0,
+                  }}
+                  transition={{ duration: 0.2 }}
+                />
+              </div>
+            </motion.button>
+          </motion.div>
+        </div>
+      </motion.div>
+
+      {/* Mobile menu panel — overlays page content */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            {/* Backdrop — tap to close */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="xl:hidden fixed inset-0 top-full bg-black/50 backdrop-blur-sm"
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className={`xl:hidden absolute left-3 right-3 top-[calc(100%+6px)] rounded-2xl border shadow-2xl ${
+                isDark
+                  ? "bg-[#1A1A1A] border-[#2A2A2A]"
+                  : "bg-white border-[#E8E8E8]"
+              }`}
+            >
+              <nav className="flex flex-col p-2 gap-0.5">
+                {/* All nav items */}
+                {[
+                  ...groupedItems.primary,
+                  ...groupedItems.bordered,
+                  ...groupedItems.secondary,
+                ].map(
+                  (item, idx) => {
+                    const isActive = isNavItemActive(pathname, item);
+                    return (
+                      <div key={item.link}>
+                        <motion.div
+                          onClick={() => {
+                            if (item.title === "Trade") {
+                              setIsDropdownOpen(!isDropdownOpen);
+                            } else {
+                              handleNavItemClickWithLink(item);
+                              setIsMobileMenuOpen(false);
+                            }
+                          }}
+                          className={`px-3 py-2.5 rounded-xl text-[13px] font-semibold cursor-pointer transition-all flex items-center justify-between ${
+                            isActive
+                              ? "bg-[#703AE6]/10 text-[#703AE6]"
+                              : isDark
+                              ? "text-[#E0E0E0] hover:bg-[#222222] active:bg-[#222222]"
+                              : "text-[#333333] hover:bg-[#F5F5F5] active:bg-[#F0F0F0]"
+                          }`}
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.15, delay: idx * 0.03 }}
+                        >
+                          <span className="flex items-center gap-2.5">
+                            {item.title}
+                          </span>
+                          {item.title === "Trade" && (
+                            <motion.svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 14 14"
+                              fill="none"
+                              animate={{ rotate: isDropdownOpen ? 180 : 0 }}
+                              transition={{ duration: 0.2 }}
+                            >
+                              <path
+                                d="M3.5 5.25L7 8.75L10.5 5.25"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </motion.svg>
+                          )}
+                        </motion.div>
+
+                        {/* Trade sub-items */}
+                        <AnimatePresence>
+                          {item.title === "Trade" && isDropdownOpen && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="overflow-hidden"
+                            >
+                              <div
+                                className={`flex flex-col ml-3 mt-0.5 mb-0.5 pl-3 gap-0.5 border-l-2 ${
+                                  isDark
+                                    ? "border-[#333333]"
+                                    : "border-[#E8E8E8]"
+                                }`}
+                              >
+                                {tradeItems.map((tradeItem, subIdx) => {
+                                  const isSubActive =
+                                    pathname === tradeItem.link;
+                                  return (
+                                    <motion.div
+                                      key={tradeItem.link}
+                                      onClick={() => {
+                                        handleNavItemClickWithLink(tradeItem);
+                                        setIsMobileMenuOpen(false);
+                                        setIsDropdownOpen(false);
+                                      }}
+                                      className={`px-3 py-2 rounded-lg text-[12px] font-medium cursor-pointer transition-colors ${
+                                        isSubActive
+                                          ? "text-[#703AE6] bg-[#703AE6]/10"
+                                          : isDark
+                                          ? "text-[#999999] hover:text-white hover:bg-[#222222]"
+                                          : "text-[#777777] hover:text-[#111111] hover:bg-[#F5F5F5]"
+                                      }`}
+                                      initial={{ opacity: 0, x: -8 }}
+                                      animate={{ opacity: 1, x: 0 }}
+                                      transition={{
+                                        duration: 0.12,
+                                        delay: subIdx * 0.03,
+                                      }}
+                                    >
+                                      {tradeItem.title}
+                                    </motion.div>
+                                  );
+                                })}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  }
+                )}
+
+              </nav>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <FaucetPopup
+        isOpen={isFaucetOpen}
+        onClose={() => setIsFaucetOpen(false)}
+        walletAddress={address || null}
+      />
+
+
+    </div>
+  );
+};

@@ -1,0 +1,25 @@
+import { TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
+
+export const navbarItems = [
+  { title: "Portfolio", link: "/portfolio", group: "primary" },
+  { title: "Earn", link: "/earn", group: "primary" },
+  { title: "Margin", link: "/", group: "bordered" },
+  { title: "Trade", link: "/trade", group: "bordered" },
+  { title: "Farm", link: "/farm", group: "bordered" },
+];
+
+export const tradeItems = [{ title: "Spot", link: "/trade/spot" }];
+
+/**
+ * Asset dropdown options everywhere in the app — straight from the token registry
+ * (lib/solana/tokens.ts), never a hardcoded list.
+ */
+export const DropdownOptions: string[] = [...TOKEN_SYMBOLS];
+
+/** Icon path per symbol (registry icons). */
+export const iconPaths: Record<string, string> = Object.fromEntries(
+  TOKENS.flatMap((t) => [
+    [t.symbol, t.icon],
+    [t.symbol.toUpperCase(), t.icon],
+  ]),
+);
