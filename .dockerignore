@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.github
+coverage
+tests
+scripts
+**/*.test.ts
+**/*.test.tsx
+.env*
+npm-debug.log*
+Dockerfile
+.dockerignore
+cloudbuild.yaml
+*.md
