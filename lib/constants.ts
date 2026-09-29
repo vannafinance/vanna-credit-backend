@@ -1,4 +1,4 @@
-import { TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
+import { LENDING_SYMBOLS, TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
 
 export const navbarItems = [
   { title: "Portfolio", link: "/portfolio", group: "primary" },
@@ -15,6 +15,13 @@ export const tradeItems = [{ title: "Spot", link: "/trade/spot" }];
  * (lib/solana/tokens.ts), never a hardcoded list.
  */
 export const DropdownOptions: string[] = [...TOKEN_SYMBOLS];
+
+/**
+ * Borrowable assets (Margin page Borrow / Dual Borrow dropdowns) — only the tokens with an Earn
+ * pool the app offers (`lendable` in the registry): SOL, USDC, USDT. Staking tokens are
+ * collateral-only.
+ */
+export const BorrowDropdownOptions: string[] = [...LENDING_SYMBOLS];
 
 /** Icon path per symbol (registry icons). */
 export const iconPaths: Record<string, string> = Object.fromEntries(

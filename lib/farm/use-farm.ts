@@ -59,7 +59,7 @@ function useAfterFarmTx() {
   };
 }
 
-/** Supply to a Kamino vault from the margin account (wallet deposit + leverage borrow, one tx). */
+/** Supply margin-account balance to a Kamino vault (`margin_execute` Kamino deposit). */
 export function useFarmDeposit() {
   const after = useAfterFarmTx();
   return useMutation({

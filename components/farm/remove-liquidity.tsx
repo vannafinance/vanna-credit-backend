@@ -3,7 +3,7 @@
 /**
  * Farm "Withdraw" panel — redeems a %-of-position of the margin account's Kamino cTokens back into
  * the margin account (`farmWithdraw`, lib/solana/exec.ts → `margin_execute` Kamino
- * `redeem_reserve_collateral`). 100% redeems exactly every cToken held. Repaying the leverage or
+ * `redeem_reserve_collateral`). 100% redeems exactly every cToken held. Repaying debt or
  * withdrawing to the wallet is then done on the Margin page.
  */
 import Image from "next/image";

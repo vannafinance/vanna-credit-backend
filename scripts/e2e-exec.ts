@@ -6,8 +6,8 @@
  *   npx tsx --env-file=.env.local scripts/e2e-exec.ts
  *
  * Flow: faucet → seed Earn liquidity → create margin → deposit USDC, borrow SOL (cross-asset) →
- * margin swap SOL → JitoSOL (Jupiter) → Farm: supply JitoSOL to Kamino with 2x leverage (deposit +
- * borrow + Kamino deposit in ONE tx) → check HF counts the cTokens → Farm withdraw half →
+ * margin swap SOL → JitoSOL (Jupiter) → deposit 1 JitoSOL collateral → Farm: supply the margin
+ * account's JitoSOL to Kamino (no leverage) → check HF counts the cTokens → Farm withdraw half →
  * margin swap back JitoSOL → USDC.
  */
 import { Keypair } from "@solana/web3.js";
@@ -79,8 +79,8 @@ async function main() {
       console.log(`  +${r.added} ${r.symbol}`);
     }
   });
-  await step("seed Earn liquidity (500 of each)", async () => {
-    for (const t of TOKENS) console.log(`  supply ${t.symbol}: ${(await supply(t.symbol, 500, opts)).signature}`);
+  await step("seed Earn liquidity (500 of each lendable token)", async () => {
+    for (const t of TOKENS.filter((x) => x.lendable)) console.log(`  supply ${t.symbol}: ${(await supply(t.symbol, 500, opts)).signature}`);
   });
   await step("create margin account", async () => console.log(`  ${(await createMarginAccount(opts)).address}`));
   await step("deposit 400 USDC + borrow 1 SOL (cross-asset)", async () => {
@@ -96,10 +96,14 @@ async function main() {
   });
   await printMargin("after swap");
 
-  await step("Farm: supply JitoSOL to Kamino, 2x (wallet 1 + borrow 1 + margin's swapped JitoSOL)", async () => {
+  await step("deposit 1 JitoSOL into the margin account", async () => {
+    console.log(`  tx ${(await depositAndBorrow({ deposits: [{ symbol: "JitoSOL", amount: 1 }] }, opts)).signature}`);
+  });
+
+  await step("Farm: supply the margin account's JitoSOL to Kamino", async () => {
     const s = await fetchMarginSnapshot(owner);
     const held = s.collateral.find((c) => c.symbol === "JitoSOL")?.amount ?? 0;
-    console.log(`  tx ${(await farmDeposit({ symbol: "JitoSOL", walletAmount: 1, borrowAmount: 1, marginAmount: Math.floor(held * 1e6) / 1e6 }, opts)).signature}`);
+    console.log(`  tx ${(await farmDeposit({ symbol: "JitoSOL", marginAmount: Math.floor(held * 1e6) / 1e6 }, opts)).signature}`);
   });
   const afterFarm = await printMargin("after farm deposit");
   const k = afterFarm.collateral.find((c) => c.symbol === receiptForUnderlying("JitoSOL")!.symbol);

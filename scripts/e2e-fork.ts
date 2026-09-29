@@ -5,8 +5,9 @@
  *   npx tsx scripts/e2e-fork.ts
  *
  * Flow: faucet 1000 of each token → supply all 5 assets to Earn → redeem part → create margin →
- * deposit USDC → borrow SOL (cross-asset) → dual borrow USDT + JitoSOL → repay USDT fully
- * (repay_all, from wallet) → partial repay JitoSOL from margin → withdraw part of the USDC collateral.
+ * deposit USDC → borrow SOL (cross-asset) → deposit JitoSOL (collateral-only; borrowing it must be
+ * refused) → dual borrow USDT + USDC → repay USDT fully (repay_all, from wallet) → partial repay USDC
+ * from margin → withdraw part of the USDC collateral. Earn = the lendable pools (SOL, USDC, USDT).
  */
 import { Keypair } from "@solana/web3.js";
 import { fundOnFork } from "@/lib/solana/server/fork-faucet";
@@ -81,9 +82,9 @@ async function main() {
     return Object.fromEntries(Object.entries(onchain).map(([k, v]) => [k, v?.usd ?? 0]));
   });
 
-  const supplyAmounts: Record<string, number> = { SOL: 50, USDC: 500, USDT: 500, JitoSOL: 50, JupSOL: 50 };
-  await step("supply all 5 assets to Earn", async () => {
-    for (const t of TOKENS) {
+  const supplyAmounts: Record<string, number> = { SOL: 50, USDC: 500, USDT: 500 };
+  await step("supply the Earn pools (SOL, USDC, USDT)", async () => {
+    for (const t of TOKENS.filter((x) => x.lendable)) {
       const { signature } = await supply(t.symbol, supplyAmounts[t.symbol], { signer });
       console.log(`  supply ${supplyAmounts[t.symbol]} ${t.symbol}: ${signature}`);
     }
@@ -118,10 +119,22 @@ async function main() {
     await printMargin("after SOL borrow");
   });
 
-  await step("dual borrow USDT + JitoSOL in one tx", async () => {
-    const jito = (100 / prices.JitoSOL).toFixed(6);
-    const r = await depositAndBorrow({ borrows: [{ symbol: "USDT", amount: 100 }, { symbol: "JitoSOL", amount: jito }] }, { signer });
-    console.log(`  borrow 100 USDT + ${jito} JitoSOL: ${r.signature}`);
+  await step("deposit JitoSOL as collateral; borrowing JitoSOL must be refused", async () => {
+    const d = await depositAndBorrow({ deposits: [{ symbol: "JitoSOL", amount: 1 }] }, { signer });
+    console.log(`  deposit 1 JitoSOL: ${d.signature}`);
+    try {
+      await depositAndBorrow({ borrows: [{ symbol: "JitoSOL", amount: 0.1 }] }, { signer });
+      throw new Error("JitoSOL borrow unexpectedly succeeded");
+    } catch (error) {
+      const msg = describeError(error);
+      if (!/collateral-only/.test(msg)) throw error;
+      console.log(`  refused as expected: ${msg}`);
+    }
+  });
+
+  await step("dual borrow USDT + USDC in one tx", async () => {
+    const r = await depositAndBorrow({ borrows: [{ symbol: "USDT", amount: 100 }, { symbol: "USDC", amount: 100 }] }, { signer });
+    console.log(`  borrow 100 USDT + 100 USDC: ${r.signature}`);
     const s = await printMargin("after dual borrow");
     console.log(`  UI max additional borrow (USD, HF>=1.15): $${maxBorrowUsd(s.totalCollateralUsd, s.totalDebtUsd).toFixed(2)}`);
   });
@@ -132,13 +145,13 @@ async function main() {
     await printMargin("after USDT repay_all");
   });
 
-  await step("partial repay JitoSOL from margin vault", async () => {
+  await step("partial repay USDC from margin vault", async () => {
     const s = await fetchMarginSnapshot(owner);
-    const debt = s.debts.find((d) => d.symbol === "JitoSOL")!;
+    const debt = s.debts.find((d) => d.symbol === "USDC")!;
     const half = (debt.debt / 2).toFixed(6);
-    const r = await repay({ symbol: "JitoSOL", amount: half, source: "margin" }, { signer });
-    console.log(`  repay ${half} JitoSOL from margin: ${r.signature}`);
-    await printMargin("after partial JitoSOL repay");
+    const r = await repay({ symbol: "USDC", amount: half, source: "margin" }, { signer });
+    console.log(`  repay ${half} USDC from margin: ${r.signature}`);
+    await printMargin("after partial USDC repay");
   });
 
   await step("withdraw 100 USDC collateral", async () => {

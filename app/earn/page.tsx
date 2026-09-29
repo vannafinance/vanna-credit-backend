@@ -12,7 +12,7 @@ import { setSelectedPool } from "@/store/selected-pool-store";
 import { usePoolData, useUserPositions, useEarnTransactions } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { useTheme } from "@/contexts/theme-context";
-import { TOKENS, TOKEN_SYMBOLS, findToken } from "@/lib/solana/tokens";
+import { TOKENS, TOKEN_SYMBOLS, findToken, LENDING_TOKENS } from "@/lib/solana/tokens";
 import type { SerializedPoolState } from "@/lib/solana/protocol-state";
 import { POSITION_DUST, fmtUsd, sumEarnedUsd } from "@/components/earn/earn-utils";
 
@@ -255,9 +255,11 @@ export default function Earn() {
   );
 
   // ─── Vaults Table ────────────────────────────────────────────────────────────
-  // One row per registry token, from live pool-level Reserve state.
+  // One row per Earn pool the app offers (lendable registry tokens: SOL, USDC, USDT), from live
+  // pool-level Reserve state. Positions below still list every token, so an existing position in
+  // a pool the app no longer offers stays visible (its detail page is withdraw-only).
   const liveVaultsTableBody = useMemo(() => ({
-    rows: TOKENS.map((t) =>
+    rows: LENDING_TOKENS.map((t) =>
       buildPoolRow(t.symbol, pools[t.symbol], tokenPrices[t.symbol] ?? 0, userAddress ? suppliedBySymbol[t.symbol] : null),
     ),
   }), [pools, suppliedBySymbol, tokenPrices, userAddress]);

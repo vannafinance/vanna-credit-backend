@@ -633,16 +633,6 @@ export const Navbar = (props: Navbar) => {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, delay: 0.3, ease: "easeOut" }}
           >
-            {/* Network badge — the app only ever talks to the local Surfpool mainnet fork. */}
-            <span
-              className={`flex items-center gap-1.5 py-[6px] px-2.5 rounded-lg text-[11px] font-semibold whitespace-nowrap ${
-                isDark ? "bg-[#1C1C1C] border border-[#2A2A2A] text-[#A7A7A7]" : "bg-[#F7F7F7] border border-[#DFDFDF] text-[#5C5B5B]"
-              }`}
-              title="All transactions go to a local Surfpool fork of Solana mainnet"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-              {NETWORK_LABEL}
-            </span>
             {/* Faucet — fork-only helper that tops up SOL, USDC, USDT, JitoSOL and
                 JupSOL in one popup. Hidden until a wallet is connected because every
                 faucet path needs a destination address. */}

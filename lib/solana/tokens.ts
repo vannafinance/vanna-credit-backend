@@ -25,6 +25,12 @@ export interface TokenInfo {
   isNative: boolean;
   /** Faucet top-up per click, in UI units. */
   faucetAmount: number;
+  /**
+   * True = has an Earn lending pool the app offers and can be BORROWED on the Margin page.
+   * False = collateral-only in the app (deposit into the margin account, swap, farm on Kamino),
+   * e.g. the liquid-staking tokens.
+   */
+  lendable: boolean;
 }
 
 export const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
@@ -40,6 +46,7 @@ export const TOKENS: readonly TokenInfo[] = [
     icon: "/coins/sol.png",
     isNative: true,
     faucetAmount: 1000,
+    lendable: true,
   },
   {
     symbol: "USDC",
@@ -51,6 +58,7 @@ export const TOKENS: readonly TokenInfo[] = [
     icon: "/coins/usdc.png",
     isNative: false,
     faucetAmount: 1000,
+    lendable: true,
   },
   {
     symbol: "USDT",
@@ -62,6 +70,7 @@ export const TOKENS: readonly TokenInfo[] = [
     icon: "/coins/usdt.svg",
     isNative: false,
     faucetAmount: 1000,
+    lendable: true,
   },
   {
     symbol: "JitoSOL",
@@ -73,6 +82,7 @@ export const TOKENS: readonly TokenInfo[] = [
     icon: "/coins/jitosol.png",
     isNative: false,
     faucetAmount: 1000,
+    lendable: false,
   },
   {
     symbol: "JupSOL",
@@ -84,11 +94,16 @@ export const TOKENS: readonly TokenInfo[] = [
     icon: "/coins/jupsol.png",
     isNative: false,
     faucetAmount: 1000,
+    lendable: false,
   },
 ] as const;
 
 /** Every registered UI symbol, in registry order. */
 export const TOKEN_SYMBOLS: readonly string[] = TOKENS.map((t) => t.symbol);
+
+/** Tokens with an Earn pool the app offers — also the only tokens the Margin page lets you borrow. */
+export const LENDING_TOKENS: readonly TokenInfo[] = TOKENS.filter((t) => t.lendable);
+export const LENDING_SYMBOLS: readonly string[] = LENDING_TOKENS.map((t) => t.symbol);
 
 const BY_UPPER_SYMBOL = new Map(TOKENS.map((t) => [t.symbol.toUpperCase(), t]));
 const BY_MINT = new Map(TOKENS.map((t) => [t.mint.toBase58(), t]));

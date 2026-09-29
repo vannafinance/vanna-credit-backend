@@ -232,7 +232,7 @@ export default function FarmDetailPage() {
               <div className="flex flex-col gap-3">
                 {[
                   { step: "1", title: "Choose a vault", desc: "Pick the asset to supply to Kamino" },
-                  { step: "2", title: "Deposit and set leverage", desc: "Deposit from your wallet (or use margin balance) and borrow the same asset from Vanna — all in one transaction" },
+                  { step: "2", title: "Supply from your margin account", desc: "Supply the asset already in your margin account (deposited, borrowed or swapped in) to Kamino" },
                   { step: "3", title: "Earn Kamino supply yield", desc: "The cTokens stay in your margin account and count toward its health factor" },
                   { step: "4", title: "Withdraw anytime", desc: "Redeem back into your margin account, then repay or withdraw on the Margin page" },
                 ].map((item) => (

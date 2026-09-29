@@ -2,7 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect, useMemo } from "react";
-import { DropdownOptions } from "@/lib/constants";
+import { BorrowDropdownOptions, DropdownOptions } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { DEPOSIT_PERCENTAGES, PERCENTAGE_COLORS } from "@/lib/constants/margin";
 import { formatTokenAmount, formatUsdValue } from "@/lib/utils/format-amount";
@@ -78,6 +78,12 @@ export const RepayLoanTab = ({ prefilledAsset }: RepayLoanTabProps = {}) => {
 
   // Default to the first asset with outstanding debt (else the first registry token).
   const firstDebtSymbol = snapshot?.debts.find((d) => d.debt > 0)?.symbol;
+  // Repayable = the borrowable tokens, plus any other asset that still carries debt (e.g. a
+  // staking-token loan opened before it became collateral-only) so it can always be repaid.
+  const repayOptions = [
+    ...BorrowDropdownOptions,
+    ...DropdownOptions.filter((s) => !BorrowDropdownOptions.includes(s) && snapshot?.debts.some((d) => d.symbol === s && d.debt > 0)),
+  ];
   const [selectedRepayCurrency, setSelectedRepayCurrency] =
     useState<string>(() => toDropdownAsset(prefilledAsset) ?? firstDebtSymbol ?? DropdownOptions[0]);
   const [repaySource, setRepaySource] = useState<RepaySource>("margin");
@@ -408,7 +414,7 @@ export const RepayLoanTab = ({ prefilledAsset }: RepayLoanTabProps = {}) => {
                     ? "bg-[#333333] hover:bg-[#3D3D3D] text-white"
                     : "bg-[#EEEEEE] hover:bg-[#E2E2E2]"
                 }`}
-                items={DropdownOptions}
+                items={repayOptions}
                 selectedOption={selectedRepayCurrency}
                 setSelectedOption={handleCurrencyChange}
                 dropdownClassname="text-[13px] gap-2"

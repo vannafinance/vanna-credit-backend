@@ -90,8 +90,9 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   // Amount state (amountOut is derived from the live quote)
   const [amountIn, setAmountIn] = useState("");
 
-  // Swap mode: from the wallet, or inside the margin account (margin_execute → Jupiter)
-  const [swapMode, setSwapMode] = useState<SwapMode>("wallet");
+  // Swaps always run inside the margin account (margin_execute → Jupiter), health-checked
+  // on-chain after the swap. The wallet-mode path below is kept but not exposed in the UI.
+  const swapMode = "margin" as SwapMode;
 
   // Settings state
   const [slippage, setSlippage] = useState(AUTO_SLIPPAGE_PERCENT);
@@ -428,14 +429,6 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
     swapMutation.mutate();
   }, [buttonState, connectWallet, swapMutation]);
 
-  const handleModeChange = useCallback((mode: SwapMode) => {
-    setSwapMode(mode);
-    setAmountIn("");
-    setActivePercent(null);
-    setTxHash("");
-    setTxError("");
-  }, []);
-
   const bannerBase = "mt-2 px-3 py-2 rounded-xl text-[12px] font-medium flex items-start gap-2";
   const warnIcon = (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 mt-0.5">
@@ -511,10 +504,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
             showPresets
             activePercent={activePercent}
             onPercentClick={handlePercentClick}
-            // WB = wallet balance, MB = margin-account balance.
-            showModeTabs
             swapMode={swapMode}
-            onSwapModeChange={handleModeChange}
           />
 
           <SwapDirectionButton onClick={handleFlip} />
@@ -613,7 +603,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
           {swapMode === "margin" && isWalletConnected && !hasMarginAccount && (
             <div className={`${bannerBase} ${isDark ? "bg-yellow-500/10 text-yellow-400" : "bg-yellow-50 text-yellow-700"}`}>
               {warnIcon}
-              <span>Margin swaps run inside your margin account — create one in the Margin section, or switch to WB to swap from your wallet.</span>
+              <span>Swaps run inside your margin account — create one in the Margin section first.</span>
             </div>
           )}
 

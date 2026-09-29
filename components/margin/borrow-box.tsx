@@ -1,4 +1,4 @@
-import { DropdownOptions } from "@/lib/constants";
+import { BorrowDropdownOptions as DropdownOptions } from "@/lib/constants";
 import { Dropdown } from "../ui/dropdown";
 import { useState, useEffect, useCallback } from "react";
 import { LeverageSlider } from "../ui/leverage-slider";

@@ -30,14 +30,14 @@ import { PieChart } from "../ui/pie-chart";
 import { ProgressBar } from "../ui/progress-bar";
 import { useTheme } from "@/contexts/theme-context";
 import { Dropdown } from '../ui/dropdown';
-import { TOKEN_SYMBOLS } from "@/lib/solana/tokens";
+import { LENDING_SYMBOLS } from "@/lib/solana/tokens";
 
 // One page fits every registry pool (5 today).
 const ITEMS_PER_PAGE = 5;
 
 // Every token the protocol supports across Earn/Farm pools — straight from the
 // token registry (lib/solana/tokens.ts), never a hardcoded pair.
-const ALL_POOL_ASSETS = [...TOKEN_SYMBOLS];
+const ALL_POOL_ASSETS = [...LENDING_SYMBOLS];
 
 const FILTER_OPTIONS = {
   collateral: ALL_POOL_ASSETS,

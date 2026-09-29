@@ -16,7 +16,7 @@ import { useTheme } from "@/contexts/theme-context";
 import { setSelectedPool, useSelectedPoolStore } from "@/store/selected-pool-store";
 import { usePoolData } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
-import { findToken, TOKEN_SYMBOLS, tokenIcon } from "@/lib/solana/tokens";
+import { findToken, LENDING_SYMBOLS, tokenIcon } from "@/lib/solana/tokens";
 
 const fmt = (n: number, decimals = 4) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M`
@@ -125,7 +125,7 @@ export default function EarnPage({ params }: { params: Promise<{ id: string }> }
       <main className="flex flex-col gap-4 pt-10 px-4 sm:px-10 lg:px-30 items-start">
         <h1 className={`text-[20px] sm:text-[25px] font-bold ${isDark ? "text-white" : "text-[#181822]"}`}>Pool not found</h1>
         <p className={`text-[14px] font-medium ${isDark ? "text-[#A7A7A7]" : "text-[#5A5555]"}`}>
-          There is no Vanna lending pool for &quot;{decodeURIComponent(id)}&quot;. Supported pools: {TOKEN_SYMBOLS.join(", ")}.
+          There is no Vanna lending pool for &quot;{decodeURIComponent(id)}&quot;. Supported pools: {LENDING_SYMBOLS.join(", ")}.
         </p>
         <button
           type="button"
@@ -205,7 +205,17 @@ export default function EarnPage({ params }: { params: Promise<{ id: string }> }
             {storeReady && activeTab === "collateral-limits" && <CollateralLimitsTab />}
           </article>
           <aside className="w-full xl:w-[420px] shrink-0 flex flex-col gap-3 xl:sticky xl:top-4 xl:self-start" aria-label="Transaction Form">
-            {storeReady && <Form />}
+            {storeReady && !token.lendable && (
+              <div
+                className={`w-full rounded-xl p-3 border text-[12px] font-medium ${
+                  isDark ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-500" : "bg-yellow-50 border-yellow-200 text-yellow-700"
+                }`}
+                role="status"
+              >
+                {symbol} no longer has an Earn pool — it&apos;s collateral-only on the Margin page. You can still withdraw an existing position here.
+              </div>
+            )}
+            {storeReady && <Form withdrawOnly={!token.lendable} />}
 
             {/* How it works */}
             <div className={`w-full rounded-2xl border p-4 flex flex-col gap-3 ${

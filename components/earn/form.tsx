@@ -10,7 +10,7 @@ import { WithdrawLiquidity } from "./withdraw-liqudity";
 import { useTheme } from "@/contexts/theme-context";
 import { motion, AnimatePresence } from "framer-motion";
 
-const tabs = [
+const TABS = [
   { label: "Supply Liquidity", id: "supply-liquidity" },
   { label: "Withdraw Liquidity", id: "withdraw-liquidity" },
 ];
@@ -18,10 +18,13 @@ const tabs = [
 /**
  * Tab container switching between the supply and withdraw liquidity panels.
  * On mobile the bottom sheet auto-opens when a tab is selected.
+ * `withdrawOnly`: a pool the app no longer offers (e.g. a staking token) — only Withdraw is shown,
+ * so an existing position can still exit.
  */
-export const Form = () => {
+export const Form = ({ withdrawOnly = false }: { withdrawOnly?: boolean } = {}) => {
   const { isDark } = useTheme();
-  const [activeTab, setActiveTab] = useState<string>("supply-liquidity");
+  const [activeTab, setActiveTab] = useState<string>(withdrawOnly ? "withdraw-liquidity" : "supply-liquidity");
+  const tabs = withdrawOnly ? TABS.filter((t) => t.id === "withdraw-liquidity") : TABS;
   const [isOpen, setIsOpen] = useState(false);
 
   return (

@@ -8,7 +8,7 @@ import { LeverageSlider } from "../ui/leverage-slider";
 import { ConversionRatio } from "@/components/ui/conversion-ratio";
 import { useTheme } from "@/contexts/theme-context";
 import { useTokenPrices } from "@/hooks/use-token-prices";
-import { DropdownOptions } from "@/lib/constants";
+import { BorrowDropdownOptions as DropdownOptions } from "@/lib/constants";
 import { MAX_LEVERAGE } from "@/lib/constants/margin";
 import type { BorrowInfo } from "@/lib/types";
 import { splitBorrowUsd } from "@/lib/margin/amounts";

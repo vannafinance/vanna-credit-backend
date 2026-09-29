@@ -161,13 +161,13 @@ export default function FarmPage() {
       icon: "",
       title: "Farm DeFi Yields",
       description:
-        "Supply SOL, USDC, USDT, JitoSOL and JupSOL to Kamino from your margin account — with up to 5x leverage borrowed from Vanna.",
+        "Supply SOL, USDC, USDT, JitoSOL and JupSOL to Kamino straight from your margin account and earn Kamino's supply yield.",
     },
     {
       icon: "",
-      title: "Leveraged Single-Asset Vaults",
+      title: "Single-Asset Kamino Vaults",
       description:
-        "Deposit from your wallet, borrow the same asset, and supply the total to Kamino in one transaction.",
+        "Deposit or borrow on the Margin page, then supply your margin balance to Kamino in one click.",
     },
     {
       icon: "",

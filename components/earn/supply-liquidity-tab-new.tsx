@@ -25,7 +25,7 @@ import { useSupplyLiquidity, usePoolData, usePoolDetails } from "@/hooks/use-ear
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { useSelectedPoolStore } from "@/store/selected-pool-store";
 import { validateAmountChange } from "@/lib/utils/sanitize-amount";
-import { TOKENS, tokenIcon } from "@/lib/solana/tokens";
+import { TOKENS, tokenIcon, LENDING_TOKENS } from "@/lib/solana/tokens";
 import { SOL_FEE_RESERVE_LAMPORTS } from "@/lib/solana/balances";
 import { previewSupplyShares } from "@/lib/solana/lend";
 import { fromRaw, lenderTotalAssets, MIN_INITIAL_SHARES, toRaw } from "@/lib/solana/math";
@@ -249,7 +249,7 @@ export const SupplyLiquidityTab = memo(function SupplyLiquidityTab() {
                   }`}
                   role="listbox"
                 >
-                  {TOKENS.map(({ symbol: opt }) => (
+                  {LENDING_TOKENS.map(({ symbol: opt }) => (
                     <button
                       key={opt}
                       type="button"

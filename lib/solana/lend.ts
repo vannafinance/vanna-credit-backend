@@ -73,6 +73,9 @@ export async function supply(symbol: string, amountUi: string | number, opts: Se
   const signer = opts.signer ?? getActiveSigner();
   const owner = signer.publicKey;
   const token = getToken(symbol);
+  // Redeeming stays open for every token (so an existing position can always exit); new supply
+  // only goes to the Earn pools the app offers.
+  if (!token.lendable) throw new Error(`${token.symbol} has no Earn pool`);
   const assets = toRaw(amountUi, token.decimals);
   if (assets <= 0n) throw new Error("Enter an amount greater than zero");
 

@@ -777,6 +777,8 @@ export async function appendBorrows(ctx: BatchContext, borrows: AmountItem[]) {
   const opened = new Set(ctx.snapshot.openDebtPositions);
   for (const item of borrows) {
     const token = getToken(item.symbol);
+    // The app only lends out its Earn-pool tokens (SOL, USDC, USDT); staking tokens are collateral-only.
+    if (!token.lendable) throw new Error(`${token.symbol} can't be borrowed — it is collateral-only`);
     const asset = assetFor(ctx.assetMap, token);
     if (!asset.borrowEnabled) throw new Error(`${token.symbol} is not enabled for borrowing`);
     const amount = toRaw(item.amount, token.decimals);
