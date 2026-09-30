@@ -6,6 +6,7 @@ export const navbarItems = [
   { title: "Margin", link: "/", group: "bordered" },
   { title: "Trade", link: "/trade", group: "bordered" },
   { title: "Farm", link: "/farm", group: "bordered" },
+  { title: "Copilot", link: "/copilot", group: "secondary" },
 ];
 
 export const tradeItems = [{ title: "Spot", link: "/trade/spot" }];

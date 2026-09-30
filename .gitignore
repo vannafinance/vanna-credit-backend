@@ -19,3 +19,6 @@ dev.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local encrypted Copilot stores (development only).
+/.local/

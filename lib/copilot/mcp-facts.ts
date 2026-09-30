@@ -1,0 +1,671 @@
+/**
+ * Read lane: MCP facts -> a structured answer built by code.
+ *
+ * Every figure in an answer is copied or computed from an MCP result in this file. Gemini may later
+ * re-word the headline and note (see vertex.ts), but only after the figures are fixed here, and its
+ * wording is discarded if it contains a number that is not in `data`.
+ *
+ * Sizing helpers for "how much can I borrow / withdraw" also live here, because the write lane
+ * needs the very same number for "borrow max": the MCP's own `max_borrow` uses the protocol's 1.10
+ * threshold, while the Copilot's floor is 1.15, so the safe amount is computed from the MCP's
+ * health numbers and then verified through the MCP's `can_borrow` / `can_withdraw`.
+ */
+
+import { copilotConfig } from "./config";
+import { CONCEPTS, fmtAmount, fmtFractionPct, fmtHf, fmtPct, fmtUsd, humanizeMcpError } from "./explain";
+import { LEND_BORROW_ASSETS, type Asset, type ConceptTopic, type ReadIntent } from "./intent";
+import { mcp, MCPError, type McpCtx } from "./mcp-client";
+import {
+  floorDecimals,
+  maxBorrowUsd,
+  maxWithdrawUsd,
+  num,
+  readCan,
+  readHealth,
+  tokenDecimals,
+  usdToUnits,
+  type HealthRead,
+} from "./risk";
+import type { AnswerFact, StructuredAnswer } from "./answer-schema";
+import type { CopilotUser } from "./types";
+
+export interface ReadOutcome {
+  answer: StructuredAnswer;
+  /** Raw MCP figures the answer was built from; the grounding check for model wording. */
+  data: Record<string, unknown>;
+  /** False when a failure made the answer an explanation of what is unavailable. */
+  ok: boolean;
+  /** Prose that must not be re-worded by the model (errors, static explanations). */
+  fixedWording?: boolean;
+}
+
+export interface ReadCtx extends McpCtx {
+  user: CopilotUser;
+}
+
+const fact = (label: string, value: string, tone?: AnswerFact["tone"]): AnswerFact => ({ label, value, ...(tone ? { tone } : {}) });
+
+const hfTone = (hf: number | null): AnswerFact["tone"] =>
+  hf === null ? "good" : hf <= 1.1 ? "bad" : hf < copilotConfig.minHealthFactor ? "warn" : "good";
+
+function unavailable(err: unknown, what: string): ReadOutcome {
+  const h = humanizeMcpError(err);
+  return {
+    ok: false,
+    fixedWording: true,
+    data: {},
+    answer: { headline: `I couldn't get ${what} right now, so I have no figure to give you.`, facts: [], note: h.message, venue: "none" },
+  };
+}
+
+const noMargin = (what: string): ReadOutcome => ({
+  ok: true,
+  fixedWording: true,
+  data: {},
+  answer: {
+    headline: `You don't have a margin account yet, so there is no ${what}.`,
+    facts: [],
+    note: 'Say "open a margin account" to create one, then deposit collateral.',
+    venue: "margin",
+  },
+});
+
+function isNoAccount(err: unknown): boolean {
+  return err instanceof MCPError && err.code === "account_not_found";
+}
+
+// ── Health reads shared with the write lane ─────────────────────────────────
+
+export type HealthResult = { kind: "ok"; health: HealthRead; raw: Record<string, unknown> } | { kind: "no_account" } | { kind: "unavailable"; error: unknown } | { kind: "malformed" };
+
+export async function loadHealth(ctx: ReadCtx): Promise<HealthResult> {
+  try {
+    const raw = await mcp.accountHealth(ctx.user.wallet, ctx);
+    const health = readHealth(raw);
+    return health ? { kind: "ok", health, raw } : { kind: "malformed" };
+  } catch (err) {
+    return isNoAccount(err) ? { kind: "no_account" } : { kind: "unavailable", error: err };
+  }
+}
+
+export interface PriceRead {
+  usd: number;
+  stale: boolean;
+}
+
+export async function loadPrice(asset: string, ctx: ReadCtx): Promise<PriceRead | null> {
+  try {
+    const raw = await mcp.price(asset, ctx);
+    const usd = num(raw.price_usd);
+    if (usd === null || !(usd > 0)) return null;
+    return { usd, stale: raw.stale === true || raw.fresh === false };
+  } catch {
+    return null;
+  }
+}
+
+export type Sized = { ok: true; amount: string; usd: number; hfAfter: number | null; protocolMax: string | null } | { ok: false; reason: string };
+
+/** Largest borrow that keeps HF >= floor, verified through the MCP. */
+export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult } = {}): Promise<Sized> {
+  const floor = copilotConfig.minHealthFactor;
+  const h = opts.hint ?? (await loadHealth(ctx));
+  if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
+  if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe borrow." };
+  const price = await loadPrice(asset, ctx);
+  if (!price || price.stale) return { ok: false, reason: `The ${asset} price is unavailable or stale right now.` };
+  const { collateralUsd: c, debtUsd: d } = h.health;
+  const maxUsd = maxBorrowUsd(c, d, floor, true);
+  let units = Number(usdToUnits(maxUsd * 0.995, price.usd, asset));
+  for (let i = 0; i < 8 && units > 0; i++) {
+    const amount = floorDecimals(units, tokenDecimals(asset));
+    if (Number(amount) <= 0) break;
+    try {
+      const can = readCan(await mcp.canBorrow({ authority: ctx.user.wallet, asset, amount }, ctx));
+      if (can?.allowed && typeof can.projectedHf === "number" && can.projectedHf >= floor) {
+        let protocolMax: string | null = null;
+        try {
+          const m = await mcp.maxBorrow(ctx.user.wallet, asset, ctx);
+          protocolMax = typeof m.max_amount === "string" ? m.max_amount : null;
+        } catch {
+          /* informational only */
+        }
+        return { ok: true, amount, usd: Number(amount) * price.usd, hfAfter: can.projectedHf, protocolMax };
+      }
+      if (can && !can.allowed && can.reason && !/breach/i.test(can.reason)) return { ok: false, reason: can.reason };
+    } catch (err) {
+      return { ok: false, reason: humanizeMcpError(err).message };
+    }
+    units *= 0.97;
+  }
+  return { ok: false, reason: `There is no room to borrow ${asset} while keeping your health factor at ${floor.toFixed(2)} or above.` };
+}
+
+/** Largest collateral withdrawal that keeps HF >= floor, verified through the MCP. */
+export async function sizeSafeWithdraw(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult } = {}): Promise<Sized> {
+  const floor = copilotConfig.minHealthFactor;
+  const h = opts.hint ?? (await loadHealth(ctx));
+  if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
+  if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe withdrawal." };
+  const row = h.health.collateral.find((r) => r.symbol === asset);
+  if (!row || !(row.units > 0)) return { ok: false, reason: `You have no ${asset} collateral in your margin account.` };
+  const price = row.priceUsd ?? (await loadPrice(asset, ctx))?.usd ?? null;
+  if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
+  const { collateralUsd: c, debtUsd: d } = h.health;
+  const limitUsd = maxWithdrawUsd(c, d, floor);
+  let units = d <= 0 ? row.units : Math.min(row.units, (limitUsd * 0.995) / price);
+  for (let i = 0; i < 8 && units > 0; i++) {
+    const amount = d <= 0 || units >= row.units ? row.unitsText : floorDecimals(units, tokenDecimals(asset));
+    if (Number(amount) <= 0) break;
+    try {
+      const can = readCan(await mcp.canWithdraw({ authority: ctx.user.wallet, asset, amount }, ctx));
+      const hfOk = can?.projectedHf === null || (typeof can?.projectedHf === "number" && can.projectedHf >= floor);
+      if (can?.allowed && hfOk) {
+        return { ok: true, amount, usd: Number(amount) * price, hfAfter: can.projectedHf as number | null, protocolMax: null };
+      }
+      if (can && !can.allowed && can.reason && !/breach/i.test(can.reason)) return { ok: false, reason: can.reason };
+    } catch (err) {
+      return { ok: false, reason: humanizeMcpError(err).message };
+    }
+    units *= 0.97;
+  }
+  return { ok: false, reason: `You can't withdraw any ${asset} right now without taking your health factor below ${floor.toFixed(2)}.` };
+}
+
+// ── Read intents ────────────────────────────────────────────────────────────
+
+export async function runRead(intent: ReadIntent, ctx: ReadCtx): Promise<ReadOutcome> {
+  switch (intent.kind) {
+    case "health":
+      return readHealthAnswer(ctx);
+    case "positions":
+      return readPositions(ctx);
+    case "debt":
+    case "collateral":
+      return readSide(intent.kind, ctx);
+    case "wallet":
+      return readWallet(ctx);
+    case "price":
+      return readPrices(intent.assets, ctx);
+    case "pool":
+      return readPools(intent.assets, ctx);
+    case "earn_position":
+      return readEarn(intent.assets, ctx);
+    case "farm_markets":
+      return readFarmMarkets(ctx);
+    case "farm_positions":
+      return readFarmPositions(ctx);
+    case "capacity":
+      return readCapacity(intent.what, intent.asset, ctx);
+    case "liquidation_risk":
+      return readLiquidation(ctx);
+    case "history":
+      return readHistory(ctx);
+    case "protocol":
+      return readProtocol(ctx);
+    case "quote":
+      return readQuote(intent.from, intent.to, intent.amount, ctx);
+    case "concept":
+      return concept(intent.topic);
+    case "help":
+      return concept("general");
+  }
+}
+
+function concept(topic: ConceptTopic): ReadOutcome {
+  return {
+    ok: true,
+    fixedWording: true,
+    data: {},
+    answer: { headline: CONCEPTS[topic] ?? CONCEPTS.general, facts: [], venue: "none" },
+  };
+}
+
+async function readHealthAnswer(ctx: ReadCtx): Promise<ReadOutcome> {
+  const r = await loadHealth(ctx);
+  if (r.kind === "no_account") return noMargin("health factor");
+  if (r.kind === "unavailable") return unavailable(r.error, "your health factor");
+  if (r.kind === "malformed") return unavailable(new Error("the account data was incomplete"), "your health factor");
+  const h = r.health;
+  const facts: AnswerFact[] = [
+    fact("health factor", fmtHf(h.hf), hfTone(h.hf)),
+    fact("collateral", fmtUsd(h.collateralUsd)),
+    fact("debt", fmtUsd(h.debtUsd)),
+    fact("liquidation at", "1.10"),
+    fact("safety floor", copilotConfig.minHealthFactor.toFixed(2)),
+  ];
+  const headline =
+    h.hf === null
+      ? `You have no debt, so there is no health factor to report. Your margin collateral is ${fmtUsd(h.collateralUsd)}.`
+      : `Your health factor is ${h.hf.toFixed(2)} on your margin account.`;
+  const notes: string[] = [];
+  if (h.isLiquidatable) notes.push("Your account is at or below the liquidation threshold.");
+  else if (h.hf !== null && h.hf < copilotConfig.minHealthFactor) notes.push(`That is below the ${copilotConfig.minHealthFactor.toFixed(2)} safety floor; repaying debt or adding collateral raises it.`);
+  if (!h.pricesOk) notes.push("At least one price is stale or failed a quality check right now, so this figure may move.");
+  return { ok: true, data: { health: r.raw }, answer: { headline, facts, ...(notes.length ? { note: notes.join(" ") } : {}), venue: "margin" } };
+}
+
+const rowsTable = (caption: string, rows: HealthRead["collateral"]) => ({
+  caption,
+  columns: ["Asset", "Amount", "Value"],
+  rows: rows.map((r) => [r.symbol, fmtAmount(r.unitsText), fmtUsd(r.usd)]),
+});
+
+async function readSide(kind: "debt" | "collateral", ctx: ReadCtx): Promise<ReadOutcome> {
+  const r = await loadHealth(ctx);
+  if (r.kind === "no_account") return noMargin(kind === "debt" ? "debt" : "collateral");
+  if (r.kind !== "ok") return unavailable(r.kind === "unavailable" ? r.error : new Error("incomplete account data"), `your ${kind}`);
+  const h = r.health;
+  const rows = kind === "debt" ? h.debt : h.collateral;
+  const total = kind === "debt" ? h.debtUsd : h.collateralUsd;
+  const headline = rows.length
+    ? `Your margin ${kind} is ${fmtUsd(total)} across ${rows.length} asset${rows.length === 1 ? "" : "s"}.`
+    : `You have no ${kind} on your margin account.`;
+  return {
+    ok: true,
+    data: { health: r.raw },
+    answer: { headline, facts: [fact("health factor", fmtHf(h.hf), hfTone(h.hf))], ...(rows.length ? { tables: [rowsTable(kind === "debt" ? "Debt" : "Collateral", rows)] } : {}), venue: "margin" },
+  };
+}
+
+interface WalletAsset {
+  symbol: string;
+  wallet_balance: string;
+  lender_share_balance: string | null;
+  lender_redeemable_underlying: string | null;
+}
+
+function walletAssets(raw: Record<string, unknown>): WalletAsset[] | null {
+  if (!Array.isArray(raw.assets)) return null;
+  const out: WalletAsset[] = [];
+  for (const a of raw.assets) {
+    if (!a || typeof a !== "object") return null;
+    const o = a as Record<string, unknown>;
+    if (typeof o.symbol !== "string" || num(o.wallet_balance) === null) return null;
+    out.push({
+      symbol: o.symbol,
+      wallet_balance: String(o.wallet_balance),
+      lender_share_balance: o.lender_share_balance == null ? null : String(o.lender_share_balance),
+      lender_redeemable_underlying: o.lender_redeemable_underlying == null ? null : String(o.lender_redeemable_underlying),
+    });
+  }
+  return out;
+}
+
+async function readWallet(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.wallet(ctx.user.wallet, ctx);
+  } catch (err) {
+    return unavailable(err, "your wallet balances");
+  }
+  const assets = walletAssets(raw);
+  const sol = num(raw.sol_balance);
+  if (!assets || sol === null) return unavailable(new Error("the wallet data was incomplete"), "your wallet balances");
+  const held = assets.filter((a) => Number(a.wallet_balance) > 0);
+  return {
+    ok: true,
+    data: { wallet: raw },
+    answer: {
+      headline: `Your wallet holds ${fmtAmount(sol, "SOL")} (native)${held.length ? ` and ${held.length} other token balance${held.length === 1 ? "" : "s"}` : ""}.`,
+      facts: [fact("native SOL", fmtAmount(String(raw.sol_balance), "SOL")), fact("margin account", raw.margin_account_exists === true ? "open" : "not opened")],
+      ...(held.length ? { tables: [{ caption: "Wallet tokens", columns: ["Asset", "Balance"], rows: held.map((a) => [a.symbol, fmtAmount(a.wallet_balance)]) }] } : {}),
+      venue: "wallet",
+    },
+  };
+}
+
+async function readPositions(ctx: ReadCtx): Promise<ReadOutcome> {
+  const [healthR, walletR, farmR] = await Promise.allSettled([loadHealth(ctx), mcp.wallet(ctx.user.wallet, ctx), mcp.call("vanna_farm_overview", { action: "positions", authority: ctx.user.wallet }, ctx)]);
+  const tables: NonNullable<StructuredAnswer["tables"]> = [];
+  const facts: AnswerFact[] = [];
+  const data: Record<string, unknown> = {};
+  const gaps: string[] = [];
+
+  if (healthR.status === "fulfilled" && healthR.value.kind === "ok") {
+    const h = healthR.value.health;
+    data.health = healthR.value.raw;
+    facts.push(fact("health factor", fmtHf(h.hf), hfTone(h.hf)), fact("margin collateral", fmtUsd(h.collateralUsd)), fact("margin debt", fmtUsd(h.debtUsd)));
+    if (h.collateral.length) tables.push(rowsTable("Margin collateral", h.collateral));
+    if (h.debt.length) tables.push(rowsTable("Debt", h.debt));
+  } else if (healthR.status === "fulfilled" && healthR.value.kind === "no_account") {
+    facts.push(fact("margin account", "not opened"));
+  } else {
+    gaps.push("margin account");
+  }
+
+  if (walletR.status === "fulfilled") {
+    data.wallet = walletR.value;
+    const assets = walletAssets(walletR.value);
+    const sol = num(walletR.value.sol_balance);
+    if (assets && sol !== null) {
+      const held = assets.filter((a) => Number(a.wallet_balance) > 0);
+      facts.push(fact("native SOL in wallet", fmtAmount(String(walletR.value.sol_balance), "SOL")));
+      if (held.length) tables.push({ caption: "Wallet tokens", columns: ["Asset", "Balance"], rows: held.map((a) => [a.symbol, fmtAmount(a.wallet_balance)]) });
+      const earn = assets.filter((a) => a.lender_redeemable_underlying !== null && Number(a.lender_redeemable_underlying) > 0);
+      if (earn.length) tables.push({ caption: "Earn deposits", columns: ["Pool", "Shares", "Redeemable"], rows: earn.map((a) => [a.symbol, fmtAmount(a.lender_share_balance ?? "0"), fmtAmount(a.lender_redeemable_underlying ?? "0", a.symbol)]) });
+    } else gaps.push("wallet");
+  } else gaps.push("wallet");
+
+  if (farmR.status === "fulfilled") {
+    data.farm = farmR.value;
+    const list = Array.isArray(farmR.value.positions) ? (farmR.value.positions as Array<Record<string, unknown>>) : [];
+    if (list.length) {
+      tables.push({
+        caption: "Kamino farm",
+        columns: ["Receipt", "Receipt amount", "Underlying"],
+        rows: list.map((p) => [String(p.symbol), fmtAmount(String(p.receipt_balance)), fmtAmount(String(p.underlying_amount))]),
+      });
+    }
+  } else if (!(farmR.reason instanceof MCPError && farmR.reason.code === "account_not_found")) {
+    gaps.push("Kamino farm");
+  }
+
+  if (!tables.length && !facts.length) return unavailable(new Error("no position data came back"), "your positions");
+  const headline = tables.length ? "Here are your current positions." : "You have no open positions yet.";
+  return {
+    ok: true,
+    data,
+    answer: { headline, facts, ...(tables.length ? { tables } : {}), ...(gaps.length ? { note: `I couldn't read: ${gaps.join(", ")}. Nothing is estimated in its place.` } : {}), venue: "none" },
+  };
+}
+
+async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
+  const list = assets.length ? assets : (["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"] as Asset[]);
+  let raw: Record<string, unknown>;
+  try {
+    raw = list.length === 1 ? { [list[0]]: await mcp.price(list[0], ctx) } : await mcp.prices(list, ctx);
+  } catch (err) {
+    return unavailable(err, "prices");
+  }
+  const rows: string[][] = [];
+  const facts: AnswerFact[] = [];
+  let stale = 0;
+  for (const a of list) {
+    const p = raw[a];
+    const usd = p && typeof p === "object" ? num((p as Record<string, unknown>).price_usd) : null;
+    if (usd === null) {
+      rows.push([a, "unavailable", "-"]);
+      continue;
+    }
+    const isStale = (p as Record<string, unknown>).stale === true;
+    if (isStale) stale++;
+    rows.push([a, `$${usd.toLocaleString("en-US", { maximumFractionDigits: usd >= 10 ? 2 : 4 })}`, isStale ? "stale" : "live"]);
+    facts.push(fact(`${a} price`, `$${usd.toLocaleString("en-US", { maximumFractionDigits: usd >= 10 ? 2 : 4 })}`, isStale ? "warn" : undefined));
+  }
+  const first = facts[0];
+  return {
+    ok: facts.length > 0,
+    data: { prices: raw },
+    answer: {
+      headline: list.length === 1 && first ? `${list[0]} is ${first.value} on the Vanna oracle.` : "Here are the current oracle prices.",
+      facts: list.length === 1 ? facts : [],
+      ...(list.length > 1 ? { tables: [{ columns: ["Asset", "Price", "Status"], rows }] } : {}),
+      ...(stale ? { note: "A price marked stale is older than the program allows; the program refuses to use it until it refreshes." } : {}),
+      venue: "oracle",
+    },
+  };
+}
+
+async function readPools(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
+  const list = (assets.length ? assets : [...LEND_BORROW_ASSETS]).filter((a) => (LEND_BORROW_ASSETS as readonly string[]).includes(a));
+  if (!list.length) {
+    return { ok: true, fixedWording: true, data: {}, answer: { headline: "Only SOL, USDC and USDT have Vanna Earn pools. JitoSOL and JupSOL can be collateral, swapped or farmed on Kamino.", facts: [], venue: "earn" } };
+  }
+  const settled = await Promise.allSettled(list.map((a) => mcp.poolStats(a, ctx)));
+  const rows: string[][] = [];
+  const data: Record<string, unknown> = {};
+  const facts: AnswerFact[] = [];
+  settled.forEach((s, i) => {
+    const a = list[i];
+    if (s.status !== "fulfilled") {
+      rows.push([a, "unavailable", "-", "-", "-"]);
+      return;
+    }
+    const p = s.value;
+    data[a] = p;
+    const supply = num(p.supply_apr_pct);
+    const borrow = num(p.borrow_apr_pct);
+    const util = num(p.utilization_rate_pct);
+    rows.push([
+      a,
+      supply === null ? "-" : fmtPct(supply),
+      borrow === null ? "-" : fmtPct(borrow),
+      util === null ? "-" : fmtPct(util),
+      typeof p.available_liquidity === "string" ? fmtAmount(p.available_liquidity, a) : "-",
+    ]);
+    if (supply !== null && list.length === 1) facts.push(fact(`${a} supply APR`, fmtPct(supply)), fact(`${a} borrow APR`, borrow === null ? "-" : fmtPct(borrow)), fact("utilization", util === null ? "-" : fmtPct(util)));
+  });
+  return {
+    ok: Object.keys(data).length > 0,
+    data,
+    answer: {
+      headline: list.length === 1 ? `The ${list[0]} Earn pool pays a ${rows[0][1]} supply APR.` : "Here are the Vanna Earn pool rates.",
+      facts,
+      ...(list.length > 1 ? { tables: [{ columns: ["Pool", "Supply APR", "Borrow APR", "Utilization", "Available"], rows }] } : {}),
+      note: "Rates are APR (not compounded) and move with utilization.",
+      venue: "earn",
+    },
+  };
+}
+
+async function readEarn(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
+  const list = (assets.length ? assets : [...LEND_BORROW_ASSETS]).filter((a) => (LEND_BORROW_ASSETS as readonly string[]).includes(a));
+  const settled = await Promise.allSettled(list.map((a) => mcp.call("vanna_earn_position", { action: "earned_interest", owner: ctx.user.wallet, asset: a }, ctx)));
+  const rows: string[][] = [];
+  const data: Record<string, unknown> = {};
+  let incomplete = false;
+  settled.forEach((s, i) => {
+    if (s.status !== "fulfilled") return;
+    const p = s.value;
+    data[list[i]] = p;
+    if (p.complete === false) incomplete = true;
+    rows.push([list[i], fmtAmount(String(p.redeemable_underlying), list[i]), fmtAmount(String(p.earned_interest), list[i])]);
+  });
+  if (!rows.length) return unavailable(settled.find((s) => s.status === "rejected") && (settled.find((s) => s.status === "rejected") as PromiseRejectedResult).reason, "your Earn balances");
+  const held = rows.filter((r) => parseFloat(r[1].replace(/,/g, "")) > 0);
+  return {
+    ok: true,
+    data,
+    answer: {
+      headline: held.length ? "Here is what you have supplied to the Vanna Earn pools." : "You have nothing supplied to the Vanna Earn pools.",
+      facts: [],
+      ...(held.length ? { tables: [{ columns: ["Pool", "Redeemable", "Interest earned"], rows }] } : {}),
+      ...(incomplete && held.length ? { note: "Interest earned is computed from your recent on-chain history; older activity may not be included." } : {}),
+      venue: "earn",
+    },
+  };
+}
+
+async function readFarmMarkets(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.farmMarkets(ctx);
+  } catch (err) {
+    return unavailable(err, "the Kamino markets");
+  }
+  const markets = Array.isArray(raw.markets) ? (raw.markets as Array<Record<string, unknown>>) : [];
+  if (!markets.length) return unavailable(new Error("no markets returned"), "the Kamino markets");
+  return {
+    ok: true,
+    data: { markets: raw },
+    answer: {
+      headline: "Here are the Kamino farm markets you can supply to from your margin balance.",
+      facts: [],
+      tables: [
+        {
+          columns: ["Receipt", "Underlying", "Supply APY", "Kamino supply"],
+          rows: markets.map((m) => [
+            String(m.symbol),
+            String(m.underlying),
+            m.metrics_available === true && num(m.supply_apy_fraction) !== null ? fmtFractionPct(String(m.supply_apy_fraction)) : "unavailable",
+            m.metrics_available === true && num(m.total_supply_usd) !== null ? fmtUsd(Number(m.total_supply_usd)) : "unavailable",
+          ]),
+        },
+      ],
+      note: "APY is Kamino's live rate for that reserve; it is not guaranteed.",
+      venue: "kamino",
+    },
+  };
+}
+
+async function readFarmPositions(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.call("vanna_farm_overview", { action: "positions", authority: ctx.user.wallet }, ctx);
+  } catch (err) {
+    return isNoAccount(err) ? noMargin("Kamino farm position") : unavailable(err, "your Kamino positions");
+  }
+  const list = Array.isArray(raw.positions) ? (raw.positions as Array<Record<string, unknown>>) : [];
+  return {
+    ok: true,
+    data: { farm: raw },
+    answer: {
+      headline: list.length ? "Here are your Kamino farm positions." : "You have no Kamino farm positions.",
+      facts: [],
+      ...(list.length ? { tables: [{ columns: ["Receipt", "Receipt amount", "Underlying"], rows: list.map((p) => [String(p.symbol), fmtAmount(String(p.receipt_balance)), fmtAmount(String(p.underlying_amount))]) }] } : {}),
+      venue: "kamino",
+    },
+  };
+}
+
+async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ctx: ReadCtx): Promise<ReadOutcome> {
+  const floor = copilotConfig.minHealthFactor;
+  const h = await loadHealth(ctx);
+  if (h.kind === "no_account") return noMargin(what === "borrow" ? "borrowing capacity" : "withdrawable collateral");
+  if (h.kind !== "ok") return unavailable(h.kind === "unavailable" ? h.error : new Error("incomplete account data"), "your account");
+  const targets: Asset[] = what === "borrow" ? (asset ? [asset] : [...LEND_BORROW_ASSETS]) : asset ? [asset] : (h.health.collateral.map((r) => r.symbol).filter((s): s is Asset => ["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"].includes(s)));
+  if (!targets.length) return { ok: true, fixedWording: true, data: {}, answer: { headline: "You have no collateral to withdraw.", facts: [], venue: "margin" } };
+  const sized = await Promise.all(targets.map((a) => (what === "borrow" ? sizeSafeBorrow(a, ctx, { hint: h }) : sizeSafeWithdraw(a, ctx, { hint: h }))));
+  const rows: string[][] = [];
+  const facts: AnswerFact[] = [];
+  targets.forEach((a, i) => {
+    const s = sized[i];
+    if (s.ok) {
+      rows.push([a, fmtAmount(s.amount, a), fmtUsd(s.usd), s.hfAfter === null ? "no debt" : s.hfAfter.toFixed(2)]);
+      if (targets.length === 1) {
+        facts.push(fact(`safe ${what} (HF >= ${floor.toFixed(2)})`, fmtAmount(s.amount, a)), fact("value", fmtUsd(s.usd)), fact("health factor after", fmtHf(s.hfAfter)));
+        if (s.protocolMax) facts.push(fact("protocol maximum (HF > 1.10)", fmtAmount(s.protocolMax, a), "warn"));
+      }
+    } else rows.push([a, "none", "-", s.reason]);
+  });
+  const any = sized.find((s) => s.ok);
+  const fail = sized.find((s) => !s.ok) as { ok: false; reason: string } | undefined;
+  const one = targets.length === 1;
+  return {
+    ok: true,
+    data: { health: h.raw, sized: sized.map((s, i) => ({ asset: targets[i], ...(s.ok ? { amount: s.amount, usd: s.usd, hf_after: s.hfAfter } : { reason: s.reason }) })) },
+    answer: {
+      headline: one
+        ? any && any.ok
+          ? `You can safely ${what} up to ${fmtAmount(any.amount, targets[0])} (${fmtUsd(any.usd)}) and stay at a ${floor.toFixed(2)} health factor or above.`
+          : fail?.reason ?? "Nothing is available."
+        : `Here is how much you can ${what} while keeping your health factor at ${floor.toFixed(2)} or above.`,
+      facts,
+      ...(one ? {} : { tables: [{ columns: ["Asset", "Safe amount", "Value", "HF after / note"], rows }] }),
+      note: `Sized to the ${floor.toFixed(2)} safety floor, stricter than the protocol's 1.10 liquidation line, and checked against the program's own rules.`,
+      venue: "margin",
+    },
+  };
+}
+
+async function readLiquidation(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.call("vanna_margin_status", { action: "liquidation_snapshot", authority: ctx.user.wallet }, ctx);
+  } catch (err) {
+    return isNoAccount(err) ? noMargin("liquidation risk") : unavailable(err, "your liquidation status");
+  }
+  const hfRaw = raw.health_factor;
+  const hf = hfRaw === null ? null : num(hfRaw);
+  if (hfRaw !== null && hf === null) return unavailable(new Error("incomplete liquidation data"), "your liquidation status");
+  const liquidatable = raw.health_at_or_below_threshold === true;
+  const facts: AnswerFact[] = [fact("health factor", fmtHf(hf), hfTone(hf)), fact("liquidation at", "1.10"), fact("debt", fmtUsd(Number(raw.total_debt_usd))), fact("collateral", fmtUsd(Number(raw.total_collateral_usd)))];
+  let note = "This is a read-only check; the Copilot never executes a liquidation.";
+  if (hf !== null && !liquidatable) note = `If the value of all your collateral fell together by about ${((1 - 1.1 / hf) * 100).toFixed(0)}%, your account would reach the liquidation line. ${note}`;
+  return {
+    ok: true,
+    data: { snapshot: raw },
+    answer: {
+      headline: hf === null ? "You have no debt, so your account cannot be liquidated." : liquidatable ? `Your account is at or below the liquidation threshold (health factor ${hf.toFixed(2)}).` : `Your account is not liquidatable. Health factor ${hf.toFixed(2)}, liquidation at 1.10.`,
+      facts,
+      note,
+      venue: "margin",
+    },
+  };
+}
+
+async function readHistory(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.call("vanna_history", { action: "margin", authority: ctx.user.wallet, limit: 15 }, ctx);
+  } catch (err) {
+    return unavailable(err, "your history");
+  }
+  const events = Array.isArray(raw.events) ? (raw.events as Array<Record<string, unknown>>) : [];
+  const when = (t: unknown): string => {
+    const n = num(t);
+    return n ? new Date(n * 1000).toISOString().slice(0, 16).replace("T", " ") : "-";
+  };
+  return {
+    ok: true,
+    data: { history: raw },
+    answer: {
+      headline: events.length ? `Here are your ${events.length} most recent margin events.` : "I found no margin activity for your wallet.",
+      facts: [],
+      ...(events.length
+        ? { tables: [{ columns: ["When (UTC)", "Event", "Asset", "Amount"], rows: events.slice(0, 15).map((e) => [when(e.timestamp), String(e.event), String(e.asset ?? "-"), e.amount != null ? fmtAmount(String(e.amount)) : "-"]) }] }
+        : {}),
+      ...(raw.complete === false ? { note: "History is decoded from recent transactions only; older events may exist." } : {}),
+      venue: "margin",
+    },
+  };
+}
+
+async function readProtocol(ctx: ReadCtx): Promise<ReadOutcome> {
+  const [cfg, assets, integ] = await Promise.allSettled([mcp.protocolInfo("config", ctx), mcp.protocolInfo("assets", ctx), mcp.protocolInfo("integrations", ctx)]);
+  if (cfg.status !== "fulfilled" || assets.status !== "fulfilled") return unavailable(cfg.status === "rejected" ? cfg.reason : (assets as PromiseRejectedResult).reason, "protocol information");
+  const offered = (Array.isArray(assets.value.assets) ? (assets.value.assets as Array<Record<string, unknown>>) : []).filter((a) => ["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"].includes(String(a.symbol)));
+  const integrations = integ.status === "fulfilled" && Array.isArray(integ.value.integrations) ? (integ.value.integrations as Array<Record<string, unknown>>) : [];
+  return {
+    ok: true,
+    data: { config: cfg.value, assets: assets.value, integrations: integ.status === "fulfilled" ? integ.value : {} },
+    answer: {
+      headline: `The protocol is in ${String(cfg.value.operating_mode)} mode (${String(cfg.value.operating_mode_blocks)}).`,
+      facts: [fact("max assets per margin account", String(cfg.value.max_assets_per_margin)), fact("liquidation at", "1.10"), fact("Copilot safety floor", copilotConfig.minHealthFactor.toFixed(2))],
+      tables: [
+        { caption: "Assets", columns: ["Asset", "Lend / borrow", "Collateral", "Pool"], rows: offered.map((a) => [String(a.symbol), a.lend_borrow_offered === true ? "yes" : "no", a.collateral_enabled === true ? "yes" : "no", String(a.reserve_status)]) },
+        ...(integrations.length ? [{ caption: "Integrations", columns: ["Adapter", "Enabled"], rows: integrations.map((i) => [String(i.adapter), i.enabled === true ? "yes" : "no"]) }] : []),
+      ],
+      venue: "none",
+    },
+  };
+}
+
+async function readQuote(from: Asset, to: Asset, amount: string, ctx: ReadCtx): Promise<ReadOutcome> {
+  let q: Record<string, unknown>;
+  try {
+    q = await mcp.swapQuote({ from_asset: from, to_asset: to, amount }, ctx);
+  } catch (err) {
+    return unavailable(err, "a swap quote");
+  }
+  if (num(q.out_amount) === null) return unavailable(new Error("the quote was incomplete"), "a swap quote");
+  const impact = num(q.price_impact_pct);
+  return {
+    ok: true,
+    data: { quote: q },
+    answer: {
+      headline: `${fmtAmount(amount, from)} would swap to about ${fmtAmount(String(q.out_amount), to)} through Jupiter.`,
+      facts: [
+        fact("you send", fmtAmount(String(q.in_amount), from)),
+        fact("you receive (estimate)", fmtAmount(String(q.out_amount), to)),
+        fact("minimum received", fmtAmount(String(q.min_out_amount), to)),
+        ...(impact !== null ? [fact("price impact (as reported by Jupiter)", String(q.price_impact_pct))] : []),
+        fact("slippage limit", `${(Number(q.slippage_bps) / 100).toFixed(2)}%`),
+        ...(Array.isArray(q.route) && q.route.length ? [fact("route", q.route.map(String).join(" > "))] : []),
+      ],
+      note: "This is a quote only; nothing was built or sent.",
+      venue: "jupiter",
+    },
+  };
+}
