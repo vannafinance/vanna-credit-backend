@@ -17,7 +17,10 @@ export interface TokenInfo {
   decimals: number;
   /** SPL Token program that owns the mint (classic SPL for all five today). */
   tokenProgram: PublicKey;
-  /** Pyth price feed id (hex, no 0x). JupSOL's is a synthetic sentinel with no Hermes feed. */
+  /**
+   * Pyth price feed id (hex, no 0x). Reference only: the program now prices each asset from its
+   * on-chain `OracleConfig` (see oracle.ts / prices.ts), not from this id.
+   */
   pythFeedId: string;
   /** Path under /public. */
   icon: string;

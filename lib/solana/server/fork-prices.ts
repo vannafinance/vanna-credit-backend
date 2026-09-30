@@ -1,10 +1,9 @@
-// Server-side only: the fork price keeper. Ported from
-// vanna-credit-layer/scripts/src/devnet-pyth.ts (buildForkPriceAccountData / forkUnixTimestamp /
-// fabricatePrice), batched over the whole token registry.
+// Server-side only: the fork price keeper. Ported from vanna-credit-layer/scripts/src/oracle.ts
+// (refreshOraclesOnFork: Scope copied from mainnet, restamped) and devnet-pyth.ts
+// (buildForkPriceAccountData), driven by each asset's on-chain OracleConfig.
 import { Connection, PublicKey } from "@solana/web3.js";
 import { PYTH_RECEIVER_PROGRAM_ID, SOLANA_RPC_URL } from "../config";
 import { forkUnixTimestamp } from "../connection";
-import { priceFeedAccount } from "../pdas";
 import {
   CONF_OFFSET,
   EMA_CONF_OFFSET,
@@ -19,6 +18,8 @@ import {
   decodePriceUpdate,
 } from "../pyth";
 import { TOKENS, type TokenInfo } from "../tokens";
+import { fetchAllAssetConfigs } from "../protocol-state";
+import { SCOPE_CHAIN_UNUSED, scopeEntryOffset, type OracleConfigState } from "../oracle";
 import { callCheatcode } from "./cheatcodes";
 import { jupiterBaseUrl, jupiterHeaders } from "./jupiter-api";
 
@@ -92,67 +93,108 @@ export async function fetchJupiterUsdPrices(tokens: readonly TokenInfo[] = TOKEN
 
 export interface RefreshedPrice {
   symbol: string;
+  /** Pyth account refreshed for this asset (its fallback feed), when it has one. */
   account: string;
   usd: number;
   source: "jupiter" | "previous" | "reference";
   publishTime: number;
 }
 
+/** Scope's `OraclePrices` program; the mainnet account is copied onto the fork. */
+const SCOPE_PROGRAM_ID = new PublicKey("HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ");
+/** Where live Scope prices are read from (the fork's copy freezes at clone time). */
+const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+
 /**
- * Fabricates (or refreshes) every registry asset's PriceUpdateV2 account directly on the Surfpool
- * fork via `surfnet_setAccount` — no Hermes call, no wallet signature. The SOL feed account (a real
- * cloned mainnet PriceUpdateV2) is the byte-layout template; publish time = the fork Clock's
- * unix_timestamp, since the program checks price age against that clock.
- *
- * Price source per asset: live Jupiter USD price → the account's current on-chain price
- * (re-stamped) → the reference table (flagged as such).
+ * Copies Kamino's live Scope `OraclePrices` account from mainnet onto the fork and restamps every
+ * entry the given oracles read (price + TWAP chains) with the fork clock — the program measures
+ * age against the fork's clock, which need not match mainnet's. Same as
+ * `vanna-credit-layer/scripts/src/oracle.ts::refreshOraclesOnFork`. If mainnet is unreachable the
+ * fork's existing copy is restamped instead (its values then lag; reported as "restamped").
+ */
+async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigState[], now: bigint): Promise<"mainnet" | "restamped" | "none"> {
+  const byAccount = new Map<string, Set<number>>();
+  for (const o of oracles) {
+    if (o.scopePrices.equals(PublicKey.default)) continue;
+    const set = byAccount.get(o.scopePrices.toBase58()) ?? new Set<number>();
+    for (const e of [...o.scopeChain, ...o.scopeTwapChain]) if (e !== SCOPE_CHAIN_UNUSED) set.add(e);
+    byAccount.set(o.scopePrices.toBase58(), set);
+  }
+  let result: "mainnet" | "restamped" | "none" = "none";
+  for (const [address, entries] of byAccount) {
+    const key = new PublicKey(address);
+    let source = await new Connection(MAINNET_RPC_URL, "confirmed").getAccountInfo(key).catch(() => null);
+    result = "mainnet";
+    if (!source?.owner.equals(SCOPE_PROGRAM_ID)) {
+      source = await connection.getAccountInfo(key);
+      result = "restamped";
+    }
+    if (!source?.owner.equals(SCOPE_PROGRAM_ID)) throw new Error(`Scope prices account ${address} unavailable on mainnet and the fork`);
+    const data = Buffer.from(source.data);
+    for (const entry of entries) data.writeBigUInt64LE(now, scopeEntryOffset(entry) + 24);
+    await callCheatcode("surfnet_setAccount", [
+      address,
+      { lamports: source.lamports, data: data.toString("hex"), owner: SCOPE_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
+    ]);
+  }
+  return result;
+}
+
+/**
+ * The fork price keeper, driven by each registry token's ON-CHAIN OracleConfig:
+ *   1. Scope (primary): copy the live mainnet account, restamped to the fork clock.
+ *   2. Pyth (fallback): rewrite every configured `pyth_price` account via `surfnet_setAccount` from
+ *      a live Jupiter USD price, stamped with the fork clock, keeping each account's own feed id.
+ *      A feed paired with a `pyth_factor` publishes a RATE, not USD (JupSOL = JUPSOL/SOL rate ×
+ *      SOL/USD), so it gets usd(asset) / usd(factor's asset).
+ * Price per asset: live Jupiter USD → the account's current on-chain value (re-stamped) → the
+ * reference table (flagged `source: "reference"`).
  */
 export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promise<RefreshedPrice[]> {
   const connection = new Connection(rpcUrl, "confirmed");
-  const addresses = TOKENS.map((t) => priceFeedAccount(t.pythFeedId));
-  const solAddress = priceFeedAccount(TOKENS.find((t) => t.symbol === "SOL")!.pythFeedId);
-  const [infos, solTemplate, now, live] = await Promise.all([
-    connection.getMultipleAccountsInfo(addresses, "confirmed"),
-    connection.getAccountInfo(solAddress, "confirmed"),
-    forkUnixTimestamp(connection),
-    fetchJupiterUsdPrices(),
-  ]);
+  const [assetMap, now, live] = await Promise.all([fetchAllAssetConfigs(connection), forkUnixTimestamp(connection), fetchJupiterUsdPrices()]);
+  const configs = TOKENS.map((token) => ({ token, asset: [...assetMap.values()].find((a) => a.mint.equals(token.mint)) ?? null }));
+  await refreshScopeOnFork(connection, configs.flatMap((c) => (c.asset ? [c.asset.oracle] : [])), now);
+
+  // USD per token for the fallback feeds (live → reference), and which token each Pyth account prices.
+  const usdOf = (symbol: string) => live[symbol] ?? REFERENCE_PRICE_USD[symbol];
+  const tokenByPyth = new Map<string, string>();
+  for (const { token, asset } of configs) if (asset && !asset.oracle.pythPrice.equals(PublicKey.default)) tokenByPyth.set(asset.oracle.pythPrice.toBase58(), token.symbol);
+
+  const pythKeys = configs.flatMap((c) => (c.asset && !c.asset.oracle.pythPrice.equals(PublicKey.default) ? [c.asset.oracle.pythPrice] : []));
+  const infos = await connection.getMultipleAccountsInfo(pythKeys, "confirmed");
+  const infoByKey = new Map(pythKeys.map((k, i) => [k.toBase58(), infos[i]]));
 
   const results: RefreshedPrice[] = [];
-  for (let i = 0; i < TOKENS.length; i++) {
-    const token = TOKENS[i];
-    const address = addresses[i];
-    // This asset's own account when it's already a PriceUpdateV2, else the SOL feed's.
-    let template = infos[i];
-    if (!template?.owner.equals(PYTH_RECEIVER_PROGRAM_ID)) template = solTemplate;
-    if (!template?.owner.equals(PYTH_RECEIVER_PROGRAM_ID)) {
-      throw new Error(
-        "No existing PriceUpdateV2 template found on the fork to clone the byte layout from — " +
-          "run against a fork that has cloned mainnet Pyth accounts (the SOL feed).",
-      );
+  for (const { token, asset } of configs) {
+    if (!asset || asset.oracle.pythPrice.equals(PublicKey.default)) continue;
+    const address = asset.oracle.pythPrice;
+    const current = infoByKey.get(address.toBase58());
+    if (!current?.owner.equals(PYTH_RECEIVER_PROGRAM_ID) || current.data.length < MIN_PRICE_ACCOUNT_SIZE) {
+      // The bootstrap creates every configured feed account; without one there's no feed id to keep.
+      continue;
     }
     let usd = live[token.symbol];
-    let source: RefreshedPrice["source"] = "jupiter";
-    if (!usd) {
-      const previous = decodePriceUpdate(infos[i] as never);
-      if (previous && previous.usd > 0) {
-        usd = previous.usd;
-        source = "previous";
-      } else {
-        usd = REFERENCE_PRICE_USD[token.symbol];
-        source = "reference";
-      }
+    let source: RefreshedPrice["source"] = usd ? "jupiter" : "reference";
+    if (!usd) usd = REFERENCE_PRICE_USD[token.symbol];
+    let value = usd;
+    if (!asset.oracle.pythFactor.equals(PublicKey.default)) {
+      const factorSymbol = tokenByPyth.get(asset.oracle.pythFactor.toBase58());
+      const factorUsd = factorSymbol ? usdOf(factorSymbol) : undefined;
+      if (!factorUsd) continue; // can't express the rate without the factor's USD price
+      value = usd / factorUsd;
     }
-    const data = buildForkPriceAccountData(template.data, token.pythFeedId, usd, now);
+    if (!(value > 0)) {
+      const previous = decodePriceUpdate(current as never);
+      if (!previous) continue;
+      value = previous.usd;
+      source = "previous";
+    }
+    const feedIdHex = Buffer.from(current.data.subarray(PRICE_FEED_ID_OFFSET, PRICE_FEED_ID_OFFSET + 32)).toString("hex");
+    const data = buildForkPriceAccountData(current.data, feedIdHex, value, now);
     await callCheatcode("surfnet_setAccount", [
       address.toBase58(),
-      {
-        lamports: template.lamports,
-        data: data.toString("hex"),
-        owner: PYTH_RECEIVER_PROGRAM_ID.toBase58(),
-        executable: false,
-        rentEpoch: 0,
-      },
+      { lamports: current.lamports, data: data.toString("hex"), owner: PYTH_RECEIVER_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
     ]);
     results.push({ symbol: token.symbol, account: address.toBase58(), usd, source, publishTime: Number(now) });
   }

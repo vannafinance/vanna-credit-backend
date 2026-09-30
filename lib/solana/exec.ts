@@ -4,13 +4,13 @@
  *
  * Account list (`instructions/account_manager/exec.rs::MarginExecute`):
  *   authority, protocol_config, margin_account, integration ["integration", target], target_program,
- *   spent_asset, spent_mint, spent_vault, spent_price_update,
- *   received_asset, received_mint, received_vault (init_if_needed), received_price_update,
+ *   spent_asset, spent_mint, spent_vault,
+ *   received_asset, received_mint, received_vault (init_if_needed),
  *   spent_token_program, received_token_program, associated_token_program, system_program
  * remaining_accounts = the external instruction's accounts (`cpi_account_count` of them, in that
  * program's order, none a signer — the program signs as the margin PDA) followed by the health
  * scan, which EXCLUDES both the spent and the received collateral (the handler values those two
- * itself from the named vaults).
+ * itself from the named vaults), then the oracle accounts (see buildHealthRemainingAccounts).
  *
  * Program-side rules the UI must respect: the spent asset must already be ACTIVE collateral, the
  * received asset must be collateral-enabled, and the account must stay above HF 1.10.
@@ -81,9 +81,17 @@ export async function marginExecuteIx(
   if (!ctx.model.collateral.includes(p.spent.assetIndex)) {
     throw new Error("The asset to spend is not active collateral in your margin account");
   }
-  const health = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {
-    collateral: [p.spent.assetIndex, p.received.assetIndex],
-  });
+  // Priced = the plain (non-receipt) side(s): both legs of a swap, the underlying of a Kamino
+  // deposit / redeem. A receipt's klend reserve is already among the Kamino CPI accounts, where the
+  // program finds it by key (same as vanna-credit-layer/scripts/src/integrations-fork.ts).
+  const priced = [p.spent, p.received].filter((a) => a.priceSource !== "kaminoReceipt");
+  const health = buildHealthRemainingAccounts(
+    ctx.margin,
+    ctx.model,
+    ctx.assetMap,
+    { collateral: [p.spent.assetIndex, p.received.assetIndex] },
+    priced,
+  );
   const cpi = p.cpiAccounts.map((a) => ({ ...a, isSigner: false }));
   const ix = await getProgram()
     .methods.marginExecute(p.data, cpi.length, new BN(p.minReceived.toString()))
@@ -96,11 +104,9 @@ export async function marginExecuteIx(
       spentAsset: p.spent.address,
       spentMint: p.spent.mint,
       spentVault: marginVault(ctx.margin, p.spent.mint, p.spent.tokenProgram),
-      spentPriceUpdate: p.spent.priceUpdate,
       receivedAsset: p.received.address,
       receivedMint: p.received.mint,
       receivedVault: marginVault(ctx.margin, p.received.mint, p.received.tokenProgram),
-      receivedPriceUpdate: p.received.priceUpdate,
       spentTokenProgram: p.spent.tokenProgram,
       receivedTokenProgram: p.received.tokenProgram,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

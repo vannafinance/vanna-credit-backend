@@ -1,9 +1,6 @@
 import { Buffer } from "buffer";
-import type { AccountInfo, Connection } from "@solana/web3.js";
+import type { AccountInfo } from "@solana/web3.js";
 import { PYTH_RECEIVER_PROGRAM_ID } from "./config";
-import { priceFeedAccount } from "./pdas";
-import { TOKENS, type TokenInfo } from "./tokens";
-import { getMultipleAccountsChunked } from "./connection";
 
 /**
  * PriceUpdateV2 byte layout (Anchor account, owned by the Pyth receiver):
@@ -44,15 +41,4 @@ export function decodePriceUpdate(info: AccountInfo<Buffer> | null): OnchainPric
   const exponent = data.readInt32LE(EXPONENT_OFFSET);
   const publishTime = data.readBigInt64LE(PUBLISH_TIME_OFFSET);
   return { price, conf, exponent, publishTime, usd: Number(price) * 10 ** exponent };
-}
-
-/** The price-update account the program reads for a token (derived from its feed id). */
-export function priceAccountFor(token: TokenInfo) {
-  return priceFeedAccount(token.pythFeedId);
-}
-
-/** Reads every registry token's on-chain price in one getMultipleAccounts call. */
-export async function readOnchainPrices(connection: Connection): Promise<Record<string, OnchainPrice | null>> {
-  const infos = await getMultipleAccountsChunked(connection, TOKENS.map(priceAccountFor));
-  return Object.fromEntries(TOKENS.map((t, i) => [t.symbol, decodePriceUpdate(infos[i] as AccountInfo<Buffer> | null)]));
 }

@@ -13,4 +13,5 @@ export * from "./history";
 export * from "./price-refresh";
 export { getActiveSigner, setActiveSolanaWallet, onWalletUnlockPrompt, type TxSigner } from "./wallet-bridge";
 export { sendInstructions, keypairSigner } from "./tx";
-export { readOnchainPrices, type OnchainPrice } from "./pyth";
+export { type OnchainPrice } from "./pyth";
+export { readOnchainPrices } from "./prices";

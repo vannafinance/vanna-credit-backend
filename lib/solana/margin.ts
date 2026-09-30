@@ -46,7 +46,8 @@ import {
   type AssetConfigState,
   type PoolState,
 } from "./protocol-state";
-import { decodePriceUpdate, type OnchainPrice } from "./pyth";
+import { type OnchainPrice } from "./pyth";
+import { priceFromAccounts } from "./oracle";
 import { fetchWalletBalances, spendableLamports } from "./balances";
 import { findToken, getToken, TOKENS, tokenByMint, type TokenInfo } from "./tokens";
 import {
@@ -215,39 +216,39 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
   }
   const assetList = [...readAssets.values()];
 
+  // Per asset: [margin vault, debt position, reserve]. Prices come from each asset's own on-chain
+  // OracleConfig (Scope chain first, Pyth fallback), read from one deduplicated fetch of every
+  // oracle account involved — which also holds each Kamino receipt's klend reserve.
   const keys: PublicKey[] = [];
   for (const a of assetList) {
-    keys.push(
-      marginVault(margin, a.mint, a.tokenProgram),
-      debtPositionPda(margin, reservePda(a.mint)),
-      a.priceUpdate,
-      reservePda(a.mint),
-    );
+    keys.push(marginVault(margin, a.mint, a.tokenProgram), debtPositionPda(margin, reservePda(a.mint)), reservePda(a.mint));
   }
-  const infos = raw ? await getMultipleAccountsChunked(connection, keys) : await getMultipleAccountsChunked(connection, keys.filter((_, i) => i % 4 === 2));
+  const oracleKeys = [...new Map(assetList.flatMap((a) => a.oracleAccounts).map((k) => [k.toBase58(), k])).values()];
+  const [infos, oracleInfos] = await Promise.all([
+    raw ? getMultipleAccountsChunked(connection, keys) : Promise.resolve([] as (AccountInfo<Buffer> | null)[]),
+    getMultipleAccountsChunked(connection, oracleKeys),
+  ]);
+  const oracleMap = new Map(oracleKeys.map((k, i) => [k.toBase58(), oracleInfos[i] as AccountInfo<Buffer> | null]));
+  const priceOf = (a: AssetConfigState) => priceFromAccounts(a.oracle, oracleMap, now);
   if (!raw) {
-    empty.prices = Object.fromEntries(
-      assetList.map((a, i) => [tokenByMint(a.mint)?.symbol ?? a.mint.toBase58(), decodePriceUpdate(infos[i] as AccountInfo<Buffer> | null)]),
-    );
+    empty.prices = Object.fromEntries(assetList.map((a) => [tokenByMint(a.mint)?.symbol ?? a.mint.toBase58(), priceOf(a)]));
     return empty;
   }
 
   // Kamino receipt (cToken) collateral is priced like the program prices it: the reserve's
-  // exchange rate × the underlying's Pyth price (asset.priceUpdate is the underlying's feed).
-  const receiptAssets = assetList.filter((a) => a.priceSource !== "pyth");
-  const receiptInfos = receiptAssets.length
-    ? await getMultipleAccountsChunked(connection, receiptAssets.map((a) => a.priceSourceAccount))
-    : [];
+  // exchange rate × the underlying's price (a receipt's OracleConfig is its underlying's, plus the
+  // klend reserve).
   const receiptRates = new Map<number, ReserveRate>();
-  receiptAssets.forEach((a, i) => {
-    const info = receiptInfos[i] as AccountInfo<Buffer> | null;
-    if (!info) return;
+  for (const a of assetList) {
+    if (a.priceSource !== "kaminoReceipt") continue;
+    const info = oracleMap.get(a.priceSourceAccount.toBase58());
+    if (!info) continue;
     try {
       receiptRates.set(a.assetIndex, readReserveRate(info.data, a.mint));
     } catch {
       // Unexpected layout — leave it unvalued (the program would fail closed too).
     }
-  });
+  }
 
   const collateral: CollateralPosition[] = [];
   const debts: DebtPositionView[] = [];
@@ -260,12 +261,12 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
   assetList.forEach((asset, i) => {
     const token = tokenByMint(asset.mint) ?? null;
     const symbol = token?.symbol ?? receiptByMint(asset.mint)?.symbol ?? asset.mint.toBase58().slice(0, 6);
-    const vaultInfo = infos[i * 4] as AccountInfo<Buffer> | null;
-    const debtInfo = infos[i * 4 + 1] as AccountInfo<Buffer> | null;
-    const price = decodePriceUpdate(infos[i * 4 + 2] as AccountInfo<Buffer> | null);
-    const reserveInfo = infos[i * 4 + 3] as AccountInfo<Buffer> | null;
+    const vaultInfo = infos[i * 3] as AccountInfo<Buffer> | null;
+    const debtInfo = infos[i * 3 + 1] as AccountInfo<Buffer> | null;
+    const reserveInfo = infos[i * 3 + 2] as AccountInfo<Buffer> | null;
+    const price = priceOf(asset);
     prices[symbol] = price;
-    if (!price || now - price.publishTime > BigInt(asset.maxPriceAgeSecs)) stalePrices.push(symbol);
+    if (!price || !price.fresh) stalePrices.push(symbol);
 
     const vaultAmount = tokenAccountAmount(vaultInfo, asset.tokenProgram);
     const isActiveCol = activeCol.includes(asset.assetIndex);
@@ -275,7 +276,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
       // leaves the receipt at 0 USD rather than guessing.
       const rate = receiptRates.get(asset.assetIndex);
       const valueNano =
-        asset.priceSource === "pyth"
+        asset.priceSource !== "kaminoReceipt"
           ? valueOf(vaultAmount, price, asset.decimals, false)
           : rate
             ? valueOf(underlyingForReceipts(rate, vaultAmount), price, rate.liquidityDecimals, false)
@@ -286,7 +287,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
         token,
         assetIndex: asset.assetIndex,
         mint: asset.mint,
-        vault: keys[i * 4],
+        vault: keys[i * 3],
         amountRaw: vaultAmount,
         amount: rawToNumber(vaultAmount, asset.decimals),
         valueNano,
@@ -301,7 +302,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
       const shares = big(dp.borrowShares);
       const pool = token ? pools[token.symbol] : undefined;
       let reserveState = pool?.reserve ?? null;
-      if (!reserveState && reserveInfo) reserveState = decodeReserve(keys[i * 4 + 3], reserveInfo);
+      if (!reserveState && reserveInfo) reserveState = decodeReserve(keys[i * 3 + 2], reserveInfo);
       if (shares > 0n && reserveState) {
         const projected = projectReserve(reserveState, now);
         const debtRaw = debtSharesToAssetsUp(shares, projected.totalBorrowShares, projected.totalBorrowAssets);
@@ -312,7 +313,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
           token,
           assetIndex: asset.assetIndex,
           mint: asset.mint,
-          debtPosition: keys[i * 4 + 1],
+          debtPosition: keys[i * 3 + 1],
           borrowShares: shares,
           debtRaw,
           debt: rawToNumber(debtRaw, asset.decimals),
@@ -443,12 +444,15 @@ export class MarginIndexModel {
 const readonlyMeta = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false });
 
 /**
- * Builds the health-check `remaining_accounts` exactly as
- * `risk_engine.rs::scan_and_validate_positions` consumes them:
- *   - walk `collateral_asset_indexes` in SLOT order (skip 65535), skipping `excludeCollateral`:
- *     `[asset_config, margin_vault, price_update]` (+ `[price_source_account]` for non-Pyth assets)
- *   - then walk `debt_asset_indexes` in slot order, skipping `excludeDebt`:
- *     `[asset_config, reserve, debt_position, price_update]`
+ * Builds the health-check `remaining_accounts` exactly as `risk_engine.rs` consumes them (same
+ * layout as `vanna-credit-layer/scripts/src/devnet-positions.ts::buildRemainingAccounts`):
+ *   1. position groups, in the margin account's SLOT order (skip 65535), skipping the instruction's
+ *      own (`exclude`): collateral `[asset_config, margin_vault]`, then debt
+ *      `[asset_config, reserve, debt_position]`;
+ *   2. then the oracle accounts (Scope / Pyth / Pyth factor / a receipt's klend reserve, from each
+ *      asset's on-chain OracleConfig) of EVERY active position — excluded ones included — and of
+ *      `priced` (the instruction's own assets), each once. The program finds oracle accounts by key,
+ *      so their order doesn't matter, but a needed one that is missing is an error.
  * The margin vault is derived with the asset's OWN token program (never a hardcoded one).
  */
 export function buildHealthRemainingAccounts(
@@ -456,27 +460,34 @@ export function buildHealthRemainingAccounts(
   model: { collateral: number[]; debt: number[] },
   assetMap: Map<number, AssetConfigState>,
   exclude: { collateral?: number[]; debt?: number } = {},
+  priced: AssetConfigState[] = [],
 ): AccountMeta[] {
   const metas: AccountMeta[] = [];
+  const oracles: PublicKey[] = priced.flatMap((a) => a.oracleAccounts);
   const skipCol = new Set(exclude.collateral ?? []);
   for (const index of model.collateral) {
-    if (index === EMPTY_ASSET_INDEX || skipCol.has(index)) continue;
+    if (index === EMPTY_ASSET_INDEX) continue;
     const asset = assetMap.get(index);
     if (!asset) throw new Error(`Active collateral asset index ${index} has no AssetConfig on-chain`);
-    metas.push(readonlyMeta(asset.address), readonlyMeta(marginVault(margin, asset.mint, asset.tokenProgram)), readonlyMeta(asset.priceUpdate));
-    if (asset.priceSource !== "pyth") metas.push(readonlyMeta(asset.priceSourceAccount));
+    oracles.push(...asset.oracleAccounts);
+    if (skipCol.has(index)) continue;
+    metas.push(readonlyMeta(asset.address), readonlyMeta(marginVault(margin, asset.mint, asset.tokenProgram)));
   }
   for (const index of model.debt) {
-    if (index === EMPTY_ASSET_INDEX || index === exclude.debt) continue;
+    if (index === EMPTY_ASSET_INDEX) continue;
     const asset = assetMap.get(index);
     if (!asset) throw new Error(`Active debt asset index ${index} has no AssetConfig on-chain`);
+    oracles.push(...asset.oracleAccounts);
+    if (index === exclude.debt) continue;
     const reserve = reservePda(asset.mint);
-    metas.push(
-      readonlyMeta(asset.address),
-      readonlyMeta(reserve),
-      readonlyMeta(debtPositionPda(margin, reserve)),
-      readonlyMeta(asset.priceUpdate),
-    );
+    metas.push(readonlyMeta(asset.address), readonlyMeta(reserve), readonlyMeta(debtPositionPda(margin, reserve)));
+  }
+  const seen = new Set<string>();
+  for (const key of oracles) {
+    const id = key.toBase58();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    metas.push(readonlyMeta(key));
   }
   return metas;
 }
@@ -552,7 +563,6 @@ export async function borrowIx(
       assetConfig: asset.address,
       reserve,
       debtPosition: debtPositionPda(margin, reserve),
-      priceUpdate: asset.priceUpdate,
       mint: token.mint,
       reserveVault: reserveVault(token.mint, token.tokenProgram),
       marginVault: marginVault(margin, token.mint, token.tokenProgram),
@@ -620,11 +630,8 @@ export async function withdrawIx(
       marginAccount: margin,
       assetConfig: asset.address,
       mint: token.mint,
-      priceUpdate: asset.priceUpdate,
       destinationTokenAccount: destination,
       marginVault: marginVault(margin, token.mint, token.tokenProgram),
-      // Optional account: Anchor treats the program id as "None". Only non-Pyth assets need it.
-      priceSourceAccount: asset.priceSource === "pyth" ? getProgram().programId : asset.priceSourceAccount,
       tokenProgram: token.tokenProgram,
     } as any)
     .remainingAccounts(remaining)
@@ -798,10 +805,13 @@ export async function appendBorrows(ctx: BatchContext, borrows: AmountItem[]) {
     const expectedShares = assetsToDebtSharesUp(amount, pool.projected.totalBorrowShares, pool.projected.totalBorrowAssets);
     const maxShares = expectedShares + expectedShares / 200n + 1n;
     // Exclude the asset's own collateral AND debt: user_borrow values both itself.
-    const remaining = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {
-      collateral: [asset.assetIndex],
-      debt: asset.assetIndex,
-    });
+    const remaining = buildHealthRemainingAccounts(
+      ctx.margin,
+      ctx.model,
+      ctx.assetMap,
+      { collateral: [asset.assetIndex], debt: asset.assetIndex },
+      [asset],
+    );
     ctx.instructions.push(await borrowIx(ctx.owner, asset, token, amount, maxShares, remaining));
     ctx.model.borrow(asset.assetIndex, amount, asset.collateralEnabled);
   }
@@ -973,7 +983,7 @@ export async function withdrawCollateral(req: WithdrawRequest, opts: MarginServi
     ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(owner, destination, owner, token.mint, token.tokenProgram));
   }
   // Exclude this asset's collateral: user_withdraw_collateral values the projected vault itself.
-  const remaining = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, { collateral: [asset.assetIndex] });
+  const remaining = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, { collateral: [asset.assetIndex] }, [asset]);
   ctx.instructions.push(await withdrawIx(owner, asset, token, amount, req.minHealthFactorWad ?? 0n, destination, remaining));
   return { signature: await send(ctx, `Withdraw ${fromRaw(amount, token.decimals)} ${token.symbol}`, opts, signer) };
 }

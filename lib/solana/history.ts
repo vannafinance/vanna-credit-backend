@@ -191,7 +191,12 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
           push("repay", tokenOfReserve(field(e.data, "reserve", "reserve")), bigOf(field(e.data, "assets", "assets")));
           break;
         case "Liquidated":
-          push("liquidation", tokenOfReserve(field(e.data, "debt_reserve", "debtReserve")), bigOf(field(e.data, "debt_repaid", "debtRepaid")));
+          // Whole-account liquidation: every collateral is seized and every debt repaid in one
+          // instruction, so there is no single token/amount — record the pre-liquidation HF.
+          {
+            const w = bigOf(field(e.data, "health_factor_wad", "healthFactorWad"));
+            push("liquidation", undefined, 0n, { healthFactor: w > 10n ** 30n ? undefined : Number((w * 1000n) / 10n ** 18n) / 1000 });
+          }
           break;
         case "DebtPositionOpened":
           push("open-debt", tokenOfReserve(field(e.data, "reserve", "reserve")), 0n);

@@ -21,6 +21,8 @@ import { LIQUIDATION_HEALTH_FACTOR, VANNA_PROGRAM_ID } from "@/lib/solana/config
 import { TOKENS } from "@/lib/solana/tokens";
 import { WAD, wadToNumber } from "@/lib/solana/math";
 import { resolveToken } from "./earn-utils";
+import { PublicKey } from "@solana/web3.js";
+import { oracleSourceLabel } from "@/lib/solana/oracle";
 
 /**
  * Placeholder statistics descriptors (with em-dash values) exported for reuse
@@ -86,7 +88,16 @@ export const Details = () => {
     { heading: `${selectedAssetLabel} Reserve`, addr: reserve?.address.toBase58() ?? null, tooltip: `Reserve account holding the ${selectedAssetLabel} pool's accounting and rate curve` },
     { heading: "Liquidity Vault", addr: reserve?.liquidityVault.toBase58() ?? null, tooltip: "Token account holding the pool's idle liquidity" },
     { heading: "Asset Config", addr: asset?.address.toBase58() ?? null, tooltip: "Per-asset risk configuration (collateral / borrow flags, caps, oracle)" },
-    { heading: "Price Feed", addr: asset?.priceUpdate.toBase58() ?? null, tooltip: "Pyth price account the program reads for this asset" },
+    {
+      heading: "Scope Prices",
+      addr: asset && !asset.oracle.scopePrices.equals(PublicKey.default) ? asset.oracle.scopePrices.toBase58() : null,
+      tooltip: "Kamino Scope price account — the program's primary price source for this asset",
+    },
+    {
+      heading: "Pyth Fallback Feed",
+      addr: asset && !asset.oracle.pythPrice.equals(PublicKey.default) ? asset.oracle.pythPrice.toBase58() : null,
+      tooltip: "Pyth price account used while the Scope price is stale",
+    },
     { heading: `${selectedAssetLabel} Mint`, addr: token.mint.toBase58(), tooltip: token.isNative ? "Wrapped SOL mint (native SOL is wrapped/unwrapped automatically)" : `${selectedAssetLabel} token mint` },
     { heading: "Vanna Lending Program", addr: VANNA_PROGRAM_ID.toBase58(), tooltip: "The Vanna lending program" },
   ], [selectedAssetLabel, reserve, asset, token]);
@@ -126,7 +137,7 @@ export const Details = () => {
       {
         heading: "Oracle Price",
         mainInfo: oraclePrice > 0 ? `$${oraclePrice.toFixed(oraclePrice < 1 ? 4 : 2)}` : "—",
-        subInfo: asset ? `${asset.priceSource === "pyth" ? "Pyth" : asset.priceSource} · max age ${asset.maxPriceAgeSecs}s` : undefined,
+        subInfo: asset ? `${oracleSourceLabel(asset.oracle)} · max age ${asset.maxPriceAgeSecs}s` : undefined,
         tooltip: `Current oracle price of ${selectedAssetLabel}`,
       },
       {

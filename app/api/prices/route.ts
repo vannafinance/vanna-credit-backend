@@ -1,18 +1,15 @@
 import { forkUnixTimestamp, getConnection } from "@/lib/solana/connection";
-import { readOnchainPrices } from "@/lib/solana/pyth";
-import { priceFeedAccount } from "@/lib/solana/pdas";
+import { readOnchainPrices } from "@/lib/solana/prices";
 import { TOKENS } from "@/lib/solana/tokens";
 import { jsonResponse } from "@/lib/solana/server/json";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Asset price-account max age (every registered asset uses 3600s). */
-const MAX_PRICE_AGE_SECS = 3600;
-
 /**
- * GET /api/prices — USD prices read from the fork's on-chain Pyth PriceUpdateV2 accounts (the same
- * accounts the program values positions with), plus their age against the fork clock.
+ * GET /api/prices — USD prices exactly as the program reads them (each asset's on-chain
+ * OracleConfig: Kamino Scope first, Pyth fallback), with their source, age against the fork clock
+ * and freshness against the asset's own max age.
  */
 export async function GET() {
   try {
@@ -28,8 +25,8 @@ export async function GET() {
             usd: p?.usd ?? null,
             publishTime: p ? Number(p.publishTime) : null,
             ageSecs,
-            stale: ageSecs === null || ageSecs > MAX_PRICE_AGE_SECS,
-            account: priceFeedAccount(t.pythFeedId).toBase58(),
+            stale: !p || !p.fresh,
+            source: p?.source ?? null,
           },
         ];
       }),

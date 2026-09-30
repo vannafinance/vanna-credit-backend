@@ -2,8 +2,9 @@
 import { AccountLayout, MintLayout } from "@solana/spl-token";
 import { PublicKey, type AccountInfo, type Connection } from "@solana/web3.js";
 import { getConnection, forkUnixTimestamp, getMultipleAccountsChunked } from "./connection";
-import { accounts, big, getProgram } from "./program";
-import { assetConfigPda, feedIdToHex, priceFeedAccount, reservePda, shareMintPda } from "./pdas";
+import { big, getProgram } from "./program";
+import { assetConfigPda, reservePda, shareMintPda } from "./pdas";
+import { isReceiptOracle, normaliseOracle, oracleAccounts, type OracleConfigState } from "./oracle";
 import { TOKENS, type TokenInfo } from "./tokens";
 import { KAMINO_RECEIPTS } from "./kamino";
 import {
@@ -24,10 +25,12 @@ export interface AssetConfigState {
   mint: PublicKey;
   tokenProgram: PublicKey;
   reserve: PublicKey;
-  priceFeedIdHex: string;
-  /** PriceUpdateV2 account the program reads for this asset. */
-  priceUpdate: PublicKey;
+  /** How the program prices this asset (Scope chain, Pyth fallback, klend reserve for receipts). */
+  oracle: OracleConfigState;
+  /** Every account the program reads to price this asset (oracle accounts + a receipt's reserve). */
+  oracleAccounts: PublicKey[];
   maxCollateralPerMargin: bigint;
+  /** = oracle.maxAgeSecs: a price older than this (fork clock) is stale. */
   maxPriceAgeSecs: number;
   maxConfidenceBps: number;
   liquidationBonusBps: number;
@@ -35,8 +38,9 @@ export interface AssetConfigState {
   decimals: number;
   collateralEnabled: boolean;
   borrowEnabled: boolean;
-  /** "pyth" | "kaminoReceipt" */
+  /** "oracle" for a plain asset, "kaminoReceipt" for a Kamino cToken (derived from the oracle). */
   priceSource: string;
+  /** A receipt's klend reserve (PublicKey.default otherwise). */
   priceSourceAccount: PublicKey;
 }
 
@@ -79,24 +83,24 @@ export interface PoolState {
 const STATUS_LABELS = ["Active", "Supply only", "Repay only", "Frozen"];
 
 function normaliseAsset(address: PublicKey, a: any): AssetConfigState {
-  const priceFeedIdHex = feedIdToHex(a.priceFeedId);
+  const oracle = normaliseOracle(a.oracle);
   return {
     address,
     mint: a.mint,
     tokenProgram: a.tokenProgram,
     reserve: a.reserve,
-    priceFeedIdHex,
-    priceUpdate: priceFeedAccount(priceFeedIdHex),
+    oracle,
+    oracleAccounts: oracleAccounts(oracle),
     maxCollateralPerMargin: big(a.maxCollateralPerMargin),
-    maxPriceAgeSecs: Number(a.maxPriceAgeSecs),
-    maxConfidenceBps: Number(a.maxConfidenceBps),
+    maxPriceAgeSecs: oracle.maxAgeSecs,
+    maxConfidenceBps: oracle.maxConfidenceBps,
     liquidationBonusBps: Number(a.liquidationBonusBps),
     assetIndex: Number(a.assetIndex),
     decimals: Number(a.decimals),
     collateralEnabled: Boolean(a.collateralEnabled),
     borrowEnabled: Boolean(a.borrowEnabled),
-    priceSource: Object.keys(a.priceSource ?? { pyth: {} })[0] ?? "pyth",
-    priceSourceAccount: a.priceSourceAccount,
+    priceSource: isReceiptOracle(oracle) ? "kaminoReceipt" : "oracle",
+    priceSourceAccount: oracle.klendReserve,
   };
 }
 
