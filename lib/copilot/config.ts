@@ -104,7 +104,7 @@ export const copilotConfig = {
     return env("GOOGLE_CLOUD_LOCATION", "global");
   },
   get vertexModel(): string {
-    return env("VERTEX_MODEL", "gemini-3.7-flash");
+    return env("VERTEX_MODEL", "gemini-3.8-flash");
   },
 
   // ── Limits ─────────────────────────────────────────────────────────────────
