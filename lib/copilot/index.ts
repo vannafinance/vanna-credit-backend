@@ -11,6 +11,7 @@
 
 import { answerToText } from "./answer-schema";
 import { copilotConfig } from "./config";
+import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount } from "./explain";
 import type { AmountSpec, Intent, WriteIntent } from "./intent";
@@ -83,6 +84,7 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
       intent = routed.intent;
       source = routed.source;
       tokens += routed.tokens;
+      debugNote("route", { source: routed.source, lane: intent.lane, intent });
     }
 
     const res = await dispatch(intent, { ctx, user, message, history, surface, conversationId, source, signal, base });
@@ -96,6 +98,7 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
     console.error("[copilot] turn failed", { requestId, error: err instanceof Error ? err.message : String(err) });
     return { kind: "error", message: "Something went wrong on my side. Nothing was built or sent. Try again in a moment.", ...base };
   } finally {
+    debugNote("tokens", tokens);
     if (tokens > 0) await recordTokens(user, tokens).catch(() => undefined);
   }
 }
@@ -138,6 +141,7 @@ async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
         const worded = await wordAnswer({ question: t.message || "", answer, data: out.data, signal: t.signal });
         answer = worded.answer;
         tokens = worded.tokens;
+        debugNote("worded", { used: worded.used, tokens: worded.tokens });
       }
       return { response: { kind: out.ok ? "answer" : "unavailable", message: answerToText(answer), answer, ...base }, tokens };
     }

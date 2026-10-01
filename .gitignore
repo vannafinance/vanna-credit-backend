@@ -22,3 +22,6 @@ next-env.d.ts
 
 # Local encrypted Copilot stores (development only).
 /.local/
+
+# Copilot prompt-suite reports (generated)
+/scripts/copilot-prompts/reports/

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/copilot/auth";
 import { handleChat } from "@/lib/copilot";
+import { debugAllowed, withDebugTrace } from "@/lib/copilot/debug";
 import { guarded, readJson } from "@/lib/copilot/workflow/http";
 import type { ChatRequest } from "@/lib/copilot/types";
 
@@ -26,10 +27,14 @@ export async function POST(req: Request) {
           ? (body.clarify as ChatRequest["clarify"])
           : null,
     };
-    const res = await handleChat({ req: chat, user, requestId: req.headers.get("x-request-id") ?? undefined });
+    const input = { req: chat, user, requestId: req.headers.get("x-request-id") ?? undefined };
+    // Dev-only (NODE_ENV!=="production", COPILOT_DEBUG_FACTS=1, header x-copilot-debug: 1): return the MCP facts the turn used.
+    const traced = debugAllowed() && req.headers.get("x-copilot-debug") === "1";
+    const out = traced ? await withDebugTrace(() => handleChat(input)) : null;
+    const res = out ? out.value : await handleChat(input);
     const headers: Record<string, string> = {};
     if (res.limit?.retry_after_s) headers["Retry-After"] = String(res.limit.retry_after_s);
     const status = res.kind === "needs_login" ? 401 : res.limit ? 429 : 200;
-    return NextResponse.json(res, { status, headers });
+    return NextResponse.json(out ? { ...res, debug: out.trace } : res, { status, headers });
   });
 }

@@ -14,6 +14,7 @@
  */
 
 import { copilotConfig } from "./config";
+import { debugMcp } from "./debug";
 import type { CopilotUser, UnsignedTx } from "./types";
 
 // ── errors ──────────────────────────────────────────────────────────────────
@@ -357,7 +358,14 @@ export async function mcpCall(
   ctx: McpCtx = {},
 ): Promise<Record<string, unknown>> {
   const rpc = await rpcCall("tools/call", { name: tool, arguments: args }, tool, ctx);
-  return toolPayload(tool, rpc);
+  try {
+    const payload = toolPayload(tool, rpc);
+    debugMcp(tool, args, true, payload);
+    return payload;
+  } catch (e) {
+    debugMcp(tool, args, false, e instanceof MCPError ? { error: e.code, message: e.message } : String(e));
+    throw e;
+  }
 }
 
 /** Tool names the server exposes; used by the health probe. */

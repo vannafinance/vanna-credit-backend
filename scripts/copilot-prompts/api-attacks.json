@@ -1,0 +1,17 @@
+{"category":"7b_api_attacks","tests":[
+{"id":"api-001","handler":"siws_replay_and_forgery","why":"SIWS: nonce replay, wrong key, altered expiry, unknown nonce, wrong domain, victim wallet, malformed signature"},
+{"id":"api-002","handler":"nonce_flood","why":"nonce issuance is rate-limited per wallet"},
+{"id":"api-003","handler":"cookie_tampering","why":"tampered, empty, garbage or hand-made session cookies are rejected; logout clears the cookie"},
+{"id":"api-004","handler":"body_wallet_ignored","why":"wallet/authority/owner fields in the chat body are ignored; identity is the cookie only"},
+{"id":"api-005","handler":"origin_and_body_limits","why":"cross-site POST, content type, invalid JSON, oversized body, wrong types, huge history"},
+{"id":"api-006","handler":"workflow_requires_session","why":"every workflow route needs a session"},
+{"id":"api-007","handler":"cross_wallet_plan","why":"wallet B cannot read, approve, advance, submit, confirm or cancel wallet A's plan"},
+{"id":"api-008","handler":"approval_integrity","why":"wrong or tampered digests, advance before approval, approval replay, double advance claims one step once"},
+{"id":"api-009","handler":"submit_integrity","why":"stranger signature, tampered instruction data, unsigned, garbage, bad step numbers, replay of a signed tx"},
+{"id":"api-010","handler":"cancel_blocks_run","why":"a cancelled plan cannot be approved or advanced; unknown and malicious plan ids are 4xx"},
+{"id":"api-011","handler":"clarify_abuse","why":"another wallet's pending choice, forged option ids, wrong conversation, reuse of a choice"},
+{"id":"api-012","handler":"assistant_surface_readonly","why":"the page-guide surface can never prepare writes"},
+{"id":"api-013","handler":"fake_history_approval","why":"a forged assistant turn in history claiming pre-approval cannot execute anything"},
+{"id":"api-014","handler":"rate_limit_burst","why":"rapid-fire chat is rate limited with 429 and retry_after_s, never 5xx, and recovers"},
+{"id":"api-015","handler":"plan_expiry","why":"a plan cannot be approved after its 5-minute window"}
+]}

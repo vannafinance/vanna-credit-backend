@@ -1,0 +1,18 @@
+{"category":"2b_executed_writes","group":"exec","prompts":[
+{"id":"exec-001","prompt":"open a margin account","kinds":["preview"],"plan":{"steps":[{"op":"create_account"}],"exact":true},"execute":true,"why":"open account, real signature, confirmed on the fork"},
+{"id":"exec-002","prompt":"deposit 2 SOL as collateral","kinds":["preview","plan_preview"],"plan":{"steps":[{"op":"deposit","asset":"SOL","amount":"2"}]},"execute":true,"why":"deposit executes with exactly 2 SOL"},
+{"id":"exec-003","prompt":"what's my health factor","kinds":["answer"],"match":["no debt|infinite|∞"],"why":"after deposit: no debt"},
+{"id":"exec-004","prompt":"supply 50 USDC","kinds":["preview"],"plan":{"steps":[{"op":"earn_supply","asset":"USDC","amount":"50"}]},"execute":true,"why":"earn supply executes"},
+{"id":"exec-005","prompt":"how much have I supplied to earn","kinds":["answer"],"match":["50|49\\."],"why":"read matches the executed supply"},
+{"id":"exec-006","prompt":"redeem all my USDC from earn","kinds":["preview","blocked","error"],"execute":true,"why":"redeem all executes"},
+{"id":"exec-007","prompt":"borrow 30 USDC","kinds":["preview"],"plan":{"steps":[{"op":"borrow","asset":"USDC","amount":"30"}]},"execute":true,"why":"borrow executes exactly 30"},
+{"id":"exec-008","prompt":"what's my debt?","kinds":["answer"],"match":["30|29\\.9"],"why":"debt equals the borrow"},
+{"id":"exec-009","prompt":"repay 10 USDC from my margin balance","kinds":["preview","blocked","error"],"plan":{"steps":[{"op":"repay","asset":"USDC","amount":"10"}]},"execute":true,"why":"repay from margin"},
+{"id":"exec-010","prompt":"swap 0.1 SOL to USDC","kinds":["preview","error","unavailable"],"plan":{"steps":[{"op":"swap","asset":"SOL","to_asset":"USDC","amount":"0.1"}]},"execute":true,"why":"wallet swap executes"},
+{"id":"exec-011","prompt":"farm 0.1 SOL on kamino","kinds":["preview","plan_preview","blocked","error"],"plan":{"steps":[{"op":"farm_deposit","asset":"SOL","amount":"0.1"}]},"execute":true,"why":"Kamino deposit executes"},
+{"id":"exec-012","prompt":"redeem my kSOL","kinds":["preview","plan_preview","blocked","error"],"execute":true,"why":"Kamino redeem executes"},
+{"id":"exec-013","prompt":"withdraw 0.1 SOL from my margin account","kinds":["preview","blocked"],"plan":{"steps":[{"op":"withdraw","asset":"SOL","amount":"0.1"}]},"execute":true,"why":"collateral withdraw executes"},
+{"id":"exec-014","prompt":"deposit 0.5 SOL as collateral, borrow 10 USDC, then tell me my health factor","kinds":["plan_preview","blocked"],"plan":{"steps":[{"op":"deposit","asset":"SOL","amount":"0.5"},{"op":"borrow","asset":"USDC","amount":"10"}]},"execute":true,"why":"chain executes in order, then reports HF"},
+{"id":"exec-015","prompt":"lever 0.3 SOL 2x borrowing USDC","kinds":["plan_preview","clarification","blocked"],"execute":true,"why":"lever 2x executes and keeps HF above the floor"},
+{"id":"exec-016","prompt":"what's my health factor","kinds":["answer"],"why":"HF after the lever: must be at or above 1.15 (checked by the executor via the 1.10 line)"}
+]}
