@@ -47,6 +47,7 @@ export const mcpTiming = {
 const MAX_RETRY_AFTER_MS = 10_000;
 const MAX_RATE_LIMIT_RETRIES = 2;
 const MAX_GATEWAY_RETRIES = 1;
+const MAX_TIMEOUT_RETRIES = 1;
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const MAX_SESSIONS = 16;
 
@@ -293,8 +294,21 @@ function assertion(user: CopilotUser | undefined): string | null {
 async function withRetries(send: () => Promise<Response>): Promise<Response> {
   let rateRetries = 0;
   let gatewayRetries = 0;
+  let timeoutRetries = 0;
   for (;;) {
-    const res = await send();
+    let res: Response;
+    try {
+      res = await send();
+    } catch (e) {
+      // The hosted fork is sometimes slow or drops a connection. The MCP never signs or sends, so repeating
+      // a call is always safe; one retry turns most of these into a normal answer instead of "unavailable".
+      if (e instanceof MCPError && (e.code === "mcp_timeout" || e.code === "mcp_unreachable") && timeoutRetries < MAX_TIMEOUT_RETRIES) {
+        timeoutRetries++;
+        await mcpTiming.sleep(400);
+        continue;
+      }
+      throw e;
+    }
     if (res.status === 429 && rateRetries < MAX_RATE_LIMIT_RETRIES) {
       const seconds = Number(res.headers.get("retry-after"));
       const waitMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 500 * 2 ** rateRetries;

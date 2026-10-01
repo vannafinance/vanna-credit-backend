@@ -338,23 +338,59 @@ function routeRead(lower: string, f: ParsedClause): Intent {
 
 const REPORT_CLAUSE = /\b(?:tell\s+me|show\s+me|check|report|what(?:'s|\s+is)|give\s+me)\b.*\b(?:health|hf)\b/;
 
+/** A later step that works on the margin account makes a bare "deposit" in the same message mean margin collateral. */
+const MARGIN_FLOW = /\b(?:borrow|repay|lever|leverage|withdraw|collateral|margin)\b/;
+const VENUE_WORDS = /\b(?:collateral|margin|earn|pool|vault|lending|kamino|farm)\b/;
+/** "swap it", "deposit that", "the proceeds": the amount and asset of the step before. */
+const PRONOUN = /\b(?:it|that|them|those|the\s+(?:proceeds|borrowed(?:\s+\w+)?|funds|money|usdc|usdt|sol))\b/i;
+
+function fromPrevious(clause: string, prev: WriteIntent | null): string | null {
+  if (!prev || !prev.asset || !PRONOUN.test(clause)) return null;
+  if (!["borrow", "withdraw", "earn_redeem", "farm_redeem"].includes(prev.op)) return null;
+  if (!prev.amount || prev.amount.kind !== "exact") return null;
+  if (parseClauseFacts(clause).amount) return null; // the clause names its own amount
+  return clause.replace(PRONOUN, `${prev.amount.value} ${prev.asset}`);
+}
+
 /** Keyword route for a whole message, including "A then B" chains. */
 export function keywordRoute(message: string): Intent {
   const clauses = splitClauses(message);
   if (clauses.length <= 1) return routeClause(message);
 
+  const marginFlow = clauses.some((c) => MARGIN_FLOW.test(c.toLowerCase()));
   const steps: Array<{ write: WriteIntent } | { report: true }> = [];
+  // A step that needs a choice ("deposit where?") must not drop the rest of the plan when answered.
+  let pending: { index: number; question: string; options: AskOption[] } | null = null;
+  let prev: WriteIntent | null = null;
   for (const c of clauses) {
     const lower = c.toLowerCase();
     if (REPORT_CLAUSE.test(lower) && !/\b(?:deposit|withdraw|borrow|repay|supply|swap|farm|redeem|lend)\b/.test(lower)) {
       steps.push({ report: true });
       continue;
     }
-    const r = routeClause(c);
-    if (r.lane === "write") steps.push({ write: r.write });
-    else if (r.lane === "ask" || r.lane === "refuse") return r;
+    let text = c;
+    const carried = fromPrevious(c, prev);
+    if (carried) text = carried;
+    else if (marginFlow && /\bdeposit\b/.test(lower) && !VENUE_WORDS.test(lower)) text = `${c} as collateral`;
+    const r = routeClause(text);
+    if (r.lane === "write") {
+      steps.push({ write: r.write });
+      prev = r.write;
+    } else if (r.lane === "ask" && r.options?.length && pending === null && r.options.every((o) => o.apply.lane === "write")) {
+      pending = { index: steps.length, question: r.question, options: r.options };
+      steps.push({ report: true }); // placeholder, replaced by the chosen option below
+    } else if (r.lane === "ask" || r.lane === "refuse") return r;
     else if (r.lane === "lever") return ask("A leverage strategy has to be its own request. Ask for the leverage on its own and I'll size it.");
     else return ask(`I couldn't tell what you want for "${c.slice(0, 80)}". Say each step with its asset and amount.`);
+  }
+  if (pending) {
+    const at = pending.index;
+    const options: AskOption[] = pending.options.map((o) => {
+      const next = steps.slice();
+      next[at] = { write: (o.apply as Extract<Intent, { lane: "write" }>).write };
+      return { ...o, apply: { lane: "chain", steps: next } as Intent };
+    });
+    return ask(`${pending.question} (I'll then carry on with the rest of your steps.)`, options);
   }
   if (!steps.some((s) => "write" in s)) return routeClause(message);
   return { lane: "chain", steps };

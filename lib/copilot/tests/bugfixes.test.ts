@@ -108,3 +108,41 @@ describe("bug 4: rate questions are not borrow requests", () => {
     if (i.lane === "read") expect(i.read.kind).toBe("pool");
   });
 });
+
+describe("multi-step messages become one plan and never drop steps", () => {
+  const ops = (m: string) => {
+    const i = lane(m);
+    return i.lane === "chain" ? i.steps.map((s) => ("write" in s ? `${s.write.op}:${s.write.asset}` : "report")) : [i.lane];
+  };
+
+  it.each([
+    ["deposit 2 SOL then borrow 50 USDC", ["deposit:SOL", "borrow:USDC"]],
+    ["deposit 2 SOL and borrow 50 USDC", ["deposit:SOL", "borrow:USDC"]],
+    ["deposit 2 SOL, borrow 50 USDC", ["deposit:SOL", "borrow:USDC"]],
+    ["first deposit 2 SOL, after that borrow 50 USDC", ["deposit:SOL", "borrow:USDC"]],
+    ["1. deposit 2 SOL 2. borrow 50 USDC", ["deposit:SOL", "borrow:USDC"]],
+    ["deposit 1 SOL\nborrow 20 USDC\nsupply 20 USDC to earn", ["deposit:SOL", "borrow:USDC", "earn_supply:USDC"]],
+    ["deposit 2 SOL then borrow 50 USDC then tell me my HF", ["deposit:SOL", "borrow:USDC", "report"]],
+    ["deposit 2 SOL, borrow 50 USDC, then swap it to SOL", ["deposit:SOL", "borrow:USDC", "swap:USDC"]],
+    ["borrow 50 USDC, supply it to earn", ["borrow:USDC", "earn_supply:USDC"]],
+  ])("%s", (message, want) => {
+    expect(ops(message)).toEqual(want);
+  });
+
+  it("'swap it' uses the amount and asset of the step before", () => {
+    const i = lane("deposit 2 SOL, borrow 50 USDC, then swap it to SOL");
+    if (i.lane !== "chain") throw new Error("not a chain");
+    const swap = i.steps[2];
+    expect("write" in swap && swap.write.amount).toEqual({ kind: "exact", value: "50" });
+  });
+
+  it("a venue question keeps the rest of the plan when answered", () => {
+    const i = lane("deposit 10 USDC and withdraw 5 USDC");
+    expect(i.lane).toBe("ask");
+    if (i.lane !== "ask") return;
+    for (const o of i.options ?? []) {
+      expect(o.apply.lane).toBe("chain");
+      if (o.apply.lane === "chain") expect(o.apply.steps).toHaveLength(2);
+    }
+  });
+});

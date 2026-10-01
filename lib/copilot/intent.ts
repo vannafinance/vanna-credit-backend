@@ -449,11 +449,18 @@ export function parseMinHf(text: string): number | null {
 /** "then" / "and then" / ";" separate steps; " and <verb>" too. */
 export function splitClauses(text: string): string[] {
   const verbs = "deposit|withdraw|borrow|repay|supply|lend|redeem|swap|farm|open|close|create|lever|tell|show|check|report";
-  const parts = text
-    .split(/\s*(?:;|,?\s+and\s+then\s+|,?\s+then\s+|,?\s+after\s+that\s+|,?\s+afterwards\s+)\s*/i)
+  // Numbered or bulleted lists and new lines are steps ("1. deposit ... 2. borrow ..."); a list marker is only
+  // a marker when a step verb follows, so "deposit 2. 5 SOL" is left alone.
+  const listed = text
+    .replace(/\r?\n+/g, ";")
+    .replace(new RegExp(`(?:^|\\s)\\(?\\d{1,2}[.)]\\s+(?=(?:${verbs})\\b)`, "gi"), ";")
+    .replace(new RegExp(`(?:^|;)\\s*[-*\u2022]\\s+(?=(?:${verbs})\\b)`, "gi"), ";")
+    .replace(/^\s*(?:first(?:ly)?|to\s+start)\s*,?\s+/i, "");
+  const parts = listed
+    .split(/\s*(?:;|,?\s+and\s+then\s+|,?\s+then\s+|,?\s+after\s+that\s+|,?\s+afterwards\s+|,?\s+(?:next|finally|lastly)\s*,?\s+(?=(?:deposit|withdraw|borrow|repay|supply|lend|redeem|swap|farm|open|close|create|lever|tell|show|check|report)\b)|,?\s+followed\s+by\s+|,?\s+and\s+(?:next|finally|lastly)\s*,?\s+(?=(?:deposit|withdraw|borrow|repay|supply|lend|redeem|swap|farm|open|close|create|lever|tell|show|check|report)\b)|,?\s+(?:also|plus)\s*,?\s+(?=(?:deposit|withdraw|borrow|repay|supply|lend|redeem|swap|farm|open|close|create|lever)\b))\s*/i)
     .flatMap((p) => p.split(new RegExp(`\\s+and\\s+(?=(?:${verbs})\\b)`, "i")))
     .flatMap((p) => p.split(new RegExp(`,\\s*(?=(?:${verbs})\\b)`, "i")))
-    .map((p) => p.trim())
+    .map((p) => p.trim().replace(/^[,;.\s]+|[,;\s]+$/g, ""))
     .filter(Boolean);
   return parts;
 }

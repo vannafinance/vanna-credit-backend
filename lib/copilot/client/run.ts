@@ -9,7 +9,8 @@
  *  - A wallet rejection reports NOTHING to the server. The step stays awaiting its signature and the
  *    user decides: sign again, or cancel here (the plan then simply lapses on the server).
  *  - `uncertain` is never retried. `expired` is rebuilt only by an explicit `advance` the user asks for.
- *  - Each signature is an explicit click on the step card; there is no auto-sign path.
+ *  - No transaction is ever signed without the wallet's own prompt. After approval the wallet prompt for each
+ *    next step opens by itself; a rejected prompt stops the run until the user retries or cancels.
  */
 
 import type { PlanStepView, PlanView, StructuredAnswer, UnsignedTx } from "@/lib/copilot/types";
@@ -112,6 +113,11 @@ export function createRunController(opts: RunOptions): RunController {
   let current = opts.initial;
   let cancelled = false;
   let inFlight = false;
+  let staleRebuilds = 0;
+  const MAX_STALE_REBUILDS = 2;
+  let transientRetries = 0;
+  const MAX_TRANSIENT_RETRIES = 3;
+  const TRANSIENT_PAUSE = /could(?:n't| not) (?:reach|run the pre-checks)|timed out|aborted|price is (?:stale|unavailable)|try again in a minute|temporarily|unreachable/i;
 
   const set = (patch: Partial<RunState>) => {
     current = { ...current, ...patch };
@@ -148,9 +154,18 @@ export function createRunController(opts: RunOptions): RunController {
         return;
       }
       if (res.pause_reason) {
+        // A pause caused only by a slow or stale read (not by a safety rule like the health floor) is retried a
+        // few times by itself; the server re-checks everything on each advance, so nothing is skipped.
+        if (TRANSIENT_PAUSE.test(res.pause_reason) && transientRetries < MAX_TRANSIENT_RETRIES) {
+          transientRetries++;
+          set({ phase: "advancing", message: "Waiting for fresh data, trying again..." });
+          await sleep(3_000 * transientRetries);
+          continue;
+        }
         set({ phase: "paused", message: res.pause_reason });
         return;
       }
+      transientRetries = 0;
       const terminal = phaseFromPlan(res.plan);
       if (terminal === "completed" || terminal === "failed" || terminal === "cancelled" || terminal === "expired") {
         set({ phase: terminal, message: res.message ?? null });
@@ -199,6 +214,66 @@ export function createRunController(opts: RunOptions): RunController {
     return "stopped";
   }
 
+  /**
+   * Sign, send and confirm the pending step. True only when the step settled on chain and the plan was
+   * advanced; every other outcome (rejection, failure, pause, expiry) returns false and waits for the user.
+   */
+  async function signStep(): Promise<boolean> {
+    const pending = current.pending;
+    if (!pending) return false;
+    set({ phase: "signing", message: null, rejected: false });
+    let signed: string;
+    try {
+      signed = await signUnsignedTx(pending.tx.transaction, opts.signTransaction);
+    } catch (error) {
+      if (error instanceof WalletRejectedError) {
+        // Nothing is reported to the server; the same transaction can be signed again.
+        set({ phase: "awaiting_signature", rejected: true, message: error.message });
+        return false;
+      }
+      set({ phase: "awaiting_signature", rejected: true, message: describe(error) });
+      return false;
+    }
+    set({ phase: "submitting" });
+    try {
+      const res = await submitStep(current.workflowId, { step_n: pending.step.n, signed_tx: signed });
+      setPlan(res.plan);
+      if (res.status === "failed" || res.status === "expired") {
+        set({ phase: res.status === "failed" ? "failed" : "paused", pending: null, message: res.message ?? "The server did not send the transaction." });
+        return false;
+      }
+    } catch (error) {
+      // 410 on submit means the transaction's blockhash lapsed BEFORE it was sent (the server refuses an expired
+      // one), so nothing went out and a fresh build is safe. Do that for the user, a couple of times at most.
+      if (error instanceof CopilotApiError && error.status === 410 && /transaction expired/i.test(error.message) && staleRebuilds < MAX_STALE_REBUILDS) {
+        staleRebuilds++;
+        set({ pending: null, message: "That transaction expired before it was signed. Building a fresh one." });
+        await advanceLoop();
+        return true;
+      }
+      // The signed bytes may or may not have been sent: never resend from here.
+      set({ phase: "paused", pending: null, message: `${describe(error)} Check the step before continuing.` });
+      return false;
+    }
+    set({ pending: null });
+    const outcome = await confirmLoop(pending.step.n);
+    if (outcome !== "settled") return false;
+    await advanceLoop();
+    return true;
+  }
+
+  /**
+   * A plan is one request, so once it is approved it keeps going: whenever the next transaction is ready,
+   * the wallet is asked to sign it straight away (one wallet prompt per step, no extra click). It stops, and
+   * waits for the user, on a wallet rejection, a pause, a failure, an expiry or an unclear outcome.
+   */
+  async function driveOn(): Promise<void> {
+    while (!cancelled && current.phase === "awaiting_signature" && current.pending && !current.rejected) {
+      const progressed = await signStep();
+      if (!progressed) return;
+    }
+  }
+
   return {
     state: () => current,
 
@@ -213,43 +288,20 @@ export function createRunController(opts: RunOptions): RunController {
           return;
         }
         await advanceLoop();
+        await driveOn();
       }),
 
-    advance: () => exclusive(advanceLoop),
+    advance: () =>
+      exclusive(async () => {
+        await advanceLoop();
+        await driveOn();
+      }),
 
+    // The user clicked Sign (first time, or again after declining in the wallet).
     sign: () =>
       exclusive(async () => {
-        const pending = current.pending;
-        if (!pending) return;
-        set({ phase: "signing", message: null, rejected: false });
-        let signed: string;
-        try {
-          signed = await signUnsignedTx(pending.tx.transaction, opts.signTransaction);
-        } catch (error) {
-          if (error instanceof WalletRejectedError) {
-            // Nothing is reported to the server; the same transaction can be signed again.
-            set({ phase: "awaiting_signature", rejected: true, message: error.message });
-            return;
-          }
-          set({ phase: "awaiting_signature", message: describe(error) });
-          return;
-        }
-        set({ phase: "submitting" });
-        try {
-          const res = await submitStep(current.workflowId, { step_n: pending.step.n, signed_tx: signed });
-          setPlan(res.plan);
-          if (res.status === "failed" || res.status === "expired") {
-            set({ phase: res.status === "failed" ? "failed" : "paused", pending: null, message: res.message ?? "The server did not send the transaction." });
-            return;
-          }
-        } catch (error) {
-          // The signed bytes may or may not have been sent: never resend from here.
-          set({ phase: "paused", pending: null, message: `${describe(error)} Check the step before continuing.` });
-          return;
-        }
-        set({ pending: null });
-        const outcome = await confirmLoop(pending.step.n);
-        if (outcome === "settled") await advanceLoop();
+        const progressed = await signStep();
+        if (progressed) await driveOn();
       }),
 
     recheck: () =>
@@ -257,7 +309,10 @@ export function createRunController(opts: RunOptions): RunController {
         const step = current.plan.steps.find((s) => s.status === "submitted");
         if (!step) return;
         const outcome = await confirmLoop(step.n);
-        if (outcome === "settled") await advanceLoop();
+        if (outcome === "settled") {
+          await advanceLoop();
+          await driveOn();
+        }
       }),
 
     cancel: () => {
