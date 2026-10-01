@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { copilotConfig } from "@/lib/copilot/config";
 import { mcpListTools } from "@/lib/copilot/mcp-client";
+import { vertexPing } from "@/lib/copilot/vertex";
 import type { BrainHealth } from "@/lib/copilot/types";
 
 export const runtime = "nodejs";
@@ -15,18 +16,8 @@ function llmAuth(): BrainHealth["llm"]["auth"] {
 }
 
 async function pingVertex(): Promise<boolean> {
-  const { GoogleGenAI } = await import("@google/genai");
-  const client = new GoogleGenAI({
-    vertexai: true,
-    project: copilotConfig.googleCloudProject,
-    location: copilotConfig.googleCloudLocation,
-  });
-  const res = await client.models.generateContent({
-    model: copilotConfig.vertexModel,
-    contents: "Reply with the single word: ok",
-    config: { maxOutputTokens: 8 },
-  });
-  return typeof res.text === "string";
+  // Same client and settings the Copilot answers with, so the probe cannot pass or fail differently.
+  return (await vertexPing()).ok;
 }
 
 /** GET /api/copilot/health; `?probe=1` also pings Vertex and lists MCP tools. No secrets are returned. */

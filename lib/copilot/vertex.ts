@@ -13,7 +13,7 @@
  * production, `gcloud auth application-default login` locally). Tests inject a fake `LlmClient`.
  */
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { copilotConfig } from "./config";
 import type { StructuredAnswer } from "./answer-schema";
 import { DOMAIN_FIREWALL_SYSTEM } from "./domain-firewall";
@@ -96,6 +96,9 @@ class VertexClient implements LlmClient {
         systemInstruction: req.system,
         temperature: 0,
         maxOutputTokens: req.maxOutputTokens ?? 512,
+        // Gemini 3.x bills thinking tokens against maxOutputTokens; unbounded thinking can leave no room for the
+        // answer (empty text). Routing and wording need little reasoning.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         ...(req.tools?.length
           ? {
               tools: [{ functionDeclarations: req.tools as never }],
@@ -134,7 +137,7 @@ export function llmConfigured(): boolean {
 export async function vertexPing(): Promise<{ ok: boolean; model: string; error?: string }> {
   const model = copilotConfig.vertexModel;
   try {
-    const r = await getLlm().generate({ system: "Reply with the single word ok.", user: "ping", maxOutputTokens: 8 });
+    const r = await getLlm().generate({ system: "Reply with the single word ok.", user: "ping", maxOutputTokens: 64 });
     return { ok: !!r.text, model };
   } catch (e) {
     return { ok: false, model, error: e instanceof Error ? e.message : String(e) };
