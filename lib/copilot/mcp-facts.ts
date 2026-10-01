@@ -17,6 +17,8 @@ import { LEND_BORROW_ASSETS, type Asset, type ConceptTopic, type ReadIntent } fr
 import { mcp, MCPError, type McpCtx } from "./mcp-client";
 import {
   floorDecimals,
+  hfAfter,
+  LIQUIDATION_HF,
   maxBorrowUsd,
   maxWithdrawUsd,
   num,
@@ -197,6 +199,8 @@ export async function runRead(intent: ReadIntent, ctx: ReadCtx): Promise<ReadOut
       return readFarmPositions(ctx);
     case "capacity":
       return readCapacity(intent.what, intent.asset, ctx);
+    case "whatif":
+      return readWhatIf(intent, ctx);
     case "liquidation_risk":
       return readLiquidation(ctx);
     case "history":
@@ -567,6 +571,110 @@ async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ct
       venue: "margin",
     },
   };
+}
+
+/**
+ * "Can I borrow 500 USDC?", "what will my HF be if I withdraw 1 SOL?", "how much to repay to reach HF 2?".
+ * Borrow and withdraw go through the MCP's own can_borrow / can_withdraw (the program's rules); repay and
+ * the target-HF cases are arithmetic on the MCP's collateral and debt figures and are labelled as such.
+ */
+async function readWhatIf(intent: Extract<ReadIntent, { kind: "whatif" }>, ctx: ReadCtx): Promise<ReadOutcome> {
+  const { op, asset, amount, target_hf: target } = intent;
+  const floor = copilotConfig.minHealthFactor;
+  const h = await loadHealth(ctx);
+  const subject = op === "borrow" ? "borrowing" : op === "withdraw" ? "withdrawing" : "repaying";
+  if (h.kind === "no_account") return noMargin(subject);
+  if (h.kind !== "ok") return unavailable(h.kind === "unavailable" ? h.error : new Error("incomplete account data"), "your account");
+  const { collateralUsd: c, debtUsd: d } = h.health;
+  const price = asset ? await loadPrice(asset, ctx) : null;
+  if (!asset || !price || price.stale) return { ok: true, fixedWording: true, data: {}, answer: { headline: `The ${asset ?? "asset"} price is unavailable or stale right now, so I can't work that out.`, facts: [], venue: "margin" } };
+  const verdict = (hf: number | null): { tone: "good" | "warn" | "bad"; text: string } =>
+    hf === null ? { tone: "good", text: "no debt, so no liquidation risk" } : hf < LIQUIDATION_HF ? { tone: "bad", text: "below the 1.10 liquidation line" } : hf < floor ? { tone: "warn", text: `above liquidation but under the ${floor.toFixed(2)} safety floor` } : { tone: "good", text: `at or above the ${floor.toFixed(2)} safety floor` };
+
+  // Solve for an amount that reaches a target health factor.
+  if (amount === null && target !== null) {
+    if (op === "repay") {
+      const needUsd = d - c / target;
+      if (d === 0) return { ok: true, fixedWording: true, data: { health: h.raw }, answer: { headline: "You have no debt, so there is nothing to repay.", facts: [], venue: "margin" } };
+      if (needUsd <= 0) return { ok: true, fixedWording: true, data: { health: h.raw }, answer: { headline: `Your health factor is already ${fmtHf(hfAfter(c, d))}, above ${target}.`, facts: [fact("health factor", fmtHf(hfAfter(c, d)), "good")], venue: "margin" } };
+      const units = floorDecimals(needUsd / price.usd + 10 ** -tokenDecimals(asset), tokenDecimals(asset));
+      return {
+        ok: true,
+        data: { health: h.raw, target },
+        answer: {
+          headline: `To bring your health factor above ${target}, repay about ${fmtAmount(units, asset)} (${fmtUsd(needUsd)}).`,
+          facts: [fact("current health factor", fmtHf(hfAfter(c, d))), fact("debt now", fmtUsd(d)), fact("collateral", fmtUsd(c)), fact(`repay needed (${asset})`, fmtAmount(units, asset))],
+          note: "Calculated from your current collateral and debt value and the health factor definition (collateral / debt). It is not a transaction.",
+          venue: "margin",
+        },
+      };
+    }
+    if (op === "borrow") {
+      const maxUsd = maxBorrowUsd(c, d, target, true);
+      if (!(maxUsd > 0)) return { ok: true, fixedWording: true, data: { health: h.raw }, answer: { headline: `You can't borrow any ${asset} and stay at a ${target} health factor or above right now.`, facts: [fact("current health factor", fmtHf(hfAfter(c, d)))], venue: "margin" } };
+      const units = floorDecimals(maxUsd / price.usd, tokenDecimals(asset));
+      let checked = "";
+      try {
+        const can = readCan(await mcp.canBorrow({ authority: ctx.user.wallet, asset, amount: units }, ctx));
+        if (can && typeof can.projectedHf === "number") checked = ` The program's own check projects a health factor of ${can.projectedHf.toFixed(2)}.`;
+      } catch {
+        /* the arithmetic answer stands on its own */
+      }
+      return {
+        ok: true,
+        data: { health: h.raw, target },
+        answer: {
+          headline: `You can borrow about ${fmtAmount(units, asset)} (${fmtUsd(maxUsd)}) and keep your health factor at ${target} or above.`,
+          facts: [fact("health factor target", String(target)), fact("collateral", fmtUsd(c)), fact("debt now", fmtUsd(d))],
+          note: `Calculated from your current collateral and debt value.${checked}`,
+          venue: "margin",
+        },
+      };
+    }
+    return { ok: true, fixedWording: true, data: {}, answer: { headline: "Give me an amount to withdraw and I will check what your health factor would be.", facts: [], venue: "margin" } };
+  }
+
+  // A specific amount.
+  const amt = amount as string;
+  const usd = Number(amt) * price.usd;
+  if (op === "repay") {
+    const after = hfAfter(c, Math.max(d - usd, 0));
+    const v = verdict(after);
+    return {
+      ok: true,
+      data: { health: h.raw },
+      answer: {
+        headline: `If you repay ${fmtAmount(amt, asset)} (${fmtUsd(usd)}), your health factor would be about ${fmtHf(after)}.`,
+        facts: [fact("health factor now", fmtHf(hfAfter(c, d))), fact("health factor after", fmtHf(after), v.tone), fact("debt after", fmtUsd(Math.max(d - usd, 0)))],
+        note: "Calculated from your current collateral and debt value; it is not a transaction.",
+        venue: "margin",
+      },
+    };
+  }
+  try {
+    const can = readCan(await (op === "borrow" ? mcp.canBorrow({ authority: ctx.user.wallet, asset, amount: amt }, ctx) : mcp.canWithdraw({ authority: ctx.user.wallet, asset, amount: amt }, ctx)));
+    if (!can) return unavailable(new Error("unreadable check result"), "that check");
+    const hf = typeof can.projectedHf === "number" ? can.projectedHf : null;
+    const v = verdict(hf);
+    const ok = can.allowed && (hf === null || hf >= floor);
+    const head = ok
+      ? `Yes. ${op === "borrow" ? "Borrowing" : "Withdrawing"} ${fmtAmount(amt, asset)} (${fmtUsd(usd)}) would leave your health factor at ${fmtHf(hf)}, ${v.text}.`
+      : can.allowed
+        ? `${op === "borrow" ? "Borrowing" : "Withdrawing"} ${fmtAmount(amt, asset)} is allowed by the protocol but not advisable: your health factor would be ${fmtHf(hf)}, ${v.text}.`
+        : `No. ${can.reason ?? "The protocol would not allow that."}`;
+    return {
+      ok: true,
+      data: { health: h.raw, check: can },
+      answer: {
+        headline: head,
+        facts: [fact("health factor now", fmtHf(hfAfter(c, d))), fact("health factor after", fmtHf(hf), v.tone), fact("liquidation at", "1.10")],
+        note: "Checked with the protocol's own rules; this is a question, nothing was prepared. Say the action to prepare it for your approval.",
+        venue: "margin",
+      },
+    };
+  } catch (err) {
+    return unavailable(err, "that check");
+  }
 }
 
 async function readLiquidation(ctx: ReadCtx): Promise<ReadOutcome> {

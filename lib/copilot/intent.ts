@@ -66,25 +66,80 @@ export type AmountSpec =
   | { kind: "pct"; pct: number };
 
 const MAX_AMOUNT = 1e12;
+/** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
+const MAX_FRACTION_DIGITS = 12;
+
+/** Why a typed amount could not be used. `invalid`: refuse; `ambiguous`: ask, because more than one reading is plausible. */
+export interface AmountIssue {
+  kind: "invalid" | "ambiguous";
+  message: string;
+}
+
+/** Decimals of the on-chain token (program registry: SOL/JitoSOL/JupSOL 9, USDC/USDT 6). */
+export function assetDecimals(symbol: string): number {
+  return symbol === "USDC" || symbol === "USDT" ? 6 : 9;
+}
+
+/** Exact decimal string for (intPart.fracPart) x 10^exp, no float involved. */
+function shiftDecimal(intPart: string, fracPart: string, exp: number): string {
+  const all = intPart + fracPart;
+  const digits = all.replace(/^0+/, "");
+  if (digits === "") return "0";
+  const lead = all.length - digits.length;
+  const point = intPart.length + exp - lead;
+  let out: string;
+  if (point <= 0) out = "0." + "0".repeat(-point) + digits;
+  else if (point >= digits.length) out = digits + "0".repeat(point - digits.length);
+  else out = digits.slice(0, point) + "." + digits.slice(point);
+  if (out.includes(".")) out = out.replace(/0+$/, "").replace(/\.$/, "");
+  return out;
+}
+
+/**
+ * One typed number -> an exact positive decimal string, or the reason it cannot be used. Never
+ * guesses: a lone comma ("1,5"), European grouping ("1.000,5"), a sign, zero, NaN/Infinity, a size
+ * beyond the product's ceiling or more precision than any token has are all reported, not reinterpreted.
+ * Scientific notation ("1e-3") is read exactly, in text only (`allowExponent`).
+ */
+export function parseAmountToken(raw: string, opts: { allowExponent?: boolean } = {}): { ok: true; value: string } | { ok: false; issue: AmountIssue } {
+  const bad = (message: string, kind: AmountIssue["kind"] = "invalid"): { ok: false; issue: AmountIssue } => ({ ok: false, issue: { kind, message } });
+  const shown = raw.trim();
+  let t = shown.toLowerCase();
+  if (/^[-−–]/.test(t)) return bad(`Amounts have to be positive. I won't read "${shown}" as a positive number; tell me the amount without the minus sign if that is what you mean.`);
+  t = t.replace(/^\+/, "");
+  if (/^(?:nan|\w*infinity|inf)$/.test(t)) return bad(`"${shown}" is not a number, so I can't use it as an amount.`);
+  let exp = 0;
+  if (t.endsWith("k")) {
+    exp += 3;
+    t = t.slice(0, -1);
+  }
+  const sci = t.match(/^([\d.,]+)e([-+]?\d+)$/);
+  if (sci) {
+    if (!opts.allowExponent) return bad(`"${shown}" uses scientific notation. Write the amount as a plain decimal.`);
+    const e = Number(sci[2]);
+    if (!Number.isFinite(e) || Math.abs(e) > 40) return bad(`"${shown}" is far outside any amount this product handles, so I won't use it.`);
+    exp += e;
+    t = sci[1];
+  }
+  let mantissa: string;
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) mantissa = t.replace(/,/g, "");
+  else if (/^(\d+(\.\d+)?|\.\d+)$/.test(t)) mantissa = t;
+  else if (/[.,]/.test(t) && /^[\d.,]+$/.test(t)) {
+    return bad(`I can't tell how to read "${shown}": the comma and dot could mean thousands or decimals depending on region. Write it plainly, like 1000.5.`, "ambiguous");
+  } else return bad(`"${shown}" is not a valid amount.`);
+  const [i, f = ""] = mantissa.split(".");
+  const value = shiftDecimal(i, f, exp);
+  if (value === "0") return bad(`The amount has to be above zero ("${shown}" is zero).`);
+  if (!(Number(value) <= MAX_AMOUNT)) return bad(`"${shown}" is larger than any amount I will prepare. Use a realistic amount.`);
+  const frac = value.split(".")[1] ?? "";
+  if (frac.length > MAX_FRACTION_DIGITS) return bad(`"${shown}" has more decimal places than any token supports.`);
+  return { ok: true, value };
+}
 
 /** "1,000.50" / "2k" / ".5" -> "1000.5" / "2000" / "0.5"; null when not a usable positive amount. */
 export function parseDecimalString(raw: string): string | null {
-  let s = raw.trim().toLowerCase().replace(/,/g, "");
-  let mult = 1;
-  if (s.endsWith("k")) {
-    mult = 1000;
-    s = s.slice(0, -1);
-  }
-  if (!/^(\d+(\.\d+)?|\.\d+)$/.test(s)) return null;
-  const n = Number(s) * mult;
-  if (!Number.isFinite(n) || n <= 0 || n > MAX_AMOUNT) return null;
-  if (mult === 1) {
-    const [i, f = ""] = s.split(".");
-    if (f.length > 12) return null;
-    const out = `${i.replace(/^0+(?=\d)/, "") || "0"}${f.replace(/0+$/, "") ? "." + f.replace(/0+$/, "") : ""}`;
-    return out;
-  }
-  return String(n);
+  const r = parseAmountToken(raw);
+  return r.ok ? r.value : null;
 }
 
 // ── Intent types ─────────────────────────────────────────────────────────────
@@ -124,6 +179,8 @@ export type ReadIntent =
   | { kind: "farm_markets" }
   | { kind: "farm_positions" }
   | { kind: "capacity"; what: "borrow" | "withdraw"; asset: Asset | null }
+  /** "can I borrow 500 USDC?", "what will my HF be if I withdraw 1 SOL?", "how much to repay to reach HF 2?" - answered from MCP data, never a write. */
+  | { kind: "whatif"; op: "borrow" | "withdraw" | "repay"; asset: Asset | null; amount: string | null; target_hf: number | null }
   | { kind: "liquidation_risk" }
   | { kind: "history" }
   | { kind: "protocol" }
@@ -183,6 +240,15 @@ export function unofferedMessage(asset: string): string {
   return `${asset} is not part of the Vanna Copilot product. I work with SOL, USDC and USDT (lend and borrow), plus JitoSOL and JupSOL (collateral, swap and Kamino farm).`;
 }
 
+/** Null when `amount` fits the token's decimals; otherwise the refusal. Rounding a user's amount would silently change it. */
+export function decimalsProblem(amount: string, asset: string | null): string | null {
+  if (!asset) return null;
+  const dp = assetDecimals(asset);
+  const frac = amount.split(".")[1] ?? "";
+  if (frac.length > dp) return `${asset} has ${dp} decimal places, and ${amount} has ${frac.length}. I won't round your amount; give it with at most ${dp} decimals.`;
+  return null;
+}
+
 export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
   const rule = OP_ASSETS[w.op];
   if (rule === undefined) return fail("That action is not supported.");
@@ -201,7 +267,11 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
     if (w.to_asset === w.asset) return fail("Pick two different assets to swap.");
   }
   if (w.amount) {
-    if (w.amount.kind === "exact" && parseDecimalString(w.amount.value) === null) return fail("That amount is not valid.");
+    if (w.amount.kind === "exact") {
+      if (parseDecimalString(w.amount.value) === null) return fail("That amount is not valid.");
+      const tooFine = decimalsProblem(w.amount.value, w.asset);
+      if (tooFine) return fail(tooFine);
+    }
     if (w.amount.kind === "pct" && !(w.amount.pct > 0 && w.amount.pct <= 100)) return fail("Percentages must be between 0 and 100.");
   }
   return { ok: true, value: w };
@@ -213,7 +283,11 @@ export function validateLever(l: LeverIntent): GuardResult<LeverIntent> {
   if (l.leverage > 10) return fail("I won't size above 10x; at this protocol's health rules it could never hold the 1.15 floor.");
   if (l.borrow_asset && l.borrow_asset !== "USDC" && l.borrow_asset !== "USDT") return fail("I fund leverage by borrowing USDC or USDT.");
   if (l.borrow_asset && l.borrow_asset === (l.asset as string)) return fail("Borrowing the same asset you are levering adds no exposure.");
-  if (l.amount !== null && parseDecimalString(l.amount) === null) return fail("That amount is not valid.");
+  if (l.amount !== null) {
+    if (parseDecimalString(l.amount) === null) return fail("That amount is not valid.");
+    const tooFine = decimalsProblem(l.amount, l.asset);
+    if (tooFine) return fail(tooFine);
+  }
   return { ok: true, value: l };
 }
 
@@ -223,6 +297,19 @@ export function validateRead(r: ReadIntent): GuardResult<ReadIntent> {
   if (r.kind === "quote") {
     if (r.from === r.to) return fail("Pick two different assets to quote.");
     if (parseDecimalString(r.amount) === null) return fail("That amount is not valid.");
+    const tooFine = decimalsProblem(r.amount, r.from);
+    if (tooFine) return fail(tooFine);
+  }
+  if (r.kind === "whatif") {
+    if (!r.asset) return fail("Which asset do you mean?");
+    if (r.op === "borrow" && !isLendBorrow(r.asset)) return fail(unofferedMessage(r.asset));
+    if (r.amount !== null) {
+      if (parseDecimalString(r.amount) === null) return fail("That amount is not valid.");
+      const tooFine = decimalsProblem(r.amount, r.asset);
+      if (tooFine) return fail(tooFine);
+    }
+    if (r.target_hf !== null && !(r.target_hf > 1.1 && r.target_hf <= 100)) return fail("A health factor target has to be above the 1.10 liquidation line.");
+    if (r.amount === null && r.target_hf === null) return fail("Give me an amount or a health factor target.");
   }
   if (r.kind === "capacity" && r.asset) {
     if (r.what === "borrow" && !isLendBorrow(r.asset)) return fail(unofferedMessage(r.asset));
@@ -232,8 +319,6 @@ export function validateRead(r: ReadIntent): GuardResult<ReadIntent> {
 
 // ── Text parsing helpers (used by the keyword router) ───────────────────────
 
-const AMOUNT_RE = /(\d[\d,]*(?:\.\d+)?k?|\.\d+)/i;
-
 export interface ParsedClause {
   assets: Asset[];
   /** Words that looked like a token but are not in the product (for a precise refusal). */
@@ -242,6 +327,8 @@ export interface ParsedClause {
   amount: AmountSpec | null;
   /** The first number that is NOT a leverage multiple. */
   leverage: number | null;
+  /** Set when a typed number could not be used as written (negative, zero, NaN, huge, locale, conflicting). */
+  amountIssue: AmountIssue | null;
 }
 
 /** Every asset word in order of appearance, plus any token-like word that is not one. */
@@ -284,20 +371,64 @@ export function tokenAfterAmount(text: string): string | null {
 }
 
 export function parseAmount(text: string): AmountSpec | null {
+  return scanAmount(text).spec;
+}
+
+/** A number as typed: optional sign, NaN/Infinity, digits with separators, optional exponent and k. */
+const NUMBER_TOKEN_RE = /(?<![\w.,])([-+−–])?(nan|infinity|\d[\d.,]*(?:e[-+]?\d+)?k?|\.\d+(?:e[-+]?\d+)?k?)(?!\w)/gi;
+
+/** Numbers that are not amounts: leverage multiples, health-factor targets, step numbers. */
+function withoutNonAmountNumbers(t: string): string {
+  return t
+    .replace(/\b\d+(?:\.\d+)?\s*(?:x|×)(?!\w)/g, " ")
+    .replace(/\b(?:x|×)\s*\d+(?:\.\d+)?\b/g, " ")
+    .replace(/\b(?:hf|health(?:\s*factor)?)\b(?:\s*(?:of|at|above|over|below|under|to|stays?|stay|least|min(?:imum)?|>=|<=|>|<|≥|≤|=))*\s*\d+(?:\.\d+)?/g, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:hf|health\s*factor)\b/g, " ")
+    .replace(/(?:^|[\s,;])\d{1,2}[.)](?=\s)/g, " ")
+    .replace(/\bstep\s*\d+\b/g, " ");
+}
+
+export interface AmountScan {
+  spec: AmountSpec | null;
+  issue: AmountIssue | null;
+}
+
+/**
+ * What amount did the user type? Exact, "all", a percentage, or the reason it cannot be used.
+ * A signed, zero, NaN/Infinity, oversized, locale-ambiguous or conflicting number is reported as an
+ * issue; it is never turned into a different number.
+ */
+export function scanAmount(text: string): AmountScan {
   const t = text.toLowerCase();
-  const pct = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  const pct = t.match(/([-+−–])?\s*(\d+(?:\.\d+)?)\s*%/);
   if (pct) {
-    const p = Number(pct[1]);
-    if (Number.isFinite(p)) return p >= 100 ? { kind: "all" } : { kind: "pct", pct: p };
+    const p = Number(pct[2]);
+    if (pct[1] && pct[1] !== "+") return { spec: null, issue: { kind: "invalid", message: `A percentage has to be positive. I won't read "-${pct[2]}%" as ${pct[2]}%.` } };
+    if (p === 0) return { spec: null, issue: { kind: "invalid", message: "A percentage has to be above 0." } };
+    if (p > 100) return { spec: null, issue: { kind: "invalid", message: `${pct[2]}% is more than all of it. Use a percentage up to 100, or say "all".` } };
+    if (Number.isFinite(p)) return { spec: p >= 100 ? { kind: "all" } : { kind: "pct", pct: p }, issue: null };
   }
-  if (/\bhalf\b/.test(t)) return { kind: "pct", pct: 50 };
-  if (/\b(all|everything|entire|max|maximum|whole)\b/.test(t)) return { kind: "all" };
-  // A leverage multiple ("2x") is not an amount.
-  const stripped = t.replace(/\b\d+(?:\.\d+)?\s*(?:x|×)\b/g, " ").replace(/\b(?:x|×)\s*\d+(?:\.\d+)?\b/g, " ");
-  const m = stripped.match(AMOUNT_RE);
-  if (!m) return null;
-  const value = parseDecimalString(m[1]);
-  return value ? { kind: "exact", value } : null;
+  if (/\bhalf\b/.test(t)) return { spec: { kind: "pct", pct: 50 }, issue: null };
+  if (/\b(all|everything|entire|max|maximum|whole)\b/.test(t)) return { spec: { kind: "all" }, issue: null };
+  const stripped = withoutNonAmountNumbers(t);
+  const found: Array<{ raw: string; value: string }> = [];
+  for (const m of stripped.matchAll(NUMBER_TOKEN_RE)) {
+    const body = m[2].replace(/[.,]+$/, "");
+    if (!body) continue;
+    const at = m.index ?? 0;
+    // A sign only counts at the start of a word ("supply -5"), not inside "usdc-5".
+    const sign = m[1] && (at === 0 || /[\s(:]/.test(stripped[at - 1])) ? m[1] : "";
+    const raw = sign + body;
+    const r = parseAmountToken(raw, { allowExponent: true });
+    if (!r.ok) return { spec: null, issue: r.issue };
+    found.push({ raw, value: r.value });
+  }
+  if (!found.length) return { spec: null, issue: null };
+  const distinct = [...new Set(found.map((f) => f.value))];
+  if (distinct.length > 1) {
+    return { spec: null, issue: { kind: "ambiguous", message: `I see more than one amount (${found.map((f) => f.raw).join(" and ")}). Which one do you want to use?` } };
+  }
+  return { spec: { kind: "exact", value: distinct[0] }, issue: null };
 }
 
 export function parseLeverage(text: string): number | null {
@@ -330,11 +461,13 @@ export function splitClauses(text: string): string[] {
 export function parseClauseFacts(text: string): ParsedClause {
   const { assets, unknown, receipts } = extractAssets(text);
   const extra = tokenAfterAmount(text);
+  const scan = scanAmount(text);
   return {
     assets,
     unknownTokens: extra && !unknown.includes(extra) ? [...unknown, extra] : unknown,
     receipts,
-    amount: parseAmount(text),
+    amount: scan.spec,
+    amountIssue: scan.issue,
     leverage: parseLeverage(text),
   };
 }

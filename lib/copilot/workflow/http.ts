@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { getUser } from "../auth";
+import { LimitContentionError } from "../limits";
 import type { CopilotUser } from "../types";
 import { WorkflowError } from "./types";
 
@@ -53,6 +54,12 @@ export async function guarded(req: Request, fn: () => Promise<NextResponse | Res
     return await fn();
   } catch (e) {
     if (e instanceof HttpError) return NextResponse.json({ error: "request_rejected", message: e.message }, { status: e.status, headers: e.headers });
+    if (e instanceof LimitContentionError) {
+      return NextResponse.json(
+        { error: "rate_limited", message: `The service is busy. Try again in ${e.retry_after_s}s.`, limit: { kind: "rate", retry_after_s: e.retry_after_s, message: "busy" } },
+        { status: 429, headers: { "Retry-After": String(e.retry_after_s) } },
+      );
+    }
     if (e instanceof WorkflowError) return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
     console.error("[copilot] route failed", e instanceof Error ? e.message : e);
     return NextResponse.json({ error: "internal", message: "Something went wrong on my side. Nothing was sent." }, { status: 500 });

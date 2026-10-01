@@ -15,7 +15,7 @@ import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount } from "./explain";
 import type { AmountSpec, Intent, WriteIntent } from "./intent";
-import { checkAndConsume, recordTokens } from "./limits";
+import { checkAndConsume, LimitContentionError, recordTokens } from "./limits";
 import { loadHealth, runRead, type ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { routeMessage } from "./router";
@@ -24,6 +24,7 @@ import { wordAnswer } from "./vertex";
 import { createWorkflow, toPlanView, WorkflowError } from "./workflow";
 import { isConversationId, savePending, takePending } from "./workflow/pending";
 import { planLever, type PlannedWorkflow } from "./workflow/strategy";
+import { checkFunding } from "./workflow/funding";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
 import type { CopilotUser } from "./types";
@@ -95,6 +96,10 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
     return res;
   } catch (err) {
     if (err instanceof WorkflowError) return { kind: "error", message: err.message, ...base };
+    if (err instanceof LimitContentionError) {
+      const message = `The service is busy. Try again in ${err.retry_after_s}s.`;
+      return { kind: "error", message, limit: { kind: "rate", retry_after_s: err.retry_after_s, message }, ...base };
+    }
     console.error("[copilot] turn failed", { requestId, error: err instanceof Error ? err.message : String(err) });
     return { kind: "error", message: "Something went wrong on my side. Nothing was built or sent. Try again in a moment.", ...base };
   } finally {
@@ -246,6 +251,8 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
   const first = writeSteps[0];
   const probe = await preflightStep({ ...toStored(first, 1) }, t.ctx);
   if (!probe.ok) return failedCheck(probe, t);
+  const unfunded = await checkFunding(steps, t.ctx);
+  if (unfunded) return { kind: "blocked", message: unfunded, ...base };
   const summary = steps.map((s) => labelFor(s)).join(", then ").replace(/^./, (c) => c.toUpperCase()) + ".";
   return planPreview({ summary, steps, warnings: planWarnings(steps, extras), simulation: "prepared" in probe ? probe.prepared.simulation : null, hfFloor: copilotConfig.minHealthFactor }, t);
 }
@@ -266,6 +273,8 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
   const pre = await preflightStep(toStored(step, 1), t.ctx);
   if (!pre.ok) return failedCheck(pre, t);
   if ("skip" in pre) return { kind: "answer", message: pre.skip, ...base };
+  const unfunded = await checkFunding([step], t.ctx);
+  if (unfunded) return { kind: "blocked", message: unfunded, ...base };
 
   // Dry build: the MCP simulates the exact transaction now, so a failing action is explained before
   // the user is asked to approve anything. The real transaction is rebuilt (fresh blockhash) on advance.

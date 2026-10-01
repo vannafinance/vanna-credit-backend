@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checkAndConsume, checkSpend, limitsClock, recordSpend, recordTokens, setLimitStoreForTests } from "./limits";
+import { checkAndConsume, checkSpend, limitsBackoff, limitsClock, recordSpend, recordTokens, setLimitStoreForTests } from "./limits";
 import { MemoryRecordStore } from "./testing";
 import type { CopilotUser } from "./types";
 
@@ -85,5 +85,52 @@ describe("spend caps", () => {
   it("fails closed on an unknown or negative USD value", async () => {
     expect((await checkSpend(user("s3"), NaN)).ok).toBe(false);
     expect((await checkSpend(user("s3"), -1)).ok).toBe(false);
+  });
+});
+
+describe("store contention (api-014)", () => {
+  it("34 simultaneous requests on one key never throw: each gets a clean allow or a 429-style denial", async () => {
+    vi.stubEnv("COPILOT_RATE_CHAT_PER_MIN", "20");
+    const u = user("burst");
+    const results = await Promise.all(Array.from({ length: 34 }, () => checkAndConsume(u, "chat")));
+    expect(results.filter((r) => r.ok).length).toBeLessThanOrEqual(20);
+    for (const r of results) if (!r.ok) expect(r.retry_after_s).toBeGreaterThan(0);
+  });
+
+  it("retries with a jittered pause and succeeds when contention clears", async () => {
+    const inner = new MemoryRecordStore<{ n: number }>();
+    let failures = 3;
+    setLimitStoreForTests({
+      read: (id) => inner.read(id),
+      write: async (id, expected, value) => (failures-- > 0 ? false : inner.write(id, expected, value)),
+    });
+    const pauses: number[] = [];
+    const orig = { sleep: limitsBackoff.sleep, random: limitsBackoff.random };
+    limitsBackoff.sleep = async (ms) => void pauses.push(ms);
+    limitsBackoff.random = () => 0.5;
+    try {
+      expect(await checkAndConsume(user("j"), "chat")).toEqual({ ok: true });
+    } finally {
+      Object.assign(limitsBackoff, orig);
+    }
+    expect(pauses).toHaveLength(3);
+    expect(pauses.every((p) => p > 0)).toBe(true);
+    expect(pauses[2]).toBeGreaterThan(pauses[0]);
+  });
+
+  it("when every retry loses the race it fails closed with a clean retry-after, bounded attempts, never a throw", async () => {
+    let writes = 0;
+    const inner = new MemoryRecordStore<{ n: number }>();
+    setLimitStoreForTests({ read: (id) => inner.read(id), write: async () => (writes++, false) });
+    const orig = limitsBackoff.sleep;
+    limitsBackoff.sleep = async () => undefined;
+    try {
+      const r = await checkAndConsume(user("always"), "chat");
+      expect(r).toMatchObject({ ok: false, kind: "rate", retry_after_s: 1 });
+    } finally {
+      limitsBackoff.sleep = orig;
+    }
+    expect(writes).toBeGreaterThan(1);
+    expect(writes).toBeLessThanOrEqual(30);
   });
 });

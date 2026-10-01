@@ -119,6 +119,33 @@ const DOMAIN_WORDS = [
 
 const DOMAIN_WORD_RE = new RegExp(`\\b(?:${[...DOMAIN_WORDS].sort((a, b) => b.length - a.length).join("|")})\\b`, "i");
 
+/** Edit distance with adjacent transposition ("waht" -> "what" counts as one edit). */
+function editDistance(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/** Long domain words only (6+ letters) and the same first letter, so "rice" can never pass as "price" but "helth" and "borow" do. */
+const FUZZY_TARGETS = [...new Set(DOMAIN_WORDS)].filter((w) => w.length >= 6);
+
+export function hasMisspelledDomainWord(message: string): boolean {
+  for (const word of message.toLowerCase().match(/[a-z]{5,}/g) ?? []) {
+    for (const target of FUZZY_TARGETS) {
+      if (word[0] !== target[0] || Math.abs(word.length - target.length) > 2) continue;
+      if (editDistance(word, target) <= (target.length >= 9 ? 2 : 1)) return true;
+    }
+  }
+  return false;
+}
+
 export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boolean } = {}): FirewallResult {
   const m = (message ?? "").trim();
   if (!m) return { allow: false, reason: "empty", kind: "empty", message: "Type a question about your Vanna positions or an action you want to take." };
@@ -158,6 +185,7 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
 
   if (SELF_REFERENTIAL.some((re) => re.test(m))) return { allow: true, reason: "allow:self" };
   if (DOMAIN_WORD_RE.test(m)) return { allow: true, reason: "allow:domain_word" };
+  if (hasMisspelledDomainWord(m)) return { allow: true, reason: "allow:domain_word_typo" };
   if (/^(?:hi|hello|hey|thanks|thank you|ok|okay|yes|no|gm)\.?!?$/i.test(m)) return { allow: true, reason: "allow:greeting" };
   // "and 2x?" only makes sense after a Vanna turn; with no product word it still needs that context.
   if (opts.hasDomainHistory && m.length <= 60) return { allow: true, reason: "allow:followup" };

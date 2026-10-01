@@ -11,6 +11,7 @@
 import {
   LEND_BORROW_ASSETS,
   PRODUCT_ASSETS,
+  parseAmountToken,
   parseClauseFacts,
   parseMinHf,
   splitClauses,
@@ -26,9 +27,17 @@ import {
   type ConceptTopic,
   type ParsedClause,
 } from "./intent";
+import { CONDITIONAL_BASE_MESSAGE, detectConditional, immediateRemainder } from "./conditional";
 import { LlmUnavailable, llmConfigured, routeWithModel } from "./vertex";
 
 const QUESTION_OPENER = /^(?:what|what's|whats|how|which|show|list|tell|give|is|are|do|does|where|why|when|who)\b/;
+/** A polite or first-person request is still a command even though it is phrased as a question. */
+const POLITE = /^(?:(?:can|could|would|will)\s+you|please|pls|i\s+(?:want|wanna|would\s+like|need)\s+to|let'?s|go\s+ahead)\b/;
+/** "can I ...", "what if ...", "without getting liquidated": a question about an outcome, never an order. */
+const HYPOTHETICAL = /\b(?:can\s+i|could\s+i|am\s+i\s+able|is\s+it\s+(?:safe|ok|okay|possible|fine)|would\s+it\s+be|what\s+(?:if|happens|will|would)|if\s+i\b|how\s+(?:much|many)\b.*\b(?:need|can|could|should|to)\b|without\s+(?:getting\s+)?liquidat\w*|will\s+i\s+be\s+liquidat\w*)\b/;
+const RATE_QUESTION = /\b(?:rates?|apys?|aprs?|interest|yields?)\b/;
+const ACTION_VERB = /\b(?:supply|lend|deposit|withdraw|borrow|repay|pay\s+back|swap|convert|exchange|redeem|farm|unfarm|quote|trade|lever|leverage)\b/;
+const WRITE_VERB = /\b(?:supply|lend|deposit|withdraw|borrow|repay|pay\s+back|pay\s+off|swap|convert|exchange|redeem|farm|unfarm|buy|sell|lever|leverage|open|close)\b/;
 const ALL_WORDS = /\b(?:all|everything|entire|full(?:y)?|max|maximum|whole|off)\b/;
 
 const ask = (question: string, options?: AskOption[]): Intent => ({ lane: "ask", question, ...(options?.length ? { options } : {}) });
@@ -104,6 +113,73 @@ function ambiguousVenue(verb: "deposit" | "withdraw", f: ParsedClause): Intent {
   return ask(q, options);
 }
 
+const DAYS = "(?:mon|tues|wednes|thurs|fri|satur|sun)day";
+/** Conditions and schedules the Copilot cannot watch or run later. */
+const DEFERRED: RegExp[] = [
+  /\b(?:every|each)\s+(?:day|week|month|hour|night|morning|\d+\s*(?:min(?:ute)?s?|hours?|days?|weeks?)|weekday)\b/,
+  /\b(?:daily|weekly|monthly|hourly|recurring|dca|dollar[- ]cost)\b/,
+  new RegExp("\\b(?:tomorrow|tonight|later(?:\\s+today)?|next\\s+(?:week|month|" + DAYS + ")|on\\s+" + DAYS + "|in\\s+\\d+\\s*(?:min(?:ute)?s?|hours?|days?|weeks?)|after\\s+\\d+\\s*(?:min(?:ute)?s?|hours?|days?)|at\\s+(?:noon|midnight)|by\\s+(?:tomorrow|tonight|friday|monday|the\\s+weekend))\\b"),
+  /\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/,
+  /\bat\s+\d{1,2}:\d{2}\b/,
+  /\b(?:limit\s+order|stop[- ]?loss|take[- ]?profit|trailing\s+stop|buy\s+the\s+dip)\b/,
+  /\b(?:auto[- ]?compound\w*|auto[- ]?rebalanc\w*|rebalanc\w*|automatic(?:ally)?|autopilot)\b/,
+  /\b(?:when|once|if|as\s+soon\s+as|whenever|until)\b[^,.;]*\b(?:price|hits?|reach(?:es)?|drops?|falls?|rises?|above|below|under|over|crosses?|goes|gets)\b/,
+  /\b(?:at|@)\s*\$?\d+(?:\.\d+)?\s*(?:usd|usdc|dollars?|\$)?\s*$/,
+];
+
+/** The clause with the first deferred span removed (the "do it now" version); null when the clause is not conditional. */
+function deferredSpan(lower: string): string | null {
+  if (!WRITE_VERB.test(lower) && !/\b(?:limit\s+order|stop[- ]?loss|take[- ]?profit|trailing\s+stop|dca|dollar[- ]cost|auto[- ]?compound\w*|auto[- ]?rebalanc\w*|rebalanc\w*|automatic(?:ally)?|autopilot)\b/.test(lower)) return null;
+  for (const re of DEFERRED) {
+    const m = lower.match(re);
+    if (m && m.index !== undefined) {
+      return (lower.slice(0, m.index) + " " + lower.slice(m.index + m[0].length)).replace(/\s+/g, " ").replace(/\s+([,.;?])/g, "$1").trim();
+    }
+  }
+  return null;
+}
+
+function deferredRefusal(nowVersion: string): Intent {
+  const clean = nowVersion.replace(/[,.;\s]+$/, "");
+  const offer = clean.length > 3 && WRITE_VERB.test(clean) ?` If you want it now, tell me: "${clean}" and I will prepare it for your approval.` : "";
+  return refuse(`I can't watch prices or act at a later time, so I won't set that up; I only prepare actions you approve right now.${offer}`);
+}
+
+/** The asset named closest to `at`, so "how many USDC can I borrow" picks USDC, not another asset in the sentence. */
+function assetNear(lower: string, assets: Asset[], at: number): Asset | null {
+  let best: { a: Asset; d: number } | null = null;
+  for (const a of assets) {
+    for (const m of lower.matchAll(new RegExp("\\b" + a.toLowerCase() + "\\b", "g"))) {
+      const d = Math.abs((m.index ?? 0) - at);
+      if (!best || d < best.d) best = { a, d };
+    }
+  }
+  return best ? best.a : null;
+}
+
+/** "can I borrow 500 USDC", "what if I withdraw 1 SOL", "how much to repay to get HF 2": a question about an outcome. */
+function routeWhatIf(lower: string, f: ParsedClause): Intent | null {
+  const verb = lower.match(/\b(borrow(?:ing)?|withdraw|take\s+out|repay|pay\s+back|pay\s+off)\b/);
+  if (!verb) return null;
+  const op: "borrow" | "withdraw" | "repay" = /borrow/.test(verb[1]) ? "borrow" : /withdraw|take/.test(verb[1]) ? "withdraw" : "repay";
+  const at = verb.index ?? 0;
+  const asset = assetNear(lower, f.assets, at);
+  const tgt = lower.match(/\b(?:hf|health(?:\s*factor)?)\b(?:\s*(?:of|at|above|over|to|stays?|least|min(?:imum)?|>=|>|≥|=))*\s*(\d+(?:\.\d+)?)/);
+  const targetHf = tgt ? Number(tgt[1]) : null;
+  // Only a number right after the verb is the amount asked about; "I have 3 SOL" is context.
+  const after = lower.slice(at + verb[0].length).match(/^\s*(?:up\s+to\s+|about\s+|around\s+)?([-+]?[\d.,]+(?:e[-+]?\d+)?k?)/);
+  let amount: string | null = null;
+  if (after) {
+    const r = parseAmountToken(after[1], { allowExponent: true });
+    if (!r.ok) return r.issue.kind === "ambiguous" ? ask(r.issue.message) : refuse(r.issue.message);
+    amount = r.value;
+  }
+  if (amount === null && targetHf === null) return null;
+  if (!asset) return ask(`Which asset do you want to check ${op === "borrow" ? "borrowing" : op === "withdraw" ? "withdrawing" : "repaying"}?`);
+  const v = validateRead({ kind: "whatif", op, asset, amount, target_hf: amount !== null ? null : targetHf });
+  return v.ok ? { lane: "read", read: v.value } : refuse(v.message);
+}
+
 /** One clause that may be a command, a question, or a strategy. */
 export function routeClause(clause: string): Intent {
   const raw = clause.trim();
@@ -118,9 +194,33 @@ export function routeClause(clause: string): Intent {
   const topic = concept(lower);
   if (topic && !f.amount) return { lane: "read", read: { kind: "concept", topic } };
 
-  const questionish = QUESTION_OPENER.test(lower) || lower.endsWith("?");
-  const hasAmount = f.amount !== null && f.amount.kind !== "all";
-  const command = !questionish || hasAmount;
+  const questionish = QUESTION_OPENER.test(lower) || lower.endsWith("?") || HYPOTHETICAL.test(lower);
+  const polite = POLITE.test(lower);
+  // A question stays a question even with a number in it; only a polite request or a bare imperative is an order.
+  const command = !questionish || polite;
+
+  // Conditions and schedules cannot be watched; refuse before anything is built.
+  if (command) {
+    // The broad multilingual detector first; the simpler English one stays as a second net.
+    const cond = detectConditional(raw);
+    if (cond) {
+      const rest = immediateRemainder(raw, cond);
+      const offer = rest.length > 3 && WRITE_VERB.test(rest.toLowerCase()) ? ` If you want it now, tell me: "${rest}" and I will prepare it for your approval.` : "";
+      return refuse(`${CONDITIONAL_BASE_MESSAGE}${offer}`);
+    }
+    const now = deferredSpan(lower);
+    if (now !== null) return deferredRefusal(now);
+  }
+
+  // A number that cannot be used exactly as typed (negative, zero, 1e-3, 1.000,5, two different amounts) stops here.
+  if (f.amountIssue && ACTION_VERB.test(lower)) return f.amountIssue.kind === "ambiguous" ? ask(f.amountIssue.message) : refuse(f.amountIssue.message);
+
+  // Hypotheticals ("can I borrow 500 USDC?", "what if I withdraw 1 SOL?") are answered from the MCP, never previewed.
+  if (questionish && !polite) {
+    const w = routeWhatIf(lower, f);
+    if (w) return w;
+  }
+
 
   // ── strategy: leverage ──
   if ((/\b(?:lever|leverage|leveraged|loop|long)\b/.test(lower) && f.leverage) || (f.leverage && f.assets.length && /\b(?:go|get|want|make|turn|open)\b/.test(lower) && command && /\bx\b|×|times/.test(lower))) {
@@ -156,7 +256,7 @@ export function routeClause(clause: string): Intent {
     }
 
     // ── debt ──
-    if (/\bborrow(?:ing)?\b/.test(lower) && !/\b(?:capacity|power|limit)\b/.test(lower) && !/\bhow\s+much\b/.test(lower)) return writeIntent("borrow", f, lower);
+    if (/\bborrow(?:ing)?\b/.test(lower) && !/\b(?:capacity|power|limit)\b/.test(lower) && !/\bhow\s+much\b/.test(lower) && !RATE_QUESTION.test(lower)) return writeIntent("borrow", f, lower);
     if (/\b(?:repay|pay\s+back|pay\s+off|payoff)\b/.test(lower)) {
       const source = /\b(?:from|with|using)\s+(?:my\s+)?(?:margin|collateral)\b/.test(lower) ? "margin" : "wallet";
       return writeIntent("repay", f, lower, { source });
@@ -224,10 +324,10 @@ function routeRead(lower: string, f: ParsedClause): Intent {
   if (/\b(?:history|transactions?|activity|recent)\b/.test(lower)) return read({ kind: "history" });
   if (/\b(?:protocol|addresses|supported\s+assets|which\s+assets|what\s+assets|integrations?|operating\s+mode)\b/.test(lower)) return read({ kind: "protocol" });
 
-  if (/\b(?:earned|interest|my\s+earn|supplied|my\s+deposits?|earn\s+(?:balance|position)|lent)\b/.test(lower) && !/\b(?:apy|apr|rates?)\b/.test(lower)) {
+  if (/\b(?:earned|interest|my\s+earn|supplied|my\s+deposits?|earn\s+(?:balance|position)|lent)\b/.test(lower) && !/\b(?:apy|apr|rates?)\b/.test(lower) && !/\bborrow\w*\b/.test(lower)) {
     return read({ kind: "earn_position", assets: f.assets });
   }
-  if (/\b(?:apy|apr|rates?|yields?|utili[sz]ation|pools?|available\s+liquidity)\b/.test(lower)) return read({ kind: "pool", assets: f.assets });
+  if (/\b(?:apy|apr|rates?|yields?|utili[sz]ation|pools?|available\s+liquidity)\b|\bborrow\w*\s+interest\b|\binterest\s+rates?\b/.test(lower)) return read({ kind: "pool", assets: f.assets });
   if (/\b(?:owe|debts?|borrowed|loans?)\b/.test(lower)) return read({ kind: "debt" });
   if (/\bcollateral\b/.test(lower)) return read({ kind: "collateral" });
   if (/\b(?:price|prices|worth|trading\s+at|oracle)\b/.test(lower)) return read({ kind: "price", assets: f.assets });

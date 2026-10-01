@@ -50,7 +50,7 @@ const table: Array<[string, Expect]> = [
   ["withdraw 1 SOL collateral", { lane: "write", op: "withdraw", asset: "SOL", amount: exact("1") }],
   ["borrow 50 USDC", { lane: "write", op: "borrow", asset: "USDC", amount: exact("50") }],
   ["borrow max USDC", { lane: "write", op: "borrow", asset: "USDC", amount: { kind: "all" } }],
-  ["can I borrow 100 USDT?", { lane: "write", op: "borrow", asset: "USDT", amount: exact("100") }],
+  ["can you borrow 100 USDT?", { lane: "write", op: "borrow", asset: "USDT", amount: exact("100") }],
   ["repay 20 USDC", { lane: "write", op: "repay", asset: "USDC", amount: exact("20"), source: "wallet" }],
   ["repay all USDC debt", { lane: "write", op: "repay", asset: "USDC", amount: { kind: "all" } }],
   ["repay 10 USDC from my margin balance", { lane: "write", op: "repay", asset: "USDC", amount: exact("10"), source: "margin" }],
