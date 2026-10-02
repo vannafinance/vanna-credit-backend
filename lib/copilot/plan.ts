@@ -69,6 +69,18 @@ export function planDigest(wallet: string, hfFloor: number, steps: StepSpec[]): 
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+/**
+ * Assets a swap INSIDE the margin account cannot buy: the margin-swap transaction (the Jupiter route plus the
+ * account list the Vanna program needs) exceeds Solana's size limit for these liquid-staking tokens at any
+ * amount. Measured on the live fork 2026-10-02: margin swaps from them, and wallet swaps into them, work.
+ * A lever on one of them would deposit and borrow and then fail on the swap, so it is refused up front.
+ */
+export const MARGIN_SWAP_BLOCKED_TARGETS: ReadonlySet<string> = new Set(["JupSOL", "JitoSOL"]);
+
+export const marginSwapBlockedMessage = (asset: string): string =>
+  `A swap that buys ${asset} inside your margin account is too large for one Solana transaction on this network, at any amount. ` +
+  `Swap in your wallet instead ("swap 20 USDC to ${asset}"), then deposit it as collateral.`;
+
 const fmtQty = (amount: string | null, asset: string | null): string => {
   if (!amount && !asset) return "";
   return `${amount === "all" ? "all" : amount ?? ""} ${asset ?? ""}`.trim();

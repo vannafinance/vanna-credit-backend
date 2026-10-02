@@ -13,7 +13,7 @@ import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
 import { loadFreshPrice, loadHealth, loadPrice, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
-import { RISK_INCREASING } from "../plan";
+import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, RISK_INCREASING } from "../plan";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
 import { healFromEnvelope, isSwapBuild, MAX_SWAP_HEALS, STALE_FORK_SWAP, swapHealDeps } from "./swap-heal";
@@ -80,6 +80,12 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   const notes: string[] = [];
 
   if (step.kind !== "write") return fail("invalid", "Only write steps are built.");
+
+  // Known to exceed Solana's transaction size at any amount: say so now instead of failing at build time.
+  const target = String(step.slots.to_asset ?? "");
+  if (op === "swap" && step.slots.mode === "margin" && MARGIN_SWAP_BLOCKED_TARGETS.has(target)) {
+    return fail("invalid", marginSwapBlockedMessage(target));
+  }
 
   // ── account lifecycle ──
   if (op === "create_account") {

@@ -12,10 +12,10 @@
 
 import { copilotConfig } from "../config";
 import { fmtAmount, fmtHf, humanizeMcpError } from "../explain";
-import type { Asset, AskOption, LeverIntent } from "../intent";
+import type { Asset, AskOption, Intent, LeverIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
-import { planWarnings, reportStep, type StepSpec } from "../plan";
+import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, planWarnings, reportStep, type StepSpec } from "../plan";
 import { DEFAULT_SLIPPAGE_BPS, floorDecimals, num, simulationFrom, sizeLever, tokenDecimals, usdToUnits } from "../risk";
 import type { Simulation } from "../types";
 import { walletSpendable } from "./steps";
@@ -34,6 +34,17 @@ const no = (message: string, options?: AskOption[]): StrategyResult => ({ ok: fa
 
 export async function planLever(intent: LeverIntent, ctx: ReadCtx): Promise<StrategyResult> {
   const asset = intent.asset as Asset;
+
+  // The lever's swap buys `asset` inside the margin account; for these tokens that transaction is always too
+  // large, so the plan would deposit and borrow and then fail. Refuse before anything is built, and offer SOL.
+  if (MARGIN_SWAP_BLOCKED_TARGETS.has(asset)) {
+    const sol: AskOption = {
+      label: `Lever SOL ${intent.leverage}x instead`,
+      description: "SOL can be bought inside your margin account, so the whole lever can run.",
+      apply: { lane: "lever", lever: { asset: "SOL", leverage: intent.leverage, borrow_asset: intent.borrow_asset, amount: null } } as Intent,
+    };
+    return no(`I can't lever ${asset} yet. ${marginSwapBlockedMessage(asset)} Or I can lever SOL.`, [sol]);
+  }
 
   if (!intent.borrow_asset) {
     const pick = (b: "USDC" | "USDT"): AskOption => ({

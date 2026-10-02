@@ -6,7 +6,10 @@ vi.mock("../mcp-client", async (orig) => ({ ...(await orig<typeof import("../mcp
 vi.mock("../limits", async (orig) => ({ ...(await orig<typeof import("../limits")>()), checkAndConsume: m.consume }));
 
 import type { ReadCtx } from "../mcp-facts";
-import { buildStepTx, loadFreshPrice, priceDeps, resetPriceRefresh, type Prepared } from "../workflow/steps";
+import { humanizeFailure } from "../explain";
+import { buildStepTx, loadFreshPrice, preflightStep, priceDeps, resetPriceRefresh, type Prepared } from "../workflow/steps";
+import { planLever } from "../workflow/strategy";
+import type { StoredStep } from "../workflow/types";
 import { MAX_SWAP_HEALS, swapHealDeps } from "../workflow/swap-heal";
 
 const ctx = { user: { wallet: "W", subject: "s", expiresAt: 0 } } as unknown as ReadCtx;
@@ -89,6 +92,38 @@ describe("a swap that failed on stale fork pools is healed and rebuilt", () => {
     m.call.mockResolvedValueOnce({ simulation_success: false, code: "simulation_failed", reason: RAW_3005 }).mockResolvedValueOnce(success());
     expect((await buildStepTx(prepared(), ctx)).ok).toBe(true);
     expect(swapHealDeps.heal).not.toHaveBeenCalled();
+  });
+});
+
+describe("swaps that cannot fit in one Solana transaction are refused up front", () => {
+  const stored = (slots: Record<string, unknown>, asset = "USDC") => ({ kind: "write", op: "swap", asset, amount: "20", slots, status: "pending" }) as unknown as StoredStep;
+
+  it("a margin swap INTO JupSOL or JitoSOL is refused before anything is built", async () => {
+    for (const to of ["JupSOL", "JitoSOL"]) {
+      const r = await preflightStep(stored({ to_asset: to, mode: "margin" }), ctx);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.message).toMatch(/inside your margin account is too large/);
+        expect(r.message).toMatch(/wallet/);
+      }
+    }
+    expect(m.call).not.toHaveBeenCalled();
+  });
+
+  it("a lever on JupSOL or JitoSOL is refused with a SOL alternative, before anything runs", async () => {
+    for (const asset of ["JupSOL", "JitoSOL"]) {
+      const r = await planLever({ asset, leverage: 3, borrow_asset: "USDC", amount: "1", min_hf: null } as never, ctx);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.message).toMatch(new RegExp(`can't lever ${asset}`));
+        expect(r.options?.[0]?.label).toMatch(/Lever SOL 3x instead/);
+      }
+    }
+    expect(m.call).not.toHaveBeenCalled();
+  });
+
+  it("a size-limit error from any other pair reads as plain words", () => {
+    expect(humanizeFailure("The built transaction exceeds Solana's size limit. Retry with a smaller amount or fewer route hops.")).toMatch(/too large for one Solana transaction/);
   });
 });
 

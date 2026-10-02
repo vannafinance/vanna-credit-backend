@@ -45,7 +45,7 @@ const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/SlippageToleranceExceeded|0x1771|6001/i, "The swap price moved past the allowed slippage. Try again for a fresh quote."],
   [/would breach|HealthFactor|0x1790|unhealthy/i, "The action would push the account below the protocol's health limit."],
   [/account_not_found|AccountNotInitialized|3012/i, "You do not have a margin account yet."],
-  [/transaction_too_large/i, "That swap route is too large for one transaction. Try a smaller amount."],
+  [/transaction_too_large|size limit|exceeds Solana|too large for one/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
   [/asset_not_offered/i, "That asset is not offered for this action."],
   [/insufficient pool liquidity/i, "The pool does not have enough available liquidity for that."],
   [/borrow_cap|supply_cap|cap exceeded/i, "That would exceed the pool's cap."],
