@@ -55,6 +55,44 @@ describe("swapping an asset for itself", () => {
   });
 });
 
+describe("'deposit X and borrow Y with Nx leverage' is one leverage request", () => {
+  const lever = (p: string) => {
+    const r = keywordRoute(p);
+    expect(r.lane).toBe("lever");
+    return (r as Extract<typeof r, { lane: "lever" }>).lever;
+  };
+
+  it("the reported sentence becomes lever 1 JupSOL 3x borrowing USDC", () => {
+    expect(lever("can you deposit 1 jupSOL and borrow USDC again with 3x leverage?")).toMatchObject({ asset: "JupSOL", leverage: 3, borrow_asset: "USDC", amount: "1" });
+  });
+
+  it("works for SOL and 2x", () => {
+    expect(lever("deposit 1 SOL and borrow USDC with 2x leverage")).toMatchObject({ asset: "SOL", leverage: 2, borrow_asset: "USDC", amount: "1" });
+  });
+
+  it("carries a stated health floor", () => {
+    expect(lever("deposit 2 SOL and lever 2x borrowing USDT keeping health factor above 1.4")).toMatchObject({ asset: "SOL", borrow_asset: "USDT", amount: "2", min_hf: 1.4 });
+  });
+
+  it("levers the collateral, not the stable being borrowed", () => {
+    expect(lever("borrow USDC with 3x leverage against my jupSOL")).toMatchObject({ asset: "JupSOL", leverage: 3, borrow_asset: "USDC" });
+  });
+
+  it("a plain lever request is unchanged", () => {
+    expect(lever("lever 1 jupSOL 3x borrowing USDC")).toMatchObject({ asset: "JupSOL", leverage: 3, borrow_asset: "USDC", amount: "1" });
+  });
+
+  it("leverage mixed with other real steps is still refused as its own request", () => {
+    const r = keywordRoute("deposit 1 SOL then supply 5 USDC and lever 2x");
+    expect(r.lane).toBe("ask");
+  });
+
+  it("a deposit-and-borrow chain without leverage is unaffected", () => {
+    const r = keywordRoute("deposit 1 SOL as collateral and borrow 20 USDC");
+    expect(r.lane).toBe("chain");
+  });
+});
+
 describe("a timeout while reading the MCP answer is retried, not shown as a raw abort", () => {
   beforeEach(() => {
     resetMcpClient();

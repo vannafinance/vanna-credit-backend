@@ -224,7 +224,9 @@ export function routeClause(clause: string): Intent {
 
   // ── strategy: leverage ──
   if ((/\b(?:lever|leverage|leveraged|loop|long)\b/.test(lower) && f.leverage) || (f.leverage && f.assets.length && /\b(?:go|get|want|make|turn|open)\b/.test(lower) && command && /\bx\b|×|times/.test(lower))) {
-    const asset = f.assets[0] ?? null;
+    // "borrow USDC with 3x leverage against my JupSOL": the stable being borrowed is the funding, not the asset to lever.
+    const named = lower.match(BORROW_STABLE)?.[1]?.toUpperCase() as "USDC" | "USDT" | undefined;
+    const asset = (named ? f.assets.find((a) => a !== named) : null) ?? f.assets[0] ?? null;
     if (!asset) return ask("Which asset do you want to lever?", LEND_BORROW_ASSETS.map((a) => ({ label: a, apply: { lane: "lever", lever: { asset: a, leverage: f.leverage as number, borrow_asset: null, amount: null } } as Intent })));
     const borrow = f.assets.find((a) => a === "USDC" || a === "USDT") && f.assets.length > 1 && /\b(?:borrow(?:ing)?|against|funded|using|with|via)\b/.test(lower) ? (f.assets.find((a) => a !== asset && (a === "USDC" || a === "USDT")) as "USDC" | "USDT" | undefined) ?? null : null;
     const minHf = parseMinHf(lower);
@@ -344,6 +346,35 @@ function routeRead(lower: string, f: ParsedClause): Intent {
 
 const REPORT_CLAUSE = /\b(?:tell\s+me|show\s+me|check|report|what(?:'s|\s+is)|give\s+me)\b.*\b(?:health|hf)\b/;
 
+/** "borrow 20 USDC" / "borrowing USDT": the stable named right after a borrow verb. */
+const BORROW_STABLE = /\bborrow(?:ing)?\s+(?:some\s+|\d[\d.,]*\s*)?(usdc|usdt)\b/i;
+const LEVER_WORD = /\b(?:lever|leverage|leveraged|loop|long)\b/;
+/** Verbs that make a message a real multi-step plan, which a leverage request cannot be mixed into. */
+const OTHER_WRITE_VERB = /\b(?:supply|lend|swap|convert|exchange|trade|farm|redeem|repay|withdraw|unlend|open|close)\b/;
+
+/**
+ * "Deposit 1 JupSOL and borrow USDC with 3x leverage" is one leverage request, not a chain: the lever plan
+ * itself deposits the asset, borrows the stable and swaps it back in. Rewrite it to the form the lever route
+ * already understands ("lever 1 JupSOL 3x borrowing USDC"). Anything with other steps in it is left alone.
+ */
+function mergeDepositLever(message: string, clauses: string[]): string | null {
+  const lower = message.toLowerCase();
+  if (!LEVER_WORD.test(lower) || OTHER_WRITE_VERB.test(lower)) return null;
+  const whole = parseClauseFacts(message);
+  if (!whole.leverage) return null;
+  const deposits = clauses.filter((c) => /\bdeposit\b/i.test(c));
+  if (deposits.length !== 1) return null;
+  const d = parseClauseFacts(deposits[0]);
+  const asset = d.assets[0];
+  if (!asset || d.assets.length !== 1) return null;
+  const amount = d.amount && d.amount.kind === "exact" ? d.amount.value : null;
+  const stable = lower.match(BORROW_STABLE)?.[1]?.toUpperCase() ?? null;
+  const minHf = parseMinHf(lower);
+  return ["lever", amount, asset, `${whole.leverage}x`, stable ? `borrowing ${stable}` : null, minHf ? `keeping health factor above ${minHf}` : null]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** A later step that works on the margin account makes a bare "deposit" in the same message mean margin collateral. */
 const MARGIN_FLOW = /\b(?:borrow|repay|lever|leverage|withdraw|collateral|margin)\b/;
 const VENUE_WORDS = /\b(?:collateral|margin|earn|pool|vault|lending|kamino|farm)\b/;
@@ -362,6 +393,9 @@ function fromPrevious(clause: string, prev: WriteIntent | null): string | null {
 export function keywordRoute(message: string): Intent {
   const clauses = splitClauses(message);
   if (clauses.length <= 1) return routeClause(message);
+
+  const asLever = mergeDepositLever(message, clauses);
+  if (asLever) return routeClause(asLever);
 
   const marginFlow = clauses.some((c) => MARGIN_FLOW.test(c.toLowerCase()));
   const steps: Array<{ write: WriteIntent } | { report: true }> = [];
