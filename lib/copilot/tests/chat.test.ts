@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
 import { setLimitStoreForTests, tokensUsedToday } from "../limits";
+import { priceDeps } from "../mcp-facts";
 import { setLlmClient, type LlmClient, type LlmRequest } from "../vertex";
 import { workflowDeps, type WorkflowRecord } from "../workflow";
 import { pendingDeps, type ConversationRecord } from "../workflow/pending";
@@ -483,11 +484,21 @@ describe("plan lane", () => {
     expect(res.plan!.steps[1]).toMatchObject({ asset: "SOL", amount: "2" });
   });
 
-  it("lever refuses when a needed price is stale", async () => {
-    vi.spyOn(mcp, "price").mockImplementation(async () => ({ price_usd: "120", stale: true }));
+  it("lever refuses when a needed price is unavailable", async () => {
+    vi.spyOn(mcp, "price").mockImplementation(async () => {
+      throw new Error("no oracle");
+    });
     const res = await chat("lever my SOL 2x borrowing USDC");
     expect(res.kind).toBe("clarification");
-    expect(res.message).toMatch(/stale/);
+    expect(res.message).toMatch(/unavailable/);
+  });
+
+  it("lever still plans when a price is only flagged stale: the build re-checks and the MCP fails closed", async () => {
+    priceDeps.refresh = vi.fn(async () => undefined);
+    priceDeps.sleep = vi.fn(async () => undefined);
+    vi.spyOn(mcp, "price").mockImplementation(async () => ({ price_usd: "120", stale: true }));
+    const res = await chat("lever my SOL 2x borrowing USDC");
+    expect(res.kind).toBe("plan_preview");
   });
 
   it("a stated health floor above 1.15 is honoured", async () => {

@@ -14,7 +14,7 @@ import { copilotConfig } from "../config";
 import { fmtAmount, fmtHf, humanizeMcpError } from "../explain";
 import type { Asset, AskOption, LeverIntent } from "../intent";
 import { mcp } from "../mcp-client";
-import { loadHealth, loadPrice, type ReadCtx } from "../mcp-facts";
+import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
 import { planWarnings, reportStep, type StepSpec } from "../plan";
 import { DEFAULT_SLIPPAGE_BPS, floorDecimals, num, simulationFrom, sizeLever, tokenDecimals, usdToUnits } from "../risk";
 import type { Simulation } from "../types";
@@ -47,11 +47,13 @@ export async function planLever(intent: LeverIntent, ctx: ReadCtx): Promise<Stra
   const borrowAsset = intent.borrow_asset;
 
   const floor = Math.max(copilotConfig.minHealthFactor, intent.min_hf ?? 0);
-  const [healthR, pAsset, pBorrow] = await Promise.all([loadHealth(ctx), loadPrice(asset, ctx), loadPrice(borrowAsset, ctx)]);
+  const [healthR, pAsset, pBorrow] = await Promise.all([loadHealth(ctx), loadFreshPrice(asset, ctx), loadFreshPrice(borrowAsset, ctx)]);
   if (healthR.kind === "unavailable") return no(humanizeMcpError(healthR.error).message);
   if (healthR.kind === "malformed") return no("I couldn't read your account data, so I can't size a leveraged position.");
-  if (!pAsset || pAsset.stale) return no(`The ${asset} price is unavailable or stale right now, so I can't size this safely. Try again in a minute.`);
-  if (!pBorrow || pBorrow.stale) return no(`The ${borrowAsset} price is unavailable or stale right now, so I can't size this safely. Try again in a minute.`);
+  // A price still flagged stale after the keeper refresh is sized with its current value: every step re-checks
+  // health live when it is built, and the MCP fails closed on a genuinely stale price.
+  if (!pAsset) return no(`The ${asset} price is unavailable right now, so I can't size this safely. Try again in a minute.`);
+  if (!pBorrow) return no(`The ${borrowAsset} price is unavailable right now, so I can't size this safely. Try again in a minute.`);
 
   const hasAccount = healthR.kind === "ok";
   const health = hasAccount ? healthR.health : null;

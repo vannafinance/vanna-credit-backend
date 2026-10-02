@@ -106,6 +106,42 @@ export async function loadPrice(asset: string, ctx: ReadCtx): Promise<PriceRead 
   }
 }
 
+/**
+ * The fork's oracle prices go stale as its clock drifts. The app's price keeper (`refreshForkPrices`, the same
+ * function behind /api/prices/refresh) fixes that on demand, so a stale read refreshes once and re-reads.
+ * Throttled so a burst of steps shares one refresh. Callers still see `stale` if it persists; the MCP build
+ * (which refreshes and simulates) is the authoritative check, so a lagging flag alone must not block a write.
+ */
+export const priceDeps = {
+  refresh: async (): Promise<void> => {
+    const { refreshForkPrices } = await import("../solana/server/fork-prices");
+    await refreshForkPrices();
+  },
+  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  now: () => Date.now(),
+};
+const PRICE_REFRESH_MIN_GAP_MS = 15_000;
+let lastPriceRefresh = 0;
+
+export function resetPriceRefresh(): void {
+  lastPriceRefresh = 0;
+}
+
+export async function loadFreshPrice(asset: string, ctx: ReadCtx): Promise<PriceRead | null> {
+  let price = await loadPrice(asset, ctx);
+  if (price?.stale && priceDeps.now() - lastPriceRefresh >= PRICE_REFRESH_MIN_GAP_MS) {
+    lastPriceRefresh = priceDeps.now();
+    try {
+      await priceDeps.refresh();
+      await priceDeps.sleep(800);
+      price = await loadPrice(asset, ctx);
+    } catch {
+      /* the keeper is best-effort: a still-stale price is left flagged, never guessed */
+    }
+  }
+  return price;
+}
+
 export type Sized = { ok: true; amount: string; usd: number; hfAfter: number | null; protocolMax: string | null } | { ok: false; reason: string };
 
 /** Largest borrow that keeps HF >= floor, verified through the MCP. */
@@ -114,8 +150,8 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
   const h = opts.hint ?? (await loadHealth(ctx));
   if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
   if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe borrow." };
-  const price = await loadPrice(asset, ctx);
-  if (!price || price.stale) return { ok: false, reason: `The ${asset} price is unavailable or stale right now.` };
+  const price = await loadFreshPrice(asset, ctx);
+  if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
   const { collateralUsd: c, debtUsd: d } = h.health;
   const maxUsd = maxBorrowUsd(c, d, floor, true);
   let units = Number(usdToUnits(maxUsd * 0.995, price.usd, asset));
@@ -586,8 +622,8 @@ async function readWhatIf(intent: Extract<ReadIntent, { kind: "whatif" }>, ctx: 
   if (h.kind === "no_account") return noMargin(subject);
   if (h.kind !== "ok") return unavailable(h.kind === "unavailable" ? h.error : new Error("incomplete account data"), "your account");
   const { collateralUsd: c, debtUsd: d } = h.health;
-  const price = asset ? await loadPrice(asset, ctx) : null;
-  if (!asset || !price || price.stale) return { ok: true, fixedWording: true, data: {}, answer: { headline: `The ${asset ?? "asset"} price is unavailable or stale right now, so I can't work that out.`, facts: [], venue: "margin" } };
+  const price = asset ? await loadFreshPrice(asset, ctx) : null;
+  if (!asset || !price) return { ok: true, fixedWording: true, data: {}, answer: { headline: `The ${asset ?? "asset"} price is unavailable right now, so I can't work that out.`, facts: [], venue: "margin" } };
   const verdict = (hf: number | null): { tone: "good" | "warn" | "bad"; text: string } =>
     hf === null ? { tone: "good", text: "no debt, so no liquidation risk" } : hf < LIQUIDATION_HF ? { tone: "bad", text: "below the 1.10 liquidation line" } : hf < floor ? { tone: "warn", text: `above liquidation but under the ${floor.toFixed(2)} safety floor` } : { tone: "good", text: `at or above the ${floor.toFixed(2)} safety floor` };
 

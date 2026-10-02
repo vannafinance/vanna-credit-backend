@@ -12,7 +12,7 @@ import { humanizeFailure, humanizeMcpError } from "../explain";
 import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
-import { loadHealth, loadPrice, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
+import { loadFreshPrice, loadHealth, loadPrice, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
 import { RISK_INCREASING } from "../plan";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
@@ -44,40 +44,8 @@ export type PreflightResult =
 
 const fail = (code: Extract<PreflightResult, { ok: false }>["code"], message: string): PreflightResult => ({ ok: false, code, message });
 
-/**
- * The fork's oracle prices go stale as its clock drifts, which used to block a write with "try again in a
- * minute". The app's price keeper (`refreshForkPrices`, the same function behind /api/prices/refresh) fixes
- * that on demand, so a stale read refreshes once and re-reads. Throttled so a burst of steps shares one refresh.
- */
-export const priceDeps = {
-  refresh: async (): Promise<void> => {
-    const { refreshForkPrices } = await import("../../solana/server/fork-prices");
-    await refreshForkPrices();
-  },
-  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-  now: () => Date.now(),
-};
-const PRICE_REFRESH_MIN_GAP_MS = 15_000;
-let lastPriceRefresh = 0;
-
-export function resetPriceRefresh(): void {
-  lastPriceRefresh = 0;
-}
-
-export async function loadFreshPrice(asset: string, ctx: ReadCtx) {
-  let price = await loadPrice(asset, ctx);
-  if (price?.stale && priceDeps.now() - lastPriceRefresh >= PRICE_REFRESH_MIN_GAP_MS) {
-    lastPriceRefresh = priceDeps.now();
-    try {
-      await priceDeps.refresh();
-      await priceDeps.sleep(800);
-      price = await loadPrice(asset, ctx);
-    } catch {
-      /* the keeper is best-effort: a still-stale price is refused below, never guessed */
-    }
-  }
-  return price;
-}
+// The stale-price refresh lives in mcp-facts (shared with sizing and strategy); re-exported for the tests.
+export { loadFreshPrice, priceDeps, resetPriceRefresh };
 
 const isNoAccount = (e: unknown) => e instanceof MCPError && e.code === "account_not_found";
 
