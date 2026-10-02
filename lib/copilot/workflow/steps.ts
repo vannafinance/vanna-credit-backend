@@ -136,7 +136,11 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   if (!asset) return fail("invalid", "This step is missing its asset.");
   const price = await loadFreshPrice(asset, ctx);
   if (!price) return fail("unavailable", `The ${asset} price is unavailable, so I can't value this action against your limits.`);
-  if (price.stale) return fail("unavailable", `The ${asset} price is stale right now, so I won't build this. Try again in a minute.`);
+  // A price still flagged stale after the keeper refresh does NOT block the build. On the fork the MCP's oracle
+  // read stays "stale" until its own write build restamps the feeds it needs, so refusing here made every
+  // write wait for a refresh that only the build could trigger. The build is the authoritative check: the MCP
+  // refreshes, simulates, and fails closed (StalePrice) if the price is genuinely too old. The number is still
+  // the current value; only its freshness flag lags, which is irrelevant to the cap checks below.
 
   let amount = step.amount;
   const margin = op === "deposit" || op === "withdraw" || op === "borrow" || op === "repay" || op === "farm_deposit" || op === "farm_redeem" || (op === "swap" && step.slots.mode === "margin");
