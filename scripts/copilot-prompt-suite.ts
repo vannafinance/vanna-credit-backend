@@ -51,7 +51,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // ── Corpus types ────────────────────────────────────────────────────────────
 
 type Kind = "answer" | "clarification" | "unavailable" | "blocked" | "error" | "preview" | "plan_preview" | "needs_login" | "executed" | "needs_wallet_sign";
-type Group = "fresh" | "acct" | "debt" | "near" | "empty" | "exec" | "none" | "api" | "rate";
+type Group = "fresh" | "acct" | "debt" | "near" | "empty" | "exec" | "none" | "api" | "rate" | "unwind";
 
 interface StepExp {
   op: string;
@@ -679,6 +679,8 @@ async function setupGroup(g: Group): Promise<{ w: Wallet | null; notes: string[]
       api: [],
       rate: [],
       exec: [],
+      // Builds its own positions in-file (open, deposit, borrow, farm, earn), then exits them all.
+      unwind: [],
       acct: ["deposit 3 SOL as collateral", "deposit 200 USDC as collateral", "supply 5 SOL"],
       debt: ["deposit 5 SOL as collateral", "borrow 100 USDC"],
       near: ["deposit 2 SOL as collateral", "borrow all the USDC I safely can"],

@@ -115,9 +115,13 @@ const DOMAIN_WORDS = [
   "rate", "rates", "loan", "loans", "utilization", "utilisation", "oracle", "oracles", "price", "prices", "priced", "wallet", "account", "accounts",
   "headroom", "capacity", "safe", "risk", "risky", "history", "transactions", "tx", "credit", "max", "maximum",
   "address", "addresses", "contract", "contracts", "quote", "slippage", "receipt", "receipts", "tvl", "vault", "vaults",
+  "unwind", "unwinds", "unwinding", "deleverage", "deleveraging",
 ] as const;
 
 const DOMAIN_WORD_RE = new RegExp(`\\b(?:${[...DOMAIN_WORDS].sort((a, b) => b.length - a.length).join("|")})\\b`, "i");
+
+/** Exit requests that name no product word: "close everything", "exit all", "close out everything". */
+const EXIT_PHRASE_RE = /^\W*(?:(?:please|pls|can\s+you|could\s+you)\s+)?(?:close|exit|unwind)\s+(?:out\s+)?(?:everything|it\s+all|all)\b/i;
 
 /** Edit distance with adjacent transposition ("waht" -> "what" counts as one edit). */
 function editDistance(a: string, b: string): number {
@@ -185,6 +189,7 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
 
   if (SELF_REFERENTIAL.some((re) => re.test(m))) return { allow: true, reason: "allow:self" };
   if (DOMAIN_WORD_RE.test(m)) return { allow: true, reason: "allow:domain_word" };
+  if (EXIT_PHRASE_RE.test(m)) return { allow: true, reason: "allow:exit_phrase" };
   if (hasMisspelledDomainWord(m)) return { allow: true, reason: "allow:domain_word_typo" };
   if (/^(?:hi|hello|hey|thanks|thank you|ok|okay|yes|no|gm)\.?!?$/i.test(m)) return { allow: true, reason: "allow:greeting" };
   // "and 2x?" only makes sense after a Vanna turn; with no product word it still needs that context.

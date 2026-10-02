@@ -119,10 +119,11 @@ live("read answers from the live MCP", () => {
     await expect(submitWorkflow(res.workflow_id!, { step_n: 1, signed_tx: Buffer.from(tx.serialize()).toString("base64") }, user)).rejects.toMatchObject({ code: "tx_mismatch" });
   }, T);
 
-  it("insufficient funds is explained from the simulation", async () => {
+  it("insufficient funds is explained before anything is built", async () => {
+    // The wallet funding check (workflow/funding.ts) answers from the live balance before the MCP simulates.
     const res = await handleChat({ req: { message: "supply 10 USDC" }, user });
-    expect(res.kind).toBe("error");
-    expect(res.message).toMatch(/does not hold enough/);
+    expect(res.kind).toBe("blocked");
+    expect(res.message).toMatch(/but this needs 10 USDC/);
   }, T);
 });
 

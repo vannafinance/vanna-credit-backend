@@ -1,0 +1,18 @@
+{
+  "category": "12_new_features",
+  "group": "unwind",
+  "prompts": [
+    { "id": "nf-001", "prompt": "swap 5 SOL to SOL", "kinds": ["blocked"], "match": ["two different assets"], "why": "same-asset swap explains itself instead of a generic question" },
+    { "id": "nf-002", "prompt": "unwind my positions", "kinds": ["clarification", "blocked"], "match": ["no open positions"], "why": "unwind on a wallet with nothing open says so, builds nothing" },
+    { "id": "nf-003", "prompt": "buy 5 USDC with SOL", "kinds": ["preview", "unavailable", "error"], "plan": { "steps": [{ "op": "swap", "asset": "SOL", "to_asset": "USDC" }] }, "match": ["receive at least 5 USDC"], "why": "exact-output swap sizes the input so the minimum received covers 5 USDC" },
+    { "id": "nf-004", "prompt": "swap SOL to get 5 USDC", "kinds": ["preview", "unavailable", "error"], "plan": { "steps": [{ "op": "swap", "asset": "SOL", "to_asset": "USDC" }] }, "execute": true, "why": "exact-output wallet swap executes" },
+    { "id": "nf-005", "prompt": "open a margin account", "kinds": ["preview", "answer"], "execute": true, "why": "setup: account" },
+    { "id": "nf-006", "prompt": "deposit 2 SOL as collateral", "kinds": ["preview"], "execute": true, "why": "setup: collateral" },
+    { "id": "nf-007", "prompt": "lever 0.3 JupSOL 2x borrowing USDC", "kinds": ["plan_preview", "clarification", "blocked"], "execute": true, "why": "JupSOL lever: the margin swap into JupSOL now fits one transaction (MCP protocol lookup table)" },
+    { "id": "nf-008", "prompt": "farm 0.1 SOL on kamino", "kinds": ["preview"], "execute": true, "why": "setup: Kamino position" },
+    { "id": "nf-009", "prompt": "supply 10 USDC", "kinds": ["preview"], "execute": true, "why": "setup: Earn position" },
+    { "id": "nf-010", "prompt": "can you deposit 1 jupSOL and borrow USDC again with 3x leverage?", "kinds": ["plan_preview", "clarification", "blocked"], "forbid": ["has to be its own request"], "why": "deposit-and-lever phrasing is one lever request" },
+    { "id": "nf-011", "prompt": "close everything", "kinds": ["plan_preview", "clarification", "blocked"], "match": ["Unwind:"], "execute": true, "why": "unwind: Kamino -> repay -> withdraw -> Earn, executed end to end" },
+    { "id": "nf-012", "prompt": "what are all my positions", "kinds": ["answer"], "why": "after the unwind the account is empty" }
+  ]
+}

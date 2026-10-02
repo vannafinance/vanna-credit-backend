@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { evaluateFirewall } from "../domain-firewall";
 import { humanizeFailure } from "../explain";
 import { mcpCall, mcpTiming, resetMcpClient } from "../mcp-client";
 import { labelFor, type StepSpec } from "../plan";
@@ -35,6 +36,16 @@ describe("Kamino redeem names receipt tokens, not the underlying", () => {
 
   it("never prints the receipt amount as SOL", () => {
     expect(labelFor(step("86.616454"))).not.toMatch(/86\.616454 SOL/);
+  });
+});
+
+describe("the domain firewall lets exit requests through", () => {
+  it.each(["close everything", "please close everything", "exit all", "unwind my positions", "can you close out everything?", "deleverage me"])("%s", (m) => {
+    expect(evaluateFirewall(m).allow).toBe(true);
+  });
+
+  it("still blocks unrelated chat", () => {
+    for (const m of ["close the door", "what is the weather", "exit vim"]) expect(evaluateFirewall(m).allow).toBe(false);
   });
 });
 
