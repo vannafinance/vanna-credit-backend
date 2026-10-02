@@ -70,16 +70,25 @@ export function planDigest(wallet: string, hfFloor: number, steps: StepSpec[]): 
 }
 
 /**
- * Assets a swap INSIDE the margin account cannot buy: the margin-swap transaction (the Jupiter route plus the
- * account list the Vanna program needs) exceeds Solana's size limit for these liquid-staking tokens at any
- * amount. Measured on the live fork 2026-10-02: margin swaps from them, and wallet swaps into them, work.
+ * Assets a swap INSIDE the margin account cannot buy because the transaction would exceed Solana's size limit.
  * A lever on one of them would deposit and borrow and then fail on the swap, so it is refused up front.
+ *
+ * Empty since the MCP builds margin swaps with the protocol lookup table and a size-capped Jupiter route
+ * (Vanna_MCP_Solana vanna_core/protocol_alt.py, contracts/swap.py): JupSOL and JitoSOL, which always overflowed
+ * before, now fit with room to spare. Kept as a safety valve: add a symbol here if a pair is ever unbuildable.
  */
-export const MARGIN_SWAP_BLOCKED_TARGETS: ReadonlySet<string> = new Set(["JupSOL", "JitoSOL"]);
+export const MARGIN_SWAP_BLOCKED_TARGETS: Set<string> = new Set();
 
 export const marginSwapBlockedMessage = (asset: string): string =>
   `A swap that buys ${asset} inside your margin account is too large for one Solana transaction on this network, at any amount. ` +
   `Swap in your wallet instead ("swap 20 USDC to ${asset}"), then deposit it as collateral.`;
+
+/**
+ * A swap sized by what the user wants to RECEIVE carries its amount as "out:<target>" until the step is built;
+ * the input is then sized from live quotes so the minimum received is at least the target.
+ */
+export const OUT_PREFIX = "out:";
+export const outTarget = (amount: string | null): string | null => (amount && amount.startsWith(OUT_PREFIX) ? amount.slice(OUT_PREFIX.length) : null);
 
 const fmtQty = (amount: string | null, asset: string | null): string => {
   if (!amount && !asset) return "";
@@ -107,6 +116,11 @@ export function labelFor(s: StepSpec): string {
       return `Repay ${q} ${s.slots.source === "margin" ? "from your margin balance" : "from your wallet"}`;
     case "swap": {
       const to = String(s.slots.to_asset ?? "");
+      const target = outTarget(s.amount);
+      if (target) {
+        const where = s.slots.mode === "margin" ? "inside your margin account" : "in your wallet";
+        return `Swap ${s.asset ?? ""} to receive at least ${target} ${to} ${where}`;
+      }
       return s.slots.mode === "margin"
         ? `Swap ${q} to ${to} inside your margin account`
         : `Swap ${q} to ${to} in your wallet`;

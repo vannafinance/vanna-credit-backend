@@ -18,7 +18,9 @@ import { SOL_FEE_RESERVE } from "./steps";
 function spendsWallet(s: StepSpec): boolean {
   if (s.kind !== "write") return false;
   if (s.op === "deposit" || s.op === "earn_supply") return true;
-  if (s.op === "repay" || s.op === "swap") return String(s.slots?.source ?? "wallet") !== "margin";
+  if (s.op === "repay") return String(s.slots?.source ?? "wallet") !== "margin";
+  // A swap's balance lives in `mode` (wallet | margin); a margin swap spends margin collateral, not the wallet.
+  if (s.op === "swap") return String(s.slots?.mode ?? "wallet") !== "margin";
   return false;
 }
 

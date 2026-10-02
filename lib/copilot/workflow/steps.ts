@@ -12,8 +12,8 @@ import { humanizeFailure, humanizeMcpError } from "../explain";
 import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
-import { loadFreshPrice, loadHealth, loadPrice, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
-import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, RISK_INCREASING } from "../plan";
+import { loadFreshPrice, loadHealth, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
+import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, RISK_INCREASING } from "../plan";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
 import { healFromEnvelope, isSwapBuild, MAX_SWAP_HEALS, STALE_FORK_SWAP, swapHealDeps } from "./swap-heal";
@@ -65,6 +65,47 @@ export async function walletSpendable(asset: string, ctx: ReadCtx): Promise<numb
 
 function keep(amount: string, asset: string): string {
   return floorDecimals(Number(amount), tokenDecimals(asset));
+}
+
+/** Round UP to the token's decimals (an input sized to cover a target must never round below it). */
+function ceilUnits(value: number, asset: string): string {
+  const dp = tokenDecimals(asset);
+  const f = 10 ** dp;
+  return (Math.ceil(value * f - 1e-9) / f).toFixed(dp).replace(/\.?0+$/, "");
+}
+
+const EXACT_OUT_ROUNDS = 4;
+
+/**
+ * The input amount of `from` whose quoted MINIMUM output (after slippage) is at least `target` of `to`.
+ * Starts from oracle prices plus the slippage allowance, then corrects from real quotes. The MCP builds swaps
+ * by input amount; this keeps "receive at least N" honest without a separate exact-output route.
+ */
+export async function sizeExactOut(
+  from: string,
+  to: string,
+  target: number,
+  slippageBps: number,
+  ctx: ReadCtx,
+): Promise<{ ok: true; amountIn: string; minOut: string } | { ok: false; message: string }> {
+  if (!(target > 0)) return { ok: false, message: "The amount to receive has to be above zero." };
+  const [pFrom, pTo] = await Promise.all([loadFreshPrice(from, ctx), loadFreshPrice(to, ctx)]);
+  if (!pFrom || !pTo) return { ok: false, message: `I couldn't price ${from} and ${to} right now, so I can't size this swap.` };
+  let amountIn = ((target * pTo.usd) / pFrom.usd) * (1 + slippageBps / 10_000) * 1.005;
+  for (let round = 0; round < EXACT_OUT_ROUNDS; round++) {
+    const text = ceilUnits(amountIn, from);
+    let minOut: number | null;
+    try {
+      const q = await mcp.swapQuote({ from_asset: from, to_asset: to, amount: text, slippage_bps: slippageBps }, ctx);
+      minOut = num(q.min_out_amount);
+    } catch (err) {
+      return { ok: false, message: humanizeMcpError(err).message };
+    }
+    if (minOut === null || !(minOut > 0)) return { ok: false, message: "The swap route returned no usable quote." };
+    if (minOut + 1e-12 >= target) return { ok: true, amountIn: text, minOut: String(minOut) };
+    amountIn = Number(text) * (target / minOut) * 1.002;
+  }
+  return { ok: false, message: `I couldn't find a quote that delivers at least ${target} ${to} right now. Try again in a moment.` };
 }
 
 /**
@@ -239,6 +280,20 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
     case "swap": {
       const to = String(step.slots.to_asset ?? "");
       if (!to) return fail("invalid", "This swap is missing the asset to buy.");
+      const target = outTarget(amount);
+      if (target) {
+        // "Swap SOL to get 100 USDC": size the input from live quotes so the MINIMUM received covers the target.
+        const sized = await sizeExactOut(asset, to, Number(target), num(step.slots.slippage_bps) ?? 100, ctx);
+        if (!sized.ok) return fail("unavailable", sized.message);
+        const available =
+          step.slots.mode === "margin" ? (health?.collateral.find((r) => r.symbol === asset)?.units ?? 0) : ((await walletSpendable(asset, ctx)) ?? 0);
+        const where = step.slots.mode === "margin" ? "your margin account holds" : "your wallet can spend";
+        if (available + 1e-9 < Number(sized.amountIn)) {
+          return fail("invalid", `To receive at least ${target} ${to} you need about ${sized.amountIn} ${asset}, and ${where} ${keep(String(available), asset)} ${asset}.`);
+        }
+        amount = sized.amountIn;
+        notes.push(`Sized from a live quote so you receive at least ${target} ${to}: spending ${sized.amountIn} ${asset}, minimum received ${sized.minOut} ${to}.`);
+      }
       if (amount === "all") {
         if (step.slots.mode === "margin") {
           const row = health?.collateral.find((r) => r.symbol === asset);

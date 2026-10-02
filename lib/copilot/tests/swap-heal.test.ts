@@ -1,5 +1,5 @@
 import { PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({ call: vi.fn(), price: vi.fn(), consume: vi.fn() }));
 vi.mock("../mcp-client", async (orig) => ({ ...(await orig<typeof import("../mcp-client")>()), mcp: { call: m.call, price: m.price } }));
@@ -7,6 +7,7 @@ vi.mock("../limits", async (orig) => ({ ...(await orig<typeof import("../limits"
 
 import type { ReadCtx } from "../mcp-facts";
 import { humanizeFailure } from "../explain";
+import { MARGIN_SWAP_BLOCKED_TARGETS } from "../plan";
 import { buildStepTx, loadFreshPrice, preflightStep, priceDeps, resetPriceRefresh, type Prepared } from "../workflow/steps";
 import { planLever } from "../workflow/strategy";
 import type { StoredStep } from "../workflow/types";
@@ -95,10 +96,20 @@ describe("a swap that failed on stale fork pools is healed and rebuilt", () => {
   });
 });
 
-describe("swaps that cannot fit in one Solana transaction are refused up front", () => {
+describe("the margin-swap safety valve (MARGIN_SWAP_BLOCKED_TARGETS)", () => {
   const stored = (slots: Record<string, unknown>, asset = "USDC") => ({ kind: "write", op: "swap", asset, amount: "20", slots, status: "pending" }) as unknown as StoredStep;
+  beforeEach(() => {
+    MARGIN_SWAP_BLOCKED_TARGETS.add("JupSOL");
+    MARGIN_SWAP_BLOCKED_TARGETS.add("JitoSOL");
+  });
+  afterEach(() => MARGIN_SWAP_BLOCKED_TARGETS.clear());
 
-  it("a margin swap INTO JupSOL or JitoSOL is refused before anything is built", async () => {
+  it("is empty by default now that the MCP fits these swaps", () => {
+    MARGIN_SWAP_BLOCKED_TARGETS.clear();
+    expect(MARGIN_SWAP_BLOCKED_TARGETS.size).toBe(0);
+  });
+
+  it("a margin swap INTO a blocked asset is refused before anything is built", async () => {
     for (const to of ["JupSOL", "JitoSOL"]) {
       const r = await preflightStep(stored({ to_asset: to, mode: "margin" }), ctx);
       expect(r.ok).toBe(false);
@@ -110,7 +121,7 @@ describe("swaps that cannot fit in one Solana transaction are refused up front",
     expect(m.call).not.toHaveBeenCalled();
   });
 
-  it("a lever on JupSOL or JitoSOL is refused with a SOL alternative, before anything runs", async () => {
+  it("a lever on a blocked asset is refused with a SOL alternative, before anything runs", async () => {
     for (const asset of ["JupSOL", "JitoSOL"]) {
       const r = await planLever({ asset, leverage: 3, borrow_asset: "USDC", amount: "1", min_hf: null } as never, ctx);
       expect(r.ok).toBe(false);

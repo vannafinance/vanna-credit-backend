@@ -11,6 +11,7 @@
 import {
   LEND_BORROW_ASSETS,
   PRODUCT_ASSETS,
+  normalizeAsset,
   parseAmountToken,
   parseClauseFacts,
   parseMinHf,
@@ -222,6 +223,10 @@ export function routeClause(clause: string): Intent {
   }
 
 
+  // ── strategy: unwind / close everything ──
+  const unwind = unwindIntent(lower);
+  if (unwind && command) return { lane: "unwind", unwind };
+
   // ── strategy: leverage ──
   if ((/\b(?:lever|leverage|leveraged|loop|long)\b/.test(lower) && f.leverage) || (f.leverage && f.assets.length && /\b(?:go|get|want|make|turn|open)\b/.test(lower) && command && /\bx\b|×|times/.test(lower))) {
     // "borrow USDC with 3x leverage against my JupSOL": the stable being borrowed is the funding, not the asset to lever.
@@ -239,6 +244,13 @@ export function routeClause(clause: string): Intent {
     // ── account lifecycle ──
     if (/\bclose\b/.test(lower) && /\baccount\b/.test(lower)) return writeIntent("close_account", f, lower);
     if (/\b(?:open|create|set\s*up|make|start)\b/.test(lower) && /\baccount\b/.test(lower)) return writeIntent("create_account", f, lower);
+
+    // ── swap sized by what you receive: "swap SOL to get 100 USDC", "buy 100 USDC with SOL" ──
+    const xo = exactOutSwap(lower, f);
+    if (xo && /\b(?:swap|convert|exchange|trade|buy|sell(?:ing)?|using|with)\b/.test(lower)) {
+      const source = /\b(?:margin|collateral|inside|in my account)\b/.test(lower) ? "margin" : "wallet";
+      return writeIntent("swap", f, lower, { asset: xo.from, to_asset: xo.to, source, amount: { kind: "out", value: xo.value } });
+    }
 
     // ── swap ──
     if (/\b(?:swap|convert|exchange)\b|\btrade\b.+\bfor\b/.test(lower)) {
@@ -289,6 +301,36 @@ export function routeClause(clause: string): Intent {
   }
 
   return routeRead(lower, f);
+}
+
+/** "close everything", "unwind my positions", "exit all my positions", "close out my margin positions". */
+const UNWIND =
+  /\b(?:unwind|wind\s+down|close\s+(?:out\s+)?(?:everything|all\b|(?:all\s+)?(?:of\s+)?my\s+(?:\w+\s+)?positions?)|exit\s+(?:everything|all\b|(?:all\s+)?(?:of\s+)?my\s+(?:\w+\s+)?positions?)|get\s+out\s+of\s+everything|pull\s+everything\s+out)\b/;
+
+function unwindIntent(lower: string): import("./intent").UnwindIntent | null {
+  if (!UNWIND.test(lower)) return null;
+  const scope = /\bearn\b/.test(lower) && !/\b(?:margin|kamino|farm|debt)\b/.test(lower)
+    ? "earn"
+    : /\b(?:kamino|farm)\b/.test(lower) && !/\b(?:margin|earn|debt)\b/.test(lower)
+      ? "farm"
+      : /\b(?:margin|debt|leverage|lever|borrow(?:ing|s)?)\b/.test(lower) && !/\bearn\b/.test(lower)
+        ? "margin"
+        : "all";
+  return { scope, close_account: /\baccount\b/.test(lower) && /\bclose\b/.test(lower) };
+}
+
+/** The amount names what is RECEIVED: "get 100 USDC", "receive at least 2 SOL", "buy exactly 50 USDT". */
+const EXACT_OUT = /\b(?:get|receive|end\s+up\s+with|buy)\s+(?:exactly\s+|at\s+least\s+|precisely\s+|about\s+)?(\d[\d.,]*k?)\s*([a-z][a-z0-9]*)\b/i;
+
+function exactOutSwap(lower: string, f: ParsedClause): { from: Asset; to: Asset; value: string } | null {
+  const m = lower.match(EXACT_OUT);
+  if (!m) return null;
+  const to = normalizeAsset(m[2]);
+  if (!to) return null;
+  const amount = parseAmountToken(m[1]);
+  if (!amount.ok) return null;
+  const from = f.assets.find((a) => a !== to) ?? null;
+  return from ? { from, to, value: amount.value } : null;
 }
 
 function swapAssets(lower: string, f: ParsedClause): { from: Asset; to: Asset } | null {
@@ -393,6 +435,12 @@ function fromPrevious(clause: string, prev: WriteIntent | null): string | null {
 export function keywordRoute(message: string): Intent {
   const clauses = splitClauses(message);
   if (clauses.length <= 1) return routeClause(message);
+
+  // "Close everything and unwind my positions" is one exit request, not a chain of clauses.
+  if (UNWIND.test(message.toLowerCase())) {
+    const whole = routeClause(message);
+    if (whole.lane === "unwind" || whole.lane === "refuse") return whole;
+  }
 
   const asLever = mergeDepositLever(message, clauses);
   if (asLever) return routeClause(asLever);

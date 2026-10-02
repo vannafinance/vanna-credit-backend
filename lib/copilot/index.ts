@@ -17,13 +17,14 @@ import { fmtAmount } from "./explain";
 import type { AmountSpec, Intent, WriteIntent } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens } from "./limits";
 import { loadHealth, runRead, type ReadCtx } from "./mcp-facts";
-import { MAX_PLAN_STEPS, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
+import { MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { routeMessage } from "./router";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
 import { wordAnswer } from "./vertex";
 import { createWorkflow, toPlanView, WorkflowError } from "./workflow";
 import { isConversationId, savePending, takePending } from "./workflow/pending";
 import { planLever, type PlannedWorkflow } from "./workflow/strategy";
+import { planUnwind } from "./workflow/unwind";
 import { checkFunding } from "./workflow/funding";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
@@ -160,9 +161,10 @@ async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
       if (t.surface === "assistant") return { kind: "blocked", message: "The page guide only explains and reads. Open the Copilot workspace to prepare transactions.", ...base };
       return handleWrite(intent.steps, t);
     }
-    case "lever": {
+    case "lever":
+    case "unwind": {
       if (t.surface === "assistant") return { kind: "blocked", message: "The page guide only explains and reads. Open the Copilot workspace to prepare transactions.", ...base };
-      const r = await planLever(intent.lever, t.ctx);
+      const r = intent.lane === "lever" ? await planLever(intent.lever, t.ctx) : await planUnwind(intent.unwind, t.ctx);
       if (!r.ok) {
         if (r.options?.length) {
           const saved = await savePending(t.conversationId, t.user, r.options);
@@ -182,6 +184,7 @@ async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ 
   if (!a) return { ok: true, amount: null };
   if (a.kind === "exact") return { ok: true, amount: a.value };
   if (a.kind === "all") return { ok: true, amount: "all" };
+  if (a.kind === "out") return { ok: true, amount: `${OUT_PREFIX}${a.value}` };
   if (index > 0) return { ok: false, message: "A percentage can only be used on the first step, because later amounts depend on earlier steps. Give an exact amount or say \"all\"." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
   const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.source === "margin" }, t.ctx);
@@ -233,11 +236,11 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
       if (short > 1e-9) {
         const spend = await walletSpendable(firstMargin.asset, t.ctx);
         if (spend === null || spend + 1e-9 < short) {
-          return { kind: "blocked", message: `Kamino farm supplies from your margin balance, which holds ${fmtAmount(held, firstMargin.asset)} ${firstMargin.asset}. Your wallet can't cover the ${fmtAmount(short, firstMargin.asset)} difference.`, ...base };
+          return { kind: "blocked", message: `Kamino farm supplies from your margin balance, which holds ${fmtAmount(held, firstMargin.asset)}. Your wallet can't cover the ${fmtAmount(short, firstMargin.asset)} difference.`, ...base };
         }
         const dep: StepSpec = { kind: "write", op: "deposit", asset: firstMargin.asset, amount: String(Math.ceil(short * 1e9) / 1e9), slots: {} };
         steps.splice(steps.indexOf(firstMargin), 0, dep);
-        extras.push(`Your margin balance holds ${fmtAmount(held, firstMargin.asset)} ${firstMargin.asset}, so the first step deposits the ${fmtAmount(dep.amount as string, firstMargin.asset)} difference from your wallet.`);
+        extras.push(`Your margin balance holds ${fmtAmount(held, firstMargin.asset)}, so the first step deposits the ${fmtAmount(dep.amount as string, firstMargin.asset)} difference from your wallet.`);
       }
     }
   }

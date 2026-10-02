@@ -63,7 +63,9 @@ export function receiptUnderlying(word: string): Asset | null {
 export type AmountSpec =
   | { kind: "exact"; value: string }
   | { kind: "all" }
-  | { kind: "pct"; pct: number };
+  | { kind: "pct"; pct: number }
+  /** swap only: receive at least this much of `to_asset`; the input is sized from live quotes. */
+  | { kind: "out"; value: string };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
@@ -200,6 +202,13 @@ export interface LeverIntent {
   min_hf?: number | null;
 }
 
+/** "Close everything": exit positions in a safe order. `scope` narrows it to one venue. */
+export interface UnwindIntent {
+  scope: "all" | "margin" | "earn" | "farm";
+  /** Also close the (then empty) margin account. Only when the user names the account. */
+  close_account: boolean;
+}
+
 /** A pick the user can make; `apply` is the fully specified intent the server runs when they do. */
 export interface AskOption {
   label: string;
@@ -212,6 +221,7 @@ export type Intent =
   | { lane: "write"; write: WriteIntent }
   | { lane: "chain"; steps: Array<{ write: WriteIntent } | { report: true }> }
   | { lane: "lever"; lever: LeverIntent }
+  | { lane: "unwind"; unwind: UnwindIntent }
   | { lane: "ask"; question: string; options?: AskOption[] }
   | { lane: "refuse"; reason: string; message: string }
   | { lane: "unknown" };
@@ -273,6 +283,12 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
       if (tooFine) return fail(tooFine);
     }
     if (w.amount.kind === "pct" && !(w.amount.pct > 0 && w.amount.pct <= 100)) return fail("Percentages must be between 0 and 100.");
+    if (w.amount.kind === "out") {
+      if (w.op !== "swap") return fail("Only a swap can be sized by the amount you want to receive.");
+      if (parseDecimalString(w.amount.value) === null) return fail("That amount is not valid.");
+      const tooFine = decimalsProblem(w.amount.value, w.to_asset ?? null);
+      if (tooFine) return fail(tooFine);
+    }
   }
   return { ok: true, value: w };
 }
