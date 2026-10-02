@@ -16,8 +16,16 @@ import { getConnection } from "../../solana/connection";
 import { healStaleDexPools } from "../../solana/fork-heal";
 
 /** Swap-build failures that mean "fork pool state is stale", not "this swap is wrong". */
-export const STALE_FORK_SWAP =
-  /AccountNotEnoughKeys|\b3005\b|0x1771|\b6001\b|SlippageToleranceExceeded|0x1788|\b6024\b|0xbbd|bin_array|stale[_ ]pool|stale[_ ]bin|invalid index/i;
+export const STALE_FORK_SWAP = new RegExp(
+  [
+    String.raw`AccountNotEnoughKeys|\b3005\b|0x1771|\b6001\b|SlippageToleranceExceeded|0x1788|\b6024\b|0x1787|\b6023\b|0xbbd`,
+    String.raw`bin_array|tick_?array|stale[_ ]pool|stale[_ ]bin|invalid index`,
+    // Any failure raised by a concentrated-liquidity AMM whose cloned state drifts on the fork (the same programs
+    // lib/solana/fork-heal.ts re-clones): Orca Whirlpool, Raydium CLMM, Meteora DLMM.
+    String.raw`(?:whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc|CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK|LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) failed`,
+  ].join("|"),
+  "i",
+);
 
 /** How many times a swap build is retried after a heal. */
 export const MAX_SWAP_HEALS = 2;

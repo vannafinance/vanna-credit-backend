@@ -57,6 +57,14 @@ describe("a swap that failed on stale fork pools is healed and rebuilt", () => {
     expect(m.consume).toHaveBeenCalledTimes(1); // one write-build against the rate limit, not one per retry
   });
 
+  it("heals an Orca Whirlpool tick-array failure (6023 / 0x1787), seen live on the fork", async () => {
+    const raw = "TransactionErrorInstructionError((5, Tagged(Custom(InstructionErrorCustom(6023)))))\nProgram whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc failed: custom program error: 0x1787";
+    m.call.mockResolvedValueOnce(failed(raw)).mockResolvedValueOnce(success());
+    expect((await buildStepTx(prepared(), ctx)).ok).toBe(true);
+    expect(swapHealDeps.heal).toHaveBeenCalledTimes(1);
+    expect(humanizeFailure(raw)).toMatch(/pool data looks out of date/);
+  });
+
   it("retries a slippage failure too (a fresh quote usually fits)", async () => {
     m.call.mockResolvedValueOnce(failed("custom program error: 0x1771")).mockResolvedValueOnce(success());
     expect((await buildStepTx(prepared(), ctx)).ok).toBe(true);
