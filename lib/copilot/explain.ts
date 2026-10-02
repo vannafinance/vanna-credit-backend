@@ -41,7 +41,7 @@ export function fmtFractionPct(v: string | number): string {
 const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/insufficient funds|InsufficientFunds|0x1\b/i, "Your wallet does not hold enough of that asset (or enough SOL for fees) for this action."],
   [/StalePrice|0x178b|stale_price|price_unavailable/i, "A price feed is stale right now, so the program refuses to use it. Try again in a minute."],
-  [/6024|0x1788|stale[_ ]pool|stale[_ ]bin/i, "The swap route's pool data looks out of date on this test network, so the route failed its simulation. Try again in a moment, or try a smaller amount."],
+  [/6024|0x1788|stale[_ ]pool|stale[_ ]bin|AccountNotEnoughKeys|\b3005\b/i, "The swap route's pool data looks out of date on this test network, so the route failed its simulation. Try again in a moment, or try a smaller amount."],
   [/SlippageToleranceExceeded|0x1771|6001/i, "The swap price moved past the allowed slippage. Try again for a fresh quote."],
   [/would breach|HealthFactor|0x1790|unhealthy/i, "The action would push the account below the protocol's health limit."],
   [/account_not_found|AccountNotInitialized|3012/i, "You do not have a margin account yet."],
@@ -51,12 +51,18 @@ const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/borrow_cap|supply_cap|cap exceeded/i, "That would exceed the pool's cap."],
 ];
 
+const RAW_RUNTIME_ERROR = /TransactionError|InstructionError|Custom\(|ProgramFailedToComplete|custom program error|Tagged\(/i;
+
 /** One short human sentence for a failed simulation/MCP error (the raw reason can be a screen of logs). */
 export function humanizeFailure(reason: string | null | undefined): string {
   const r = (reason ?? "").trim();
   if (!r) return "The action could not be prepared.";
   for (const [re, text] of SIM_PATTERNS) if (re.test(r)) return text;
   const firstLine = r.split("\n").find((l) => l.trim()) ?? r;
+  // A raw runtime error ("TransactionErrorInstructionError((6, Custom(...)))") means nothing to a user.
+  if (RAW_RUNTIME_ERROR.test(firstLine)) {
+    return "The network rejected this step when it was simulated. Try again in a moment, or try a smaller amount.";
+  }
   return firstLine.length > 220 ? `${firstLine.slice(0, 217)}...` : firstLine;
 }
 

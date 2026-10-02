@@ -182,13 +182,17 @@ async function iamHeaders(): Promise<Record<string, string>> {
 async function post(headers: Record<string, string>, body: unknown): Promise<Response> {
   const iam = await iamHeaders();
   try {
-    return await fetch(copilotConfig.mcpBaseUrl, {
+    const res = await fetch(copilotConfig.mcpBaseUrl, {
       method: "POST",
       headers: { ...headers, ...iam },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(copilotConfig.mcpTimeoutMs),
       cache: "no-store",
     });
+    // Read the body inside the same try: the response head can arrive early while the answer is slow, and a
+    // timeout while reading it used to escape as a raw "operation was aborted" error that was never retried.
+    const text = await res.text();
+    return new Response(text === "" ? null : text, { status: res.status, headers: res.headers });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const timedOut = /abort|timeout/i.test(message);

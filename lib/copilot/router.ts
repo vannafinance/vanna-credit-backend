@@ -241,7 +241,13 @@ export function routeClause(clause: string): Intent {
     // ── swap ──
     if (/\b(?:swap|convert|exchange)\b|\btrade\b.+\bfor\b/.test(lower)) {
       const order = swapAssets(lower, f);
-      if (!order) return ask("Which asset do you want to swap, into which asset, and how much?");
+      if (!order) {
+        // "swap 5 SOL to SOL": one asset named on both sides is a different problem from a missing one.
+        const named = f.assets.length === 1 ? f.assets[0] : null;
+        const twice = named ? (lower.match(new RegExp(`\\b${named.toLowerCase()}\\b`, "g")) ?? []).length >= 2 : false;
+        if (twice && /\b(?:to|for|into)\b/.test(lower)) return refuse("Pick two different assets to swap.");
+        return ask("Which asset do you want to swap, into which asset, and how much?");
+      }
       const source = /\b(?:margin|collateral|inside|in my account)\b/.test(lower) ? "margin" : "wallet";
       return writeIntent("swap", f, lower, { asset: order.from, to_asset: order.to, source });
     }

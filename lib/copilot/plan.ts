@@ -101,8 +101,12 @@ export function labelFor(s: StepSpec): string {
     }
     case "farm_deposit":
       return `Supply ${q} to Kamino (farm) from your margin balance`;
-    case "farm_redeem":
-      return `Redeem ${q} from Kamino (farm) back to margin`;
+    case "farm_redeem": {
+      // The amount is in receipt tokens (kSOL), not the underlying, so name them rather than print "86.6 SOL".
+      const k = s.asset ? `k${s.asset}` : "receipt tokens";
+      const what = !s.amount || s.amount === "all" ? `all your ${k}` : `${s.amount} ${k}`;
+      return `Redeem ${what} from Kamino (farm) back to margin`;
+    }
     case "report":
       return "Report your health factor";
   }

@@ -16,6 +16,7 @@ import { loadHealth, loadPrice, runRead, sizeSafeBorrow, sizeSafeWithdraw, type 
 import { RISK_INCREASING } from "../plan";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
+import { healFromEnvelope, isSwapBuild, MAX_SWAP_HEALS, STALE_FORK_SWAP, swapHealDeps } from "./swap-heal";
 import type { StoredStep } from "./types";
 
 /** SOL the MCP keeps back from wallet "max" for fees and rent (TOOLS_CATALOGUE §2.2). */
@@ -42,6 +43,41 @@ export type PreflightResult =
   | { ok: false; code: "limit" | "risk" | "unavailable" | "invalid" | "no_account"; message: string; limit?: LimitDenied };
 
 const fail = (code: Extract<PreflightResult, { ok: false }>["code"], message: string): PreflightResult => ({ ok: false, code, message });
+
+/**
+ * The fork's oracle prices go stale as its clock drifts, which used to block a write with "try again in a
+ * minute". The app's price keeper (`refreshForkPrices`, the same function behind /api/prices/refresh) fixes
+ * that on demand, so a stale read refreshes once and re-reads. Throttled so a burst of steps shares one refresh.
+ */
+export const priceDeps = {
+  refresh: async (): Promise<void> => {
+    const { refreshForkPrices } = await import("../../solana/server/fork-prices");
+    await refreshForkPrices();
+  },
+  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  now: () => Date.now(),
+};
+const PRICE_REFRESH_MIN_GAP_MS = 15_000;
+let lastPriceRefresh = 0;
+
+export function resetPriceRefresh(): void {
+  lastPriceRefresh = 0;
+}
+
+export async function loadFreshPrice(asset: string, ctx: ReadCtx) {
+  let price = await loadPrice(asset, ctx);
+  if (price?.stale && priceDeps.now() - lastPriceRefresh >= PRICE_REFRESH_MIN_GAP_MS) {
+    lastPriceRefresh = priceDeps.now();
+    try {
+      await priceDeps.refresh();
+      await priceDeps.sleep(800);
+      price = await loadPrice(asset, ctx);
+    } catch {
+      /* the keeper is best-effort: a still-stale price is refused below, never guessed */
+    }
+  }
+  return price;
+}
 
 const isNoAccount = (e: unknown) => e instanceof MCPError && e.code === "account_not_found";
 
@@ -98,7 +134,7 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   }
 
   if (!asset) return fail("invalid", "This step is missing its asset.");
-  const price = await loadPrice(asset, ctx);
+  const price = await loadFreshPrice(asset, ctx);
   if (!price) return fail("unavailable", `The ${asset} price is unavailable, so I can't value this action against your limits.`);
   if (price.stale) return fail("unavailable", `The ${asset} price is stale right now, so I won't build this. Try again in a minute.`);
 
@@ -286,12 +322,18 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
       const receipt = pos ? num(pos.receipt_balance) : null;
       const underlying = pos ? num(pos.underlying_amount) : null;
       if (!pos || receipt === null || underlying === null || !(receipt > 0)) return fail("invalid", `You have no Kamino ${asset} position to redeem.`);
+      let underlyingOut: number;
       if (amount === "all" || Number(amount) >= receipt) {
         amount = String(pos.receipt_balance);
+        underlyingOut = underlying;
         usd = underlying * price.usd;
       } else {
-        usd = ((Number(amount) / receipt) * underlying) * price.usd;
+        underlyingOut = (Number(amount) / receipt) * underlying;
+        usd = underlyingOut * price.usd;
       }
+      // The amount is in k${asset} receipt tokens, not the underlying: say what it is worth so it is not read as SOL.
+      const worth = Number(underlyingOut.toFixed(6));
+      notes.push(`That is ${amount} k${asset} receipt tokens, worth about ${worth} ${asset}.`);
       call = { tool: "vanna_farm_kamino", args: { action: "redeem", authority: wallet, underlying: asset, amount } };
       break;
     }
@@ -328,16 +370,26 @@ export type BuildResult =
 export async function buildStepTx(prepared: Prepared, ctx: ReadCtx): Promise<BuildResult> {
   const rate = await checkAndConsume(ctx.user, "write");
   if (!rate.ok) return { ok: false, code: "limit", message: rate.message, limit: rate };
-  let raw: Record<string, unknown>;
-  try {
-    raw = await mcp.call(prepared.call.tool, prepared.call.args, ctx);
-  } catch (err) {
-    const h = humanizeMcpError(err);
-    return { ok: false, code: err instanceof MCPError && err.code && !h.retryable ? "rejected" : "unavailable", message: h.message };
+  const swap = isSwapBuild(prepared.call);
+  for (let attempt = 0; ; attempt++) {
+    let raw: Record<string, unknown>;
+    try {
+      raw = await mcp.call(prepared.call.tool, prepared.call.args, ctx);
+    } catch (err) {
+      const h = humanizeMcpError(err);
+      return { ok: false, code: err instanceof MCPError && err.code && !h.retryable ? "rejected" : "unavailable", message: h.message };
+    }
+    const env = parseWriteEnvelope(raw);
+    if (env.ok) return { ok: true, tx: env.tx };
+    // A swap that failed only because the fork's cloned pool state is stale is repaired and rebuilt, as the
+    // app's own swap does. A genuine refusal (health, balance, size) does not match and is reported at once.
+    if (swap && attempt < MAX_SWAP_HEALS && STALE_FORK_SWAP.test(env.reason)) {
+      const healed = await healFromEnvelope(raw);
+      await swapHealDeps.sleep(healed > 0 ? 500 : 1500);
+      continue;
+    }
+    return { ok: false, code: "rejected", message: humanizeFailure(env.reason) };
   }
-  const env = parseWriteEnvelope(raw);
-  if (!env.ok) return { ok: false, code: "rejected", message: humanizeFailure(env.reason) };
-  return { ok: true, tx: env.tx };
 }
 
 /** Read legs ("report"): run inline once every write before them has settled. */

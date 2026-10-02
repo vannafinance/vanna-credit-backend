@@ -55,7 +55,8 @@ export const copilotConfig = {
     return env("MCP_IAM_AUDIENCE").replace(/\/$/, "");
   },
   get mcpTimeoutMs(): number {
-    return envNumber("MCP_TIMEOUT_MS", 20_000);
+    // The hosted fork's RPC sometimes needs ~22s for one oracle read; 20s cut those off.
+    return envNumber("MCP_TIMEOUT_MS", 30_000);
   },
 
   // ── Sessions / SIWS ────────────────────────────────────────────────────────
