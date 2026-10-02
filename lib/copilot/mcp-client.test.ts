@@ -84,6 +84,40 @@ describe("handshake and result parsing", () => {
   });
 });
 
+describe("Cloud Run IAM (MCP_IAM_AUDIENCE)", () => {
+  it("sends a Google ID token in X-Serverless-Authorization and mints it once", async () => {
+    vi.stubEnv("MCP_IAM_AUDIENCE", "https://mcp.run.test/");
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const headers = Object.fromEntries(Object.entries(init.headers as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]));
+        seen.push({ url: String(url), headers });
+        if (String(url).includes("metadata.google.internal")) return new Response("google-id-token", { status: 200 });
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        if (body.method === "initialize") return sse({ jsonrpc: "2.0", id: 1, result: {} }, { "mcp-session-id": "sess-1" });
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        return toolResult({ ok: true });
+      }),
+    );
+    await mcpCall("vanna_oracle", { action: "price", asset: "SOL" });
+    await mcpCall("vanna_oracle", { action: "price", asset: "SOL" });
+
+    const metadata = seen.filter((s) => s.url.includes("metadata.google.internal"));
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0].url).toContain("audience=" + encodeURIComponent("https://mcp.run.test"));
+    expect(metadata[0].headers["metadata-flavor"]).toBe("Google");
+    const mcpCalls = seen.filter((s) => !s.url.includes("metadata.google.internal"));
+    expect(mcpCalls.every((c) => c.headers["x-serverless-authorization"] === "Bearer google-id-token")).toBe(true);
+  });
+
+  it("does not call the metadata server when MCP_IAM_AUDIENCE is unset", async () => {
+    const f = fakeMcp(() => toolResult({ ok: true }));
+    await mcpCall("vanna_oracle", { action: "price", asset: "SOL" });
+    expect(f.log.every((l) => l.headers["x-serverless-authorization"] === undefined)).toBe(true);
+  });
+});
+
 describe("resilience", () => {
   it("re-handshakes once on a 404 (session expired) and replays the call", async () => {
     let first = true;

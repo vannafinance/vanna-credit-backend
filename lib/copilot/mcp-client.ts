@@ -130,11 +130,61 @@ function baseHeaders(bearer: string | null): Record<string, string> {
   return headers;
 }
 
+// ── Google ID token for a Cloud Run MCP that requires IAM ────────────────────
+
+interface CachedIdToken {
+  token: string;
+  audience: string;
+  expiresAt: number;
+}
+let cachedIdToken: CachedIdToken | null = null;
+let idTokenInFlight: Promise<string> | null = null;
+const ID_TOKEN_TTL_MS = 50 * 60_000; // Google ID tokens last an hour
+
+async function mintIdToken(audience: string): Promise<string> {
+  const url =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=" +
+    encodeURIComponent(audience);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "Metadata-Flavor": "Google" },
+      signal: AbortSignal.timeout(copilotConfig.mcpTimeoutMs),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new MCPError(`Google identity token unavailable: ${e instanceof Error ? e.message : String(e)}`, {
+      code: "mcp_iam_unavailable",
+      retryable: true,
+    });
+  }
+  if (!res.ok) {
+    throw new MCPError(`Google identity token request returned ${res.status}`, { code: "mcp_iam_unavailable", httpStatus: res.status });
+  }
+  const token = (await res.text()).trim();
+  if (!token) throw new MCPError("Google identity token response was empty", { code: "mcp_iam_unavailable" });
+  cachedIdToken = { token, audience, expiresAt: mcpTiming.now() + ID_TOKEN_TTL_MS };
+  return token;
+}
+
+async function iamHeaders(): Promise<Record<string, string>> {
+  const audience = copilotConfig.mcpIamAudience;
+  if (!audience) return {};
+  if (cachedIdToken && cachedIdToken.audience === audience && mcpTiming.now() < cachedIdToken.expiresAt) {
+    return { "X-Serverless-Authorization": `Bearer ${cachedIdToken.token}` };
+  }
+  idTokenInFlight ??= mintIdToken(audience).finally(() => {
+    idTokenInFlight = null;
+  });
+  return { "X-Serverless-Authorization": `Bearer ${await idTokenInFlight}` };
+}
+
 async function post(headers: Record<string, string>, body: unknown): Promise<Response> {
+  const iam = await iamHeaders();
   try {
     return await fetch(copilotConfig.mcpBaseUrl, {
       method: "POST",
-      headers,
+      headers: { ...headers, ...iam },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(copilotConfig.mcpTimeoutMs),
       cache: "no-store",
@@ -349,6 +399,7 @@ async function rpcCall(
       if (res.status === 401 || res.status === 403) {
         // Drop the cached token and session so the next call starts clean instead of replaying a rejected token.
         cachedToken = null;
+        cachedIdToken = null;
         sessions.delete(sessionKey(bearer));
       }
       const staleSession = res.status === 404 || (res.status === 400 && /session/i.test(text));
@@ -395,6 +446,8 @@ export async function mcpListTools(ctx: McpCtx = {}): Promise<string[]> {
 export function resetMcpClient(): void {
   cachedToken = null;
   tokenInFlight = null;
+  cachedIdToken = null;
+  idTokenInFlight = null;
   sessions.clear();
   handshakes.clear();
 }

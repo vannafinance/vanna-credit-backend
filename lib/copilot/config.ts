@@ -46,6 +46,14 @@ export const copilotConfig = {
   get mcpResource(): string {
     return env("MCP_RESOURCE");
   },
+  /**
+   * Set when the MCP is a Cloud Run service that requires IAM (internal ingress). Its value is the
+   * service's origin, used as the audience of a Google ID token sent as `X-Serverless-Authorization`
+   * so `Authorization` stays free for the WorkOS bearer. Empty = no Google token (local MCP).
+   */
+  get mcpIamAudience(): string {
+    return env("MCP_IAM_AUDIENCE").replace(/\/$/, "");
+  },
   get mcpTimeoutMs(): number {
     return envNumber("MCP_TIMEOUT_MS", 20_000);
   },
