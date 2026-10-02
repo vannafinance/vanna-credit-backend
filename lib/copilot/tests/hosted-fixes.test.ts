@@ -49,6 +49,24 @@ describe("the domain firewall lets exit requests through", () => {
   });
 });
 
+describe("a price question about a coin outside the product", () => {
+  it.each([
+    ["what is the price of Bitcoin?", "Bitcoin"],
+    ["price of dogecoin", "Dogecoin"],
+    ["eth price", "ETH"],
+  ])("%s is refused naming the coin", (p, coin) => {
+    const r = keywordRoute(p);
+    expect(r.lane).toBe("refuse");
+    if (r.lane === "refuse") expect(r.message).toContain(`${coin} is not part of the Vanna Copilot product`);
+  });
+
+  it("product prices are unaffected", () => {
+    expect(keywordRoute("price of SOL").lane).toBe("read");
+    expect(keywordRoute("what's the price of jupsol").lane).toBe("read");
+    expect(keywordRoute("prices").lane).toBe("read");
+  });
+});
+
 describe("swapping an asset for itself", () => {
   it("is refused with a clear sentence, not a generic question", () => {
     const r = keywordRoute("swap 5 SOL to SOL");

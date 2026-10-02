@@ -19,6 +19,7 @@ import {
   validateLever,
   validateRead,
   validateWrite,
+  unofferedMessage,
   type Asset,
   type AskOption,
   type Intent,
@@ -303,6 +304,10 @@ export function routeClause(clause: string): Intent {
   return routeRead(lower, f);
 }
 
+/** Well-known coins that are not Vanna product assets (a price question about one is answered with a refusal). */
+const OTHER_COIN =
+  /\b(?:bitcoin|btc|wbtc|ethereum|ether|eth|weth|dogecoin|doge|bonk|pepe|shib|shiba|xrp|ripple|cardano|ada|bnb|matic|polygon|avax|avalanche|dot|polkadot|ltc|litecoin|trx|tron|ton|sui|apt|aptos|arb|op|jup|ray|wif|pyth|jto|msol|bsol|usde|dai|pyusd)\b/;
+
 /** "close everything", "unwind my positions", "exit all my positions", "close out my margin positions". */
 const UNWIND =
   /\b(?:unwind|wind\s+down|close\s+(?:out\s+)?(?:everything|all\b|(?:all\s+)?(?:of\s+)?my\s+(?:\w+\s+)?positions?)|exit\s+(?:everything|all\b|(?:all\s+)?(?:of\s+)?my\s+(?:\w+\s+)?positions?)|get\s+out\s+of\s+everything|pull\s+everything\s+out)\b/;
@@ -380,7 +385,12 @@ function routeRead(lower: string, f: ParsedClause): Intent {
   if (/\b(?:apy|apr|rates?|yields?|utili[sz]ation|pools?|available\s+liquidity)\b|\bborrow\w*\s+interest\b|\binterest\s+rates?\b/.test(lower)) return read({ kind: "pool", assets: f.assets });
   if (/\b(?:owe|debts?|borrowed|loans?)\b/.test(lower)) return read({ kind: "debt" });
   if (/\bcollateral\b/.test(lower)) return read({ kind: "collateral" });
-  if (/\b(?:price|prices|worth|trading\s+at|oracle)\b/.test(lower)) return read({ kind: "price", assets: f.assets });
+  if (/\b(?:price|prices|worth|trading\s+at|oracle)\b/.test(lower)) {
+    // "price of Bitcoin" names a coin outside the product: say so instead of listing every product price.
+    const foreign = f.assets.length ? null : (lower.match(OTHER_COIN)?.[0] ?? f.unknownTokens[0] ?? null);
+    if (foreign) return refuse(unofferedMessage(foreign.length <= 5 ? foreign.toUpperCase() : foreign.replace(/^./, (c) => c.toUpperCase())));
+    return read({ kind: "price", assets: f.assets });
+  }
   if (/\b(?:wallet|balances?|how\s+much\s+.*\bdo\s+i\s+have)\b/.test(lower)) return read({ kind: "wallet" });
 
   return { lane: "unknown" };
