@@ -49,6 +49,7 @@ const MAX_RATE_LIMIT_RETRIES = 2;
 const MAX_GATEWAY_RETRIES = 1;
 const MAX_TIMEOUT_RETRIES = 1;
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
+const TOKEN_FETCH_ATTEMPTS = 3;
 const MAX_SESSIONS = 16;
 
 // ── WorkOS M2M bearer (cached, refreshed before expiry, single-flight) ───────
@@ -74,17 +75,27 @@ async function mintToken(): Promise<string> {
     client_secret: workosClientSecret,
   });
   if (mcpResource) form.set("resource", mcpResource);
-  let res: Response;
-  try {
-    res = await fetch(workosTokenUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form,
-      signal: AbortSignal.timeout(copilotConfig.mcpTimeoutMs),
-      cache: "no-store",
-    });
-  } catch (e) {
-    throw new MCPError(`WorkOS token endpoint unreachable: ${e instanceof Error ? e.message : String(e)}`, {
+  let res: Response | null = null;
+  let lastError: unknown = null;
+  // A fresh instance's first outbound call can fail while its VPC egress and NAT come up ("fetch failed").
+  // Minting a token has no side effect, so a couple of short retries turn that into a normal first answer.
+  for (let attempt = 0; attempt < TOKEN_FETCH_ATTEMPTS; attempt++) {
+    try {
+      res = await fetch(workosTokenUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form,
+        signal: AbortSignal.timeout(copilotConfig.mcpTimeoutMs),
+        cache: "no-store",
+      });
+      break;
+    } catch (e) {
+      lastError = e;
+      if (attempt < TOKEN_FETCH_ATTEMPTS - 1) await mcpTiming.sleep(600 * (attempt + 1));
+    }
+  }
+  if (!res) {
+    throw new MCPError(`WorkOS token endpoint unreachable: ${lastError instanceof Error ? lastError.message : String(lastError)}`, {
       code: "mcp_auth_unreachable",
       retryable: true,
     });

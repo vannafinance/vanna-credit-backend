@@ -95,6 +95,42 @@ describe("a timeout while reading the MCP answer is retried, not shown as a raw 
     expect(toolCalls).toBe(2);
   });
 
+  it("a fresh instance's first WorkOS call failing ('fetch failed') is retried, not shown to the user", async () => {
+    vi.stubEnv("MCP_AUTH_MODE", "workos");
+    vi.stubEnv("WORKOS_M2M_CLIENT_ID", "client_x");
+    vi.stubEnv("WORKOS_M2M_CLIENT_SECRET", "secret_x");
+    vi.stubEnv("WORKOS_M2M_TOKEN_URL", "https://auth.test/oauth2/token");
+    let tokenCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (String(url).includes("auth.test")) {
+          tokenCalls++;
+          if (tokenCalls < 3) throw new TypeError("fetch failed");
+          return new Response(JSON.stringify({ access_token: "tok", expires_in: 300 }), { status: 200 });
+        }
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        if (body.method === "initialize") return sse({ jsonrpc: "2.0", id: 1, result: {} }, { "mcp-session-id": "s1" });
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        const payload = { ok: true };
+        return sse({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload } });
+      }),
+    );
+    await expect(mcpCall("vanna_oracle", { action: "price", asset: "SOL" })).resolves.toEqual({ ok: true });
+    expect(tokenCalls).toBe(3);
+  });
+
+  it("a WorkOS endpoint that stays unreachable still reports a typed error", async () => {
+    vi.stubEnv("MCP_AUTH_MODE", "workos");
+    vi.stubEnv("WORKOS_M2M_CLIENT_ID", "client_x");
+    vi.stubEnv("WORKOS_M2M_CLIENT_SECRET", "secret_x");
+    vi.stubEnv("WORKOS_M2M_TOKEN_URL", "https://auth.test/oauth2/token");
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    }));
+    await expect(mcpCall("vanna_oracle", { action: "price", asset: "SOL" })).rejects.toMatchObject({ code: "mcp_auth_unreachable", retryable: true });
+  });
+
   it("a second timeout surfaces as a typed MCPError, not a raw DOMException", async () => {
     vi.stubGlobal(
       "fetch",
