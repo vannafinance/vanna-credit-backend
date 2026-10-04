@@ -12,7 +12,7 @@ import { Buffer } from "buffer";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ComputeBudgetProgram, Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { JUPITER_V6_PROGRAM_ID, ORACLE_PROGRAM_ID, SOLANA_RPC_URL, VALIDATOR_PROGRAM_ID, VANNA_PROGRAM_ID } from "../config";
-import { forkUnixTimestamp } from "../connection";
+import { forkUnixTimestamp, forkFetch } from "../connection";
 import { debtPositionPda, integrationPda, marginPda, marginVault, priceBookPda, protocolConfigPda, reservePda, reserveVault } from "../pdas";
 import { fetchAllAssetConfigs } from "../protocol-state";
 import { oracleAccounts } from "../oracle";
@@ -91,7 +91,7 @@ export function perpsLookupTableAddress(owner: PublicKey): Promise<PublicKey> {
  * them all usable in any slot.
  */
 export async function ensurePerpsLookupTable(owner: PublicKey, rpcUrl: string = SOLANA_RPC_URL): Promise<PublicKey> {
-  const connection = new Connection(rpcUrl, "confirmed");
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
   const addresses = await lookupTableAddresses(connection, owner);
   const data = Buffer.alloc(56 + 32 * addresses.length);
   data.writeUInt32LE(1, 0);
@@ -125,7 +125,7 @@ export interface KeeperFill {
 
 /** Fills every pending order of `owner`'s venue account at the current on-chain index price. */
 export async function fillPendingOrders(owner: PublicKey, rpcUrl: string = SOLANA_RPC_URL): Promise<KeeperFill[]> {
-  const connection = new Connection(rpcUrl, "confirmed");
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
   const [raw, book, now, assets] = await Promise.all([fetchMarginAccount(owner), fetchMarketBook(connection), forkUnixTimestamp(connection), fetchAllAssetConfigs(connection)]);
   if (!raw || !book) return [];
   const venueAsset = [...assets.values()].find((a) => a.kind === "venue");

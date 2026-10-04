@@ -107,3 +107,19 @@ export interface CancelPerpRequest {
   market: string;
   side: PerpSide;
 }
+
+/** One on-chain GMTrade action of the margin's venue account (decoded from its transactions). */
+export interface PerpHistoryRow {
+  signature: string;
+  /** Unix seconds. */
+  timestamp: number;
+  /** "open" increase order, "close" decrease order, "cancel" close_order_v2, "settle" USDC back to
+   * the margin, "setup" prepare_user / prepare_position. */
+  action: "open" | "close" | "cancel" | "settle" | "setup";
+  market: string | null;
+  side: PerpSide | null;
+  /** Order size, USD (open / close). */
+  sizeUsd: number | null;
+  /** USDC moved: order collateral (open) or swept back (settle). */
+  usdc: number | null;
+}

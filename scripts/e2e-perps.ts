@@ -19,7 +19,7 @@ import { healKaminoReserves } from "@/lib/solana/server/kamino-heal";
 import { POST as fillPOST } from "@/app/api/perps/fill/route";
 import { POST as lookupPOST } from "@/app/api/perps/lookup-table/route";
 import { setExecApiBase } from "@/lib/solana/exec";
-import { cancelPerpOrder, closePerp, fetchPerpsView, openPerp } from "@/lib/solana/perps";
+import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView, openPerp } from "@/lib/solana/perps";
 import { TOKENS, keypairSigner, setPriceRefresher, createMarginAccount, depositAndBorrow, fetchMarginSnapshot, fetchMarginHistory, getConnection, describeError } from "@/lib/solana";
 
 const BASE = "http://app.local";
@@ -133,6 +133,15 @@ async function main() {
     assert(v.positions.length === 0 && v.orders.length === 0, "nothing open");
     const s = await fetchMarginSnapshot(owner);
     assert(!s.collateral.some((c) => c.symbol === "GMTrade"), "the GMTrade slot is freed");
+  });
+
+  await step("perps history (decoded from the venue account's transactions)", async () => {
+    const rows = await fetchPerpsHistory(owner);
+    for (const r of rows) console.log(`  ${r.action.padEnd(7)} ${r.market ?? "—"} ${r.side ?? ""} size=${r.sizeUsd ?? "—"} usdc=${r.usdc ?? "—"} ${r.signature.slice(0, 10)}…`);
+    assert(rows.some((r) => r.action === "open" && r.market === "ETH" && r.side === "long" && r.sizeUsd === 600 && r.usdc === 200), "ETH open row");
+    assert(rows.some((r) => r.action === "close" && r.market === "BTC"), "BTC close row");
+    assert(rows.some((r) => r.action === "cancel" && r.market === "SOL"), "SOL cancel row");
+    assert(rows.some((r) => r.action === "settle" && (r.usdc ?? 0) > 0), "settle row with USDC");
   });
 
   await step("history", async () => {

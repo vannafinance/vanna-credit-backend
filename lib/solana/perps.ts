@@ -13,6 +13,8 @@
  *   cancel = close_order_v2 → public_venue_settle
  * GMTrade's keepers fill orders off-chain; on the fork `/api/perps/fill` stands in for them.
  */
+import { Buffer } from "buffer";
+import { EventParser } from "@coral-xyz/anchor";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PublicKey, SystemProgram, type AccountInfo, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
 import { ORACLE_PROGRAM_ID, LIQUIDATION_HEALTH_FACTOR } from "./config";
@@ -23,7 +25,7 @@ import { ensureFreshPrices } from "./price-refresh";
 import { sendInstructions } from "./tx";
 import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { fromRaw, toRaw } from "./math";
-import { getProgram } from "./program";
+import { getProgram, vannaCoder } from "./program";
 import { assetConfigPda, marginPda, marginVault, protocolConfigPda } from "./pdas";
 import { fetchAllAssetConfigs, type AssetConfigState } from "./protocol-state";
 import {
@@ -54,7 +56,7 @@ import {
 } from "./perps-accounts";
 import { fetchMarketBook, readVenueState, type VenueState } from "./perps-state";
 import { getToken } from "./tokens";
-import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpOrder, PerpPosition, PerpsView } from "./perps-types";
+import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryRow, PerpOrder, PerpPosition, PerpsView } from "./perps-types";
 
 const NANO = 1e9;
 /** GMTrade collateral (the market book's `collateral_mint`); used before the book exists. */
@@ -276,7 +278,6 @@ async function send(signer: TxSigner, ixs: TransactionInstruction[], label: stri
 export async function openPerp(req: OpenPerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   const isLong = req.side === "long";
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   let p = await loadPerpsContext(signer.publicKey);
   const entry = entryFor(p.book, req.market);
@@ -381,7 +382,6 @@ async function settle(signer: TxSigner, opts: MarginServiceOptions, tables: Addr
 export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   const isLong = req.side === "long";
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const p = await loadPerpsContext(signer.publicKey);
   const entry = entryFor(p.book, req.market);
@@ -419,7 +419,6 @@ export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOption
 export async function cancelPerpOrder(req: CancelPerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   const isLong = req.side === "long";
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const p = await loadPerpsContext(signer.publicKey);
   const entry = entryFor(p.book, req.market);
@@ -431,4 +430,106 @@ export async function cancelPerpOrder(req: CancelPerpRequest, opts: MarginServic
   await send(signer, [...venuePrep(p, null, isLong), ix], `Cancel ${entry.meta?.name ?? req.market} order`, tables, opts);
   const signature = await settle(signer, opts, tables);
   return { signature, summary: "Order cancelled — USDC back to your margin account" };
+}
+
+// ---------------------------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------------------------
+
+const CREATE_ORDER_V2 = Buffer.from([200, 157, 3, 182, 3, 164, 162, 240]).toString("hex");
+const CLOSE_ORDER_V2 = Buffer.from([213, 217, 98, 100, 225, 205, 76, 184]).toString("hex");
+const PREPARE = new Set([Buffer.from([190, 173, 143, 193, 139, 80, 231, 133]).toString("hex"), Buffer.from([178, 215, 55, 90, 137, 15, 108, 15]).toString("hex")]);
+
+/**
+ * The margin's GMTrade actions, newest first, decoded from the wallet's transactions: each
+ * `margin_execute` into GMTrade carries GMTrade's own instruction data (create_order_v2 params:
+ * nonce = [side, leg], kind, collateral, size), and `public_venue_settle` emits `VenueSettled`.
+ * Fills happen off-chain (GMTrade keepers), so the fill price is not part of this history.
+ */
+export async function fetchPerpsHistory(owner: PublicKey, limit = 100): Promise<PerpHistoryRow[]> {
+  const connection = getConnection();
+  const book = await fetchMarketBook(connection);
+  if (!book) return [];
+  const margin = marginPda(owner);
+  const venueAccount = venueAccountOf(margin);
+  const legName = (leg: number) => book.markets.find((m) => m.leg === leg)?.meta?.key ?? null;
+  const orderSlots = new Map<string, { leg: number; isLong: boolean }>();
+  for (const m of book.markets) for (const isLong of [true, false]) orderSlots.set(gmOrderPda(venueAccount, m.leg, isLong).toBase58(), { leg: m.leg, isLong });
+  // The wallet signs every GMTrade call and its settles; the fork's signature index only reliably
+  // covers signers, so scan the wallet's transactions (not the venue account's).
+  const sigs = (await connection.getSignaturesForAddress(owner, { limit }, "confirmed")).filter((s) => !s.err);
+  const program = getProgram();
+  const rows: PerpHistoryRow[] = [];
+  for (let i = 0; i < sigs.length; i += 6) {
+    const txs = await Promise.all(sigs.slice(i, i + 6).map((s) => connection.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })));
+    txs.forEach((tx, k) => {
+      if (!tx?.meta) return;
+      const sig = sigs[i + k];
+      const timestamp = sig.blockTime ?? tx.blockTime ?? 0;
+      const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined });
+      for (const ix of tx.transaction.message.compiledInstructions) {
+        if (!keys.get(ix.programIdIndex)?.equals(program.programId)) continue;
+        let decoded: { name: string; data: Record<string, unknown> } | null = null;
+        try {
+          decoded = vannaCoder.instruction.decode(Buffer.from(ix.data)) as { name: string; data: Record<string, unknown> } | null;
+        } catch {
+          continue;
+        }
+        if (!decoded) continue;
+        const name = decoded.name.replace(/_(.)/g, (_: string, c: string) => c.toUpperCase());
+        if (name === "publicVenueSettle") {
+          const swept = (tx.meta.logMessages ?? []).length ? sweptFromLogs(tx.meta.logMessages ?? []) : null;
+          rows.push({ signature: sig.signature, timestamp, action: "settle", market: null, side: null, sizeUsd: null, usdc: swept });
+          continue;
+        }
+        if (name !== "marginExecute") continue;
+        const inner = Buffer.from(decoded.data.data as Uint8Array);
+        const selector = inner.subarray(0, 8).toString("hex");
+        // prepare_user / prepare_position are one-time account setup, not trades: left out.
+        if (PREPARE.has(selector)) {
+          continue;
+        } else if (selector === CREATE_ORDER_V2 && inner.length > 41) {
+          // nonce (32) = [1 long | 2 short, leg, …]; then OrderParams: kind u8, Option<u8>,
+          // execution_lamports u64, swap_path_length u8, initial_collateral u64, size u128, is_long.
+          const isLong = inner[8] === 1;
+          const leg = inner[9];
+          let at = 40;
+          const kind = inner[at++];
+          at += inner[at] === 1 ? 2 : 1;
+          at += 8 + 1;
+          const collateral = inner.readBigUInt64LE(at);
+          const size = inner.readBigUInt64LE(at + 8) + (inner.readBigUInt64LE(at + 16) << 64n);
+          rows.push({
+            signature: sig.signature,
+            timestamp,
+            action: kind === MARKET_INCREASE ? "open" : "close",
+            market: legName(leg),
+            side: isLong ? "long" : "short",
+            sizeUsd: Number(size) / Number(USD_UNIT),
+            usdc: kind === MARKET_INCREASE ? Number(collateral) / 10 ** book.collateralDecimals : null,
+          });
+        } else if (selector === CLOSE_ORDER_V2) {
+          const callStart = 0; // call accounts come first in remaining_accounts
+          const orderIndex = ix.accountKeyIndexes[8 + callStart + MARGIN_EXECUTE_NAMED_ACCOUNTS];
+          const slot = orderIndex === undefined ? undefined : orderSlots.get(keys.get(orderIndex)?.toBase58() ?? "");
+          rows.push({ signature: sig.signature, timestamp, action: "cancel", market: slot ? legName(slot.leg) : null, side: slot ? (slot.isLong ? "long" : "short") : null, sizeUsd: null, usdc: null });
+        }
+      }
+    });
+  }
+  return rows.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/** `margin_execute`'s named accounts before its remaining accounts (authority … venue_account). */
+const MARGIN_EXECUTE_NAMED_ACCOUNTS = 8;
+
+function sweptFromLogs(logs: string[]): number | null {
+  try {
+    for (const e of new EventParser(getProgram().programId, getProgram().coder).parseLogs(logs)) {
+      if (e.name.toLowerCase() === "venuesettled") return Number((e.data as { swept: { toString(): string } }).swept.toString()) / 1e6;
+    }
+  } catch {
+    // unparseable logs: leave the amount out
+  }
+  return null;
 }

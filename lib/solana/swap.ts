@@ -9,6 +9,7 @@
  * - MARGIN mode lives in lib/solana/exec.ts (`quoteMarginSwap` / `executeMarginSwap`): the same
  *   Jupiter routing, built for the margin PDA and wrapped in the program's `margin_execute`.
  */
+import { Buffer } from "buffer";
 import { VersionedTransaction } from "@solana/web3.js";
 import { getConnection } from "./connection";
 import { confirmSignatureHttp } from "./confirmation";

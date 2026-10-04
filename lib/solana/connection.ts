@@ -8,12 +8,38 @@ import { CLOCK_SYSVAR, SOLANA_RPC_URL, SOLANA_WS_URL } from "./config";
  */
 let shared: Connection | null = null;
 
+/**
+ * The hosted fork answers a read of an account it doesn't hold by asking its upstream mainnet RPC,
+ * and that upstream rate-limits bursts: the fork then returns HTTP 429/5xx or a JSON-RPC
+ * `"Internal error"` for a request that is otherwise fine. This fetch retries those (reads and
+ * simulations only — a `sendTransaction` is never re-sent) with a short backoff, so one throttled
+ * upstream call doesn't fail a whole page load.
+ */
+const RETRY_DELAYS_MS = [250, 600, 1200, 2400];
+
+export const forkFetch: typeof fetch = async (input, init) => {
+  const body = typeof init?.body === "string" ? init.body : "";
+  const retriable = !body.includes('"sendTransaction"');
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(input, init);
+    if (!retriable || attempt >= RETRY_DELAYS_MS.length) return response;
+    let transient = response.status === 429 || response.status >= 500;
+    if (!transient && response.ok) {
+      const text = await response.clone().text();
+      transient = /"Internal error"|Too Many Requests/i.test(text);
+    }
+    if (!transient) return response;
+    await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+  }
+};
+
 export function getConnection(): Connection {
   if (!shared) {
     shared = new Connection(SOLANA_RPC_URL, {
       commitment: "confirmed",
       disableRetryOnRateLimit: true,
       wsEndpoint: SOLANA_WS_URL,
+      fetch: forkFetch,
     });
   }
   return shared;

@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { ArrowLeftRight } from "lucide-react";
 import { useTheme } from "@/contexts/theme-context";
 import { useOpenPerp } from "@/hooks/use-perps";
 import type { PerpSide, PerpsView } from "@/lib/solana/perps-types";
 import { LeverageSlider } from "../ui/leverage-slider";
 import { QuantitySlider } from "../ui/quantity-slider";
-import { fmtPrice, fmtUsd } from "./perps-format";
+import { fmtPrice, fmtTokenSize, fmtUsd, healthFactorDisplay } from "./perps-format";
 
 const SLIPPAGE_OPTIONS = [
   { bps: 50, label: "0.5%" },
@@ -53,6 +54,7 @@ const PerpsOrderPlacementForm = ({
   const [percentage, setPercentage] = useState(0);
   const [leverageRaw, setLeverageRaw] = useState(2);
   const [slippageBps, setSlippageBps] = useState(100);
+  const [sizeInUsd, setSizeInUsd] = useState(false);
 
   const market = view?.markets.find((m) => m.key === marketKey);
   const account = view?.account;
@@ -60,9 +62,14 @@ const PerpsOrderPlacementForm = ({
   const leverage = Math.min(Math.max(1, leverageRaw), maxLeverage);
   const available = account?.marginUsdc ?? 0;
 
-  const collateral = Number(collateralInput) || 0;
+  const parsedCollateral = Number(collateralInput);
+  const collateral = Number.isFinite(parsedCollateral) && parsedCollateral > 0 ? parsedCollateral : 0;
   const sizeUsd = collateral * leverage;
-  const indexPrice = market?.indexPrice ?? null;
+  const price = market?.indexPrice;
+  const indexPrice = price != null && Number.isFinite(price) && price > 0 ? price : null;
+  const sizeTokens = indexPrice == null || !Number.isFinite(sizeUsd) ? null : sizeUsd / indexPrice;
+  const acceptablePrice = indexPrice == null ? null : indexPrice * (1 + (side === "long" ? 1 : -1) * slippageBps / 10_000);
+  const currentHealth = account?.hasMargin ? healthFactorDisplay(account.healthFactor) : null;
   const zeroEquityPrice =
     indexPrice == null ? null : side === "long" ? indexPrice * (1 - 1 / leverage) : indexPrice * (1 + 1 / leverage);
   const pendingOrder = view?.orders.some((o) => o.market === marketKey && o.side === side) ?? false;
@@ -91,6 +98,7 @@ const PerpsOrderPlacementForm = ({
     if (!market) return { label: "Market unavailable", disabled: true };
     if (!market.tradingEnabled) return { label: "Market closed", disabled: true };
     if (!(collateral > 0)) return { label: "Enter collateral", disabled: true };
+    if (!Number.isFinite(sizeUsd)) return { label: "Amount too large", disabled: true };
     if (collateral > available) return { label: "Insufficient margin USDC", disabled: true };
     // A stale on-chain price doesn't block the button: placing the order refreshes the price feeds
     // first (and the program re-checks freshness). Only a missing price does.
@@ -118,10 +126,13 @@ const PerpsOrderPlacementForm = ({
   const sideColor = side === "long" ? "#24A0A9" : "#FC5457";
 
   const summary: { label: string; value: string }[] = [
-    { label: "Size", value: sizeUsd > 0 ? `$${fmtUsd(sizeUsd)}` : "-- USD" },
-    { label: "Entry price", value: indexPrice == null ? "--" : `≈ $${fmtPrice(indexPrice)}` },
+    { label: "Market", value: market?.name ?? `${marketKey}-PERP` },
+    { label: "Side", value: side === "long" ? "Long" : "Short" },
+    { label: "Notional size", value: sizeUsd > 0 ? `≈ $${fmtUsd(sizeUsd)}` : "—" },
+    { label: "Est. entry price", value: indexPrice == null ? "—" : `≈ $${fmtPrice(indexPrice)}` },
+    { label: side === "long" ? "Max. entry price" : "Min. entry price", value: acceptablePrice == null ? "—" : `$${fmtPrice(acceptablePrice)}` },
     {
-      label: "Equity reaches zero at",
+      label: "Zero-equity price (before fees)",
       value: zeroEquityPrice == null || collateral <= 0 ? "--" : `$${fmtPrice(zeroEquityPrice)}`,
     },
     { label: "Collateral", value: collateral > 0 ? `${fmtUsd(collateral)} USDC` : "-- USDC" },
@@ -184,6 +195,7 @@ const PerpsOrderPlacementForm = ({
             className={`h-9 flex items-center gap-2 p-2 rounded-lg ${isDark ? "bg-[#111111] border border-[#333333]" : "bg-white border border-[#E2E2E2]"}`}
           >
             <input
+              aria-label="Collateral amount in USDC"
               type="text"
               inputMode="decimal"
               placeholder="Enter Amount"
@@ -214,6 +226,33 @@ const PerpsOrderPlacementForm = ({
           onChange={setCollateralFromPercent}
           markers={[0, 25, 50, 75, 100]}
         />
+        <p className={`text-[10px] leading-[15px] ${muted}`}>
+          USDC collateral only. {marketKey} is the traded asset, not the collateral token.
+        </p>
+      </div>
+
+      <div className={`rounded-xl border p-3 flex flex-col gap-2 ${isDark ? "bg-[#191919] border-[#333333]" : "bg-white border-[#E2E2E2]"}`}>
+        <div className="flex items-center justify-between">
+          <span className={`text-[11px] ${muted}`}>Position size</span>
+          <button
+            type="button"
+            aria-label={`Show position size in ${sizeInUsd ? marketKey : "USD"}`}
+            onClick={() => setSizeInUsd((value) => !value)}
+            className={`rounded-md p-1.5 cursor-pointer ${isDark ? "bg-[#333333]" : "bg-[#F4F4F4]"}`}
+          >
+            <ArrowLeftRight size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <output className={`text-[22px] leading-7 font-semibold break-words ${primary}`}>
+          {collateral > 0 ? (sizeInUsd ? fmtUsd(sizeUsd) : fmtTokenSize(sizeTokens)) : "—"}
+          <span className={`ml-2 text-[12px] ${muted}`}>{sizeInUsd ? "USD" : marketKey}</span>
+        </output>
+        <span className={`text-[11px] ${muted}`}>
+          {collateral > 0
+            ? sizeInUsd ? `≈ ${fmtTokenSize(sizeTokens)} ${marketKey}` : `≈ $${fmtUsd(sizeUsd)} USD`
+            : "Enter collateral to preview your exposure"}
+        </span>
+        <span className={`text-[10px] ${muted}`}>Size = collateral × leverage. Token quantity is estimated at the index price.</span>
       </div>
 
       {/* leverage */}
@@ -279,14 +318,33 @@ const PerpsOrderPlacementForm = ({
         </div>
       </div>
 
-      {/* summary */}
-      <div className="flex flex-col gap-1 text-[11px]">
+      <div className="grid grid-cols-2 gap-2">
+        <div className={`rounded-lg border p-3 ${isDark ? "border-[#333333]" : "border-[#E2E2E2]"}`}>
+          <p className={`text-[10px] ${muted}`}>CURRENT ACCOUNT HEALTH</p>
+          <p className={`mt-2 text-[20px] leading-6 font-semibold ${currentHealth?.color ?? muted}`}>{currentHealth?.label ?? "—"}</p>
+          <p className={`mt-1 text-[10px] ${muted}`}>Before this order</p>
+        </div>
+        <div className={`rounded-lg border p-3 ${isDark ? "border-[#333333]" : "border-[#E2E2E2]"}`}>
+          <p className={`text-[10px] ${muted}`}>ORDER LEVERAGE</p>
+          <p className={`mt-2 text-[20px] leading-6 font-semibold ${primary}`}>{leverage.toFixed(1)}×</p>
+          <p className={`mt-1 text-[10px] ${muted}`}>Size / collateral</p>
+        </div>
+      </div>
+
+      <div className={`rounded-xl border p-3 flex flex-col gap-2 text-[11px] ${isDark ? "border-[#333333]" : "border-[#E2E2E2]"}`}>
+        <h3 className={`mb-1 text-[11px] font-semibold uppercase ${muted}`}>Position details · Order preview</h3>
         {summary.map((row) => (
-          <p key={row.label} className="flex justify-between">
-            <span className="text-[#919191] font-semibold">{row.label}:</span>
-            <span className={primary}>{row.value}</span>
+          <p key={row.label} className="flex justify-between gap-3">
+            <span className={muted}>{row.label}</span>
+            <span className={`text-right ${primary}`} style={row.label === "Side" ? { color: sideColor } : undefined}>{row.value}</span>
           </p>
         ))}
+        <p className={`mt-1 text-[10px] leading-[15px] ${muted}`}>
+          Estimates exclude fees and price impact. Zero-equity price is not a liquidation quote.
+          {view?.positions.some((position) => position.market === marketKey && position.side === side)
+            ? " This order increases your existing position; values above describe only this order."
+            : " Final position details appear after execution."}
+        </p>
       </div>
 
       {/* submit */}

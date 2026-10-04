@@ -4,7 +4,7 @@
 // (buildForkPriceAccountData), driven by each asset's on-chain OracleConfig.
 import { Connection, PublicKey } from "@solana/web3.js";
 import { PYTH_RECEIVER_PROGRAM_ID, SOLANA_RPC_URL } from "../config";
-import { forkUnixTimestamp } from "../connection";
+import { forkUnixTimestamp, forkFetch } from "../connection";
 import {
   CONF_OFFSET,
   EMA_CONF_OFFSET,
@@ -166,7 +166,7 @@ async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigS
  * reference table (flagged `source: "reference"`).
  */
 export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promise<RefreshedPrice[]> {
-  const connection = new Connection(rpcUrl, "confirmed");
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
   const book = await fetchMarketBook(connection).catch(() => null);
   const perps = (book?.markets ?? [])
     .filter((e) => e.meta && PERP_INDEX_PROXY[e.meta.key])

@@ -35,12 +35,10 @@ export const PortfolioSection = () => {
   const store = useMarginAccountInfoStore(
     useShallow((s) => ({
       totalCollateralValue: s.totalCollateralValue,
-      netAvailableCollateral: s.netAvailableCollateral,
       totalBorrowedValue: s.totalBorrowedValue,
     })),
   );
   const marginAccountBalance = snapshot?.totalCollateralValue ?? store.totalCollateralValue ?? 0;
-  const netAvailableCollateral = snapshot?.netAvailableCollateral ?? store.netAvailableCollateral ?? 0;
   const totalBorrowed = snapshot?.totalBorrowedValue ?? store.totalBorrowedValue ?? 0;
 
   // Wallet (spendable) USD = Σ wallet token balance × on-chain Pyth price, over the token registry.
@@ -71,11 +69,21 @@ export const PortfolioSection = () => {
   const fmtUsd = (n: number) =>
     `$${(n < 0 ? 0 : n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  // Lending positions at their current value (shares × the pool's live exchange rate) × price.
+  const totalSuppliedUsd = useMemo(
+    () => Object.values(snapshot?.api.lender ?? {}).reduce((sum, p) => sum + (p.assets || 0) * (prices[p.symbol] ?? 0), 0),
+    [snapshot, prices],
+  );
+  // Net worth = wallet + supplied + margin equity (everything the margin holds, perps included,
+  // minus its debt).
+  const netWorth = walletUsd + totalSuppliedUsd + Math.max(0, marginAccountBalance - totalBorrowed);
+
+  // Keyed by PORTFOLIO_STATS_ITEMS ids (lib/constants/portfolio).
   const statsValues = {
-    walletBalance: userAddress ? fmtUsd(walletUsd) : "-",
-    marginAccountBalance: userAddress ? fmtUsd(marginAccountBalance) : "-",
-    netAvailableCollateral: userAddress ? fmtUsd(netAvailableCollateral) : "-",
+    netWorth: userAddress ? fmtUsd(netWorth) : "-",
+    totalSupplied: userAddress ? fmtUsd(totalSuppliedUsd) : "-",
     totalBorrowed: userAddress ? fmtUsd(totalBorrowed) : "-",
+    netEarnings: userAddress ? fmtUsd(netEarnings) : "-",
   };
 
   return (

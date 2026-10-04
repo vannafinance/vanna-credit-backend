@@ -16,6 +16,7 @@
  * The receiving margin vault is created (idempotent ATA) before the call; Vanna doesn't create it.
  * Vanna sets no minimum output: slippage protection is the outside program's (Jupiter's min out).
  */
+import { Buffer } from "buffer";
 import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { PublicKey, type AccountMeta, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
 import { JUPITER_V6_PROGRAM_ID, VALIDATOR_PROGRAM_ID } from "./config";
@@ -195,7 +196,6 @@ export async function executeMarginSwap(req: MarginSwapRequest, quote: JupiterQu
   const from = getToken(req.fromSymbol);
   const to = getToken(req.toSymbol);
   if (from.symbol === to.symbol) throw new Error("Pick two different tokens");
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const ctx = await loadContext(signer.publicKey);
   if (!ctx.snapshot.exists) throw new Error("Create a margin account first");
@@ -279,7 +279,6 @@ export async function farmDeposit(req: FarmDepositRequest, opts: MarginServiceOp
   const total = walletRaw + marginRaw + borrowRaw;
   if (total <= 0n) throw new Error("Enter an amount");
 
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const ctx = await loadContext(signer.publicKey);
   if (!ctx.snapshot.exists) throw new Error("Create a margin account first");
@@ -334,7 +333,6 @@ export async function farmWithdraw(req: FarmWithdrawRequest, opts: MarginService
   const token = getToken(req.symbol);
   const r = receiptForUnderlying(token.symbol);
   if (!r) throw new Error(`No Kamino vault for ${token.symbol}`);
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const ctx = await loadContext(signer.publicKey);
   const underlying = assetFor(ctx.assetMap, token);

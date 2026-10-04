@@ -2,7 +2,7 @@
 
 import { useTheme } from "@/contexts/theme-context";
 import type { PerpPosition } from "@/lib/solana/perps-types";
-import { fmtPrice, fmtSigned, fmtUsd } from "../perps-format";
+import { fmtPrice, fmtSigned, fmtTokenSize, fmtUsd } from "../perps-format";
 import { PerpsColumn, PerpsTable, TableActionButton } from "./perps-table";
 
 interface ActivePositionsTableProps {
@@ -23,7 +23,16 @@ const ActivePositionsTable = ({ positions, onClose, closeDisabled }: ActivePosit
   const columns: PerpsColumn<PerpPosition>[] = [
     { id: "market", header: "Market", render: (r) => <span className="font-semibold">{r.marketName}</span>, hideOnMobile: true },
     { id: "side", header: "Side", render: (r) => sideLabel(r.side), hideOnMobile: true },
-    { id: "size", header: "Size", render: (r) => `$${fmtUsd(r.sizeUsd)}` },
+    {
+      id: "size",
+      header: "Position size",
+      render: (r) => (
+        <div className="flex flex-col gap-0.5">
+          <span>{fmtTokenSize(r.sizeTokens)} {r.market}</span>
+          <span className="text-[11px] opacity-70">${fmtUsd(r.sizeUsd)}</span>
+        </div>
+      ),
+    },
     { id: "entry", header: "Entry", render: (r) => fmtPrice(r.entryPrice) },
     { id: "mark", header: "Mark", render: (r) => fmtPrice(r.markPrice) },
     { id: "collateral", header: "Collateral", render: (r) => `${fmtUsd(r.collateralUsdc)} USDC` },
@@ -41,7 +50,20 @@ const ActivePositionsTable = ({ positions, onClose, closeDisabled }: ActivePosit
       },
     },
     { id: "equity", header: "Equity", render: (r) => `$${fmtUsd(r.equityUsd)}` },
-    { id: "liq", header: "Liq. price", render: (r) => (r.liquidationPrice == null ? "—" : fmtPrice(r.liquidationPrice)) },
+    {
+      id: "liq",
+      header: "Liq. price",
+      // With debt: the index price at which the whole margin reaches HF 1.10 (Vanna liquidates).
+      // Without debt Vanna never liquidates; the risk is the position's own equity reaching zero.
+      render: (r) =>
+        r.liquidationPrice != null ? (
+          fmtPrice(r.liquidationPrice)
+        ) : (
+          <span title="No debt on the margin account, so Vanna can't liquidate it. This is the price at which this position's equity reaches zero.">
+            {fmtPrice(r.zeroEquityPrice)} <span className="text-[10px] opacity-70">(equity 0)</span>
+          </span>
+        ),
+    },
     {
       id: "action",
       header: "Action",

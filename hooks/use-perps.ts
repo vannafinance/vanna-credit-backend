@@ -6,9 +6,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
 import { useAfterMarginTx } from '@/hooks/use-margin';
-import { cancelPerpOrder, closePerp, fetchPerpsView } from '@/lib/solana/perps';
+import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView } from '@/lib/solana/perps';
 import { openPerp } from '@/lib/solana/perps';
-import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpsView } from '@/lib/solana/perps-types';
+import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryRow, PerpsView } from '@/lib/solana/perps-types';
 import { describeError } from '@/lib/solana/errors';
 import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-progress';
 
@@ -39,6 +39,18 @@ export const usePerpsView = () => {
     error: query.error ? (query.error as Error).message : null,
     refresh: () => query.refetch(),
   };
+};
+
+/** The wallet's GMTrade history (decoded from on-chain transactions); fetched while `enabled`. */
+export const usePerpsHistory = (enabled: boolean) => {
+  const address = useUserStore((s) => s.address);
+  const query = useQuery({
+    queryKey: ['perps', 'history', address ?? 'none'],
+    queryFn: () => fetchPerpsHistory(new PublicKey(address!)),
+    enabled: enabled && Boolean(address),
+    staleTime: 10_000,
+  });
+  return { rows: (query.data ?? []) as PerpHistoryRow[], isLoading: query.isLoading && enabled && Boolean(address) };
 };
 
 function useAfterPerpsTx() {

@@ -152,7 +152,6 @@ export const MarginPageContent = ({
   const effGrossCollateral = snapshot?.grossCollateralValue ?? grossCollateralValue;
   const effBorrowed = snapshot?.totalBorrowedValue ?? totalBorrowedValue;
   const effBorrowRate = snapshot?.borrowRate ?? storeBorrowRate;
-  const stalePrices = snapshot?.api?.margin?.stalePrices ?? [];
 
   // The risk trio (HF, net-available, collateral-left) is RECOMPUTED from the gross
   // collateral + debt being displayed so all KPI cards (and the InfoCard) stay coherent.
@@ -364,23 +363,7 @@ export const MarginPageContent = ({
         )}
       </AnimatePresence>
 
-      {/* Stale-price notice — the service refreshes prices automatically before a
-          borrow / withdraw, so this is informational only. */}
-      <AnimatePresence>
-        {isWalletConnected && stalePrices.length > 0 && (
-          <motion.div
-            className="w-full pt-5"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-          >
-            <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded-xl text-[13px] font-medium" role="status">
-              On-chain price for {stalePrices.join(", ")} is older than its max age — USD values may lag. Prices are refreshed automatically before any borrow or withdraw.
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+      
       {/* Liquidation danger banner — shown when own HF drops below 1.1 */}
       <AnimatePresence>
         {isWalletConnected && effHasAccount && effHealthFactor > 0 && effHealthFactor <= LIQUIDATION_HEALTH_FACTOR && (

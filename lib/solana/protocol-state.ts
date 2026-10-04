@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { Buffer } from "buffer";
 import { AccountLayout, MintLayout } from "@solana/spl-token";
 import { PublicKey, type AccountInfo, type Connection } from "@solana/web3.js";
 import { getConnection, forkUnixTimestamp, getMultipleAccountsChunked } from "./connection";

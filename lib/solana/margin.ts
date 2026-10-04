@@ -890,7 +890,6 @@ export async function depositAndBorrow(
   const borrows = (input.borrows ?? []).filter((b) => Number(b.amount) > 0);
   if (!deposits.length && !borrows.length) throw new Error("Enter an amount greater than zero");
   if (borrows.length) {
-    opts.onStatus?.("Refreshing oracle prices");
     await ensureFreshPrices();
   }
   const ctx = await loadContext(signer.publicKey);
@@ -1002,7 +1001,6 @@ export async function withdrawCollateral(req: WithdrawRequest, opts: MarginServi
   const signer = opts.signer ?? getActiveSigner();
   const owner = signer.publicKey;
   const token = getToken(req.symbol);
-  opts.onStatus?.("Refreshing oracle prices");
   await ensureFreshPrices();
   const ctx = await loadContext(owner);
   if (!ctx.snapshot.exists) throw new Error("No margin account found");

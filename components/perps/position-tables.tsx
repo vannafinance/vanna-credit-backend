@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { useTheme } from "@/contexts/theme-context";
-import { useCancelPerpOrder, useClosePerp } from "@/hooks/use-perps";
+import { useCancelPerpOrder, useClosePerp, usePerpsHistory } from "@/hooks/use-perps";
 import type { PerpPosition, PerpsView } from "@/lib/solana/perps-types";
 import { AnimatedTabs } from "../ui/animated-tabs";
 import { Button } from "../ui/button";
 import { Modal } from "../ui/modal";
 import ActivePositionsTable from "./position-tables/active-positions-table";
 import OpenOrdersTable from "./position-tables/open-orders-table";
+import TradeHistoryTable from "./position-tables/trade-history-table";
 import { ClosePositionModal } from "./modals/close-position-modal";
 import { CloseAllPositionsModal } from "./modals/close-all-positions-modal";
 
@@ -23,6 +24,7 @@ interface PositionTablesProps {
 const PositionTables = ({ view, address, connectWallet }: PositionTablesProps) => {
   const { isDark } = useTheme();
   const [activeTab, setActiveTab] = useState<PerpsTab>("position");
+  const history = usePerpsHistory(activeTab === "history");
   const [closing, setClosing] = useState<PerpPosition | null>(null);
   const [isCloseAllOpen, setIsCloseAllOpen] = useState(false);
   const [isClosingAll, setIsClosingAll] = useState(false);
@@ -106,13 +108,7 @@ const PositionTables = ({ view, address, connectWallet }: PositionTablesProps) =
               onCancel={(o) => cancelOrder.mutate({ market: o.market, side: o.side })}
             />
           )}
-          {activeTab === "history" && (
-            <div
-              className={`p-2 rounded-lg border min-h-[200px] flex items-center justify-center ${isDark ? "border-[#333333] bg-[#222222]" : "border-[#E2E2E2] bg-[#F7F7F7]"}`}
-            >
-              <span className="text-[12px] font-medium text-[#919191]">Trade history coming soon</span>
-            </div>
-          )}
+          {activeTab === "history" && <TradeHistoryTable rows={history.rows} loading={history.isLoading} />}
         </>
       )}
 

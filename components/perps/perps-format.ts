@@ -33,6 +33,13 @@ export function fmtUsd(value: number | null | undefined, digits = 2): string {
   });
 }
 
+/** Base-asset exposure, with enough precision for small BTC/ETH orders. */
+export function fmtTokenSize(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  if (value > 0 && value < 0.00000001) return "<0.00000001";
+  return value.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
 export function fmtSigned(value: number, digits = 2): string {
   const s = fmtUsd(Math.abs(value), digits);
   return value > 0 ? `+${s}` : value < 0 ? `-${s}` : s;
