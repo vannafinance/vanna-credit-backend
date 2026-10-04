@@ -3,8 +3,9 @@ import { PublicKey, type AccountInfo } from "@solana/web3.js";
 import { decodePriceUpdate, type OnchainPrice } from "./pyth";
 
 /**
- * Client mirror of the program's oracle facade (`programs/vanna_lending/src/oracle/`): every asset
- * carries its own `OracleConfig` on-chain, and a price is read from the accounts that config pins:
+ * Client mirror of the oracle agent (`programs/vanna_oracle/src/pricing.rs`): every token has an
+ * `OracleConfig` in the agent's price book (keyed by mint), and a price is read from the accounts
+ * that config pins:
  *
  *   - Kamino Scope (`scope_prices` + `scope_chain`) is primary; a price is the PRODUCT of up to four
  *     `OraclePrices` entries (e.g. JitoSOL = stake rate × SOL/USD), stamped with its oldest entry.
@@ -149,6 +150,64 @@ export function priceFromAccounts(
   }
 
   return quote ? { ...quote, fresh: isFresh(quote.publishTime) } : null;
+}
+
+/** `OracleConfig` as `#[repr(C)]` bytes (184): scope_prices, scope_chain [u16; 4],
+ * scope_twap_chain [u16; 4], pyth_price, pyth_factor, klend_reserve, klend_program, max_age_secs u32,
+ * max_twap_divergence_bps u16, max_confidence_bps u16. */
+export function decodeOracleConfig(data: Buffer, at: number): OracleConfigState {
+  const key = (o: number) => new PublicKey(data.subarray(at + o, at + o + 32));
+  const chain = (o: number) => [0, 1, 2, 3].map((i) => data.readUInt16LE(at + o + 2 * i));
+  return {
+    scopePrices: key(0),
+    scopeChain: chain(32),
+    scopeTwapChain: chain(40),
+    pythPrice: key(48),
+    pythFactor: key(80),
+    klendReserve: key(112),
+    klendProgram: key(144),
+    maxAgeSecs: data.readUInt32LE(at + 176),
+    maxTwapDivergenceBps: data.readUInt16LE(at + 180),
+    maxConfidenceBps: data.readUInt16LE(at + 182),
+  };
+}
+
+export interface PriceSource {
+  mint: PublicKey;
+  decimals: number;
+  config: OracleConfigState;
+}
+
+/**
+ * The oracle agent's `PriceBook` (zero-copy): discriminator (8) | bump u8 | count u8 | padding [2] |
+ * 32 × PriceSource (mint 32 | decimals u8 | padding [3] | OracleConfig 184 = 220 bytes).
+ */
+export function decodePriceBook(data: Buffer): Map<string, PriceSource> {
+  const sources = new Map<string, PriceSource>();
+  if (data.length < 12) return sources;
+  for (let i = 0; i < data[9]; i++) {
+    const at = 12 + 220 * i;
+    if (data.length < at + 220) break;
+    const mint = new PublicKey(data.subarray(at, at + 32));
+    sources.set(mint.toBase58(), { mint, decimals: data[at + 32], config: decodeOracleConfig(data, at + 36) });
+  }
+  return sources;
+}
+
+/** An unconfigured OracleConfig (a venue asset, or a token missing from the price book). */
+export function emptyOracleConfig(): OracleConfigState {
+  return {
+    scopePrices: PublicKey.default,
+    scopeChain: Array(4).fill(SCOPE_CHAIN_UNUSED),
+    scopeTwapChain: Array(4).fill(SCOPE_CHAIN_UNUSED),
+    pythPrice: PublicKey.default,
+    pythFactor: PublicKey.default,
+    klendReserve: PublicKey.default,
+    klendProgram: PublicKey.default,
+    maxAgeSecs: 0,
+    maxTwapDivergenceBps: 0,
+    maxConfidenceBps: 0,
+  };
 }
 
 /** Human label for an oracle's sources, e.g. "Kamino Scope → Pyth fallback". */

@@ -1,24 +1,24 @@
 /**
- * `margin_execute` — the margin account calling a whitelisted external program (Jupiter swaps,
- * Kamino Lend supply / redeem), health-checked by the program after the CPI.
+ * `margin_execute` — the margin account calling a whitelisted outside program (Jupiter swaps,
+ * Kamino Lend supply / redeem, GMTrade perps). The integration's VALIDATOR reviews the call (which
+ * call account is the margin, which margin vaults are spent / received) before Vanna signs it, and
+ * the account is health-checked after it (Frontend Integration Guide, "External calls").
  *
- * Account list (`instructions/account_manager/exec.rs::MarginExecute`):
- *   authority, protocol_config, margin_account, integration ["integration", target], target_program,
- *   spent_asset, spent_mint, spent_vault,
- *   received_asset, received_mint, received_vault (init_if_needed),
- *   spent_token_program, received_token_program, associated_token_program, system_program
- * remaining_accounts = the external instruction's accounts (`cpi_account_count` of them, in that
- * program's order, none a signer — the program signs as the margin PDA) followed by the health
- * scan, which EXCLUDES both the spent and the received collateral (the handler values those two
- * itself from the named vaults), then the oracle accounts (see buildHealthRemainingAccounts).
- *
- * Program-side rules the UI must respect: the spent asset must already be ACTIVE collateral, the
- * received asset must be collateral-enabled, and the account must stay above HF 1.10.
+ * Accounts: authority, protocol_config, margin_account, integration ["integration", target],
+ * target_program, validator, venue_asset + venue_account (GMTrade only, else null).
+ * Args: data (the outside instruction's data), call_account_count, new_assets.
+ * remaining_accounts, in order:
+ *   1. the outside instruction's accounts (none a signer: Vanna signs as the margin / venue account);
+ *   2. EVERY position group, in slot order;
+ *   3. one `[asset_config, margin vault]` group per token received for the first time (new_assets);
+ *   4. the oracle segment (price accounts of every holding and every new token);
+ *   5. the validator segment, only when it needs accounts: GMTrade `[vanna_validator, market_book]`.
+ * The receiving margin vault is created (idempotent ATA) before the call; Vanna doesn't create it.
+ * Vanna sets no minimum output: slippage protection is the outside program's (Jupiter's min out).
  */
-import { BN } from "@coral-xyz/anchor";
-import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { PublicKey, SystemProgram, type AccountMeta, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
-import { JUPITER_V6_PROGRAM_ID } from "./config";
+import { createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
+import { PublicKey, type AccountMeta, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
+import { JUPITER_V6_PROGRAM_ID, VALIDATOR_PROGRAM_ID } from "./config";
 import { getConnection } from "./connection";
 import { getProgram } from "./program";
 import { integrationPda, marginVault, protocolConfigPda } from "./pdas";
@@ -51,70 +51,85 @@ import {
   underlyingForReceipts,
   type KaminoReceipt,
 } from "./kamino";
+import { venueAccountOf } from "./perps-accounts";
 
-/** Jupiter route + health scan + Vanna checks run well past the 600k batch budget. */
-const EXEC_COMPUTE_UNITS = 1_400_000;
+/** Kamino / Jupiter use 1,000,000 in the guide, GMTrade orders 1,400,000; one budget for all. */
+export const EXEC_COMPUTE_UNITS = 1_400_000;
 
 function findAssetByMint(ctx: BatchContext, mint: PublicKey): AssetConfigState {
   for (const a of ctx.assetMap.values()) if (a.mint.equals(mint)) return a;
   throw new Error(`${mint.toBase58()} is not registered with the protocol`);
 }
 
+const readonly = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false });
+
+export interface ExecCall {
+  target: PublicKey;
+  data: Buffer;
+  cpiAccounts: AccountMeta[];
+  /** The validator segment's accounts after the program (GMTrade: `[market_book]`). */
+  validatorAccounts?: PublicKey[];
+  /** A token call: what it spends / receives (new-asset group, model replay). */
+  token?: { spent: AssetConfigState; received: AssetConfigState; expectedSpent: bigint; expectedReceived: bigint };
+  /** A GMTrade call: the venue asset, the market leg it targets, whether it opens it, the USDC vault. */
+  venue?: { asset: AssetConfigState; leg: number | null; opensLeg: boolean; settleAsset: AssetConfigState };
+}
+
 /**
- * Builds one `margin_execute` against the batch context's CURRENT index model (so it composes
- * after deposits / borrows in the same transaction) and replays its effect on the model.
+ * Builds one `margin_execute` against the batch context's CURRENT index model (so it composes after
+ * deposits / borrows in the same transaction) and replays its effect on the model. The receiving
+ * vault's idempotent ATA create is pushed onto `ctx.instructions`.
  */
-export async function marginExecuteIx(
-  ctx: BatchContext,
-  p: {
-    target: PublicKey;
-    spent: AssetConfigState;
-    received: AssetConfigState;
-    data: Buffer;
-    cpiAccounts: AccountMeta[];
-    minReceived: bigint;
-    /** Expected spend / receive, only used to replay the active-asset lists. */
-    expectedSpent: bigint;
-    expectedReceived: bigint;
-  },
-): Promise<TransactionInstruction> {
-  if (!ctx.model.collateral.includes(p.spent.assetIndex)) {
-    throw new Error("The asset to spend is not active collateral in your margin account");
+export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promise<TransactionInstruction> {
+  const extraGroups: AccountMeta[] = [];
+  const priced: AssetConfigState[] = [];
+  const writable: PublicKey[] = [];
+  let newAssets = 0;
+  if (call.token) {
+    const { spent, received } = call.token;
+    if (!ctx.model.collateral.includes(spent.assetIndex)) throw new Error("The asset to spend is not active collateral in your margin account");
+    if (!received.collateralEnabled) throw new Error("The asset to receive is not enabled as collateral");
+    const receivedVault = marginVault(ctx.margin, received.mint, received.tokenProgram);
+    ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(ctx.owner, receivedVault, ctx.margin, received.mint, received.tokenProgram));
+    priced.push(spent, received);
+    if (!ctx.model.collateral.includes(received.assetIndex)) {
+      extraGroups.push(readonly(received.address), readonly(receivedVault));
+      newAssets = 1;
+    }
   }
-  // Priced = the plain (non-receipt) side(s): both legs of a swap, the underlying of a Kamino
-  // deposit / redeem. A receipt's klend reserve is already among the Kamino CPI accounts, where the
-  // program finds it by key (same as vanna-credit-layer/scripts/src/integrations-fork.ts).
-  const priced = [p.spent, p.received].filter((a) => a.priceSource !== "kaminoReceipt");
-  const health = buildHealthRemainingAccounts(
-    ctx.margin,
-    ctx.model,
-    ctx.assetMap,
-    { collateral: [p.spent.assetIndex, p.received.assetIndex] },
-    priced,
-  );
-  const cpi = p.cpiAccounts.map((a) => ({ ...a, isSigner: false }));
+  let venueScan;
+  if (call.venue) {
+    if (!ctx.venueBook) throw new Error("GMTrade market book not loaded");
+    // The margin USDC vault funds the order, so it is writable; the target market's accounts join
+    // the oracle segment even before its leg is open (the guide's `venueLegs: legBit(leg)`).
+    writable.push(marginVault(ctx.margin, call.venue.settleAsset.mint, call.venue.settleAsset.tokenProgram));
+    priced.push(call.venue.settleAsset);
+    venueScan = { book: ctx.venueBook, extraLegs: call.venue.leg === null ? 0n : 1n << BigInt(call.venue.leg), always: true };
+  } else if (ctx.venueBook) {
+    venueScan = { book: ctx.venueBook };
+  }
+  const health = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {}, priced, { venue: venueScan, writable, extraGroups });
+  const validatorSegment = call.validatorAccounts ? [readonly(VALIDATOR_PROGRAM_ID), ...call.validatorAccounts.map(readonly)] : [];
+  const cpi = call.cpiAccounts.map((a) => ({ ...a, isSigner: false }));
   const ix = await getProgram()
-    .methods.marginExecute(p.data, cpi.length, new BN(p.minReceived.toString()))
+    .methods.marginExecute(call.data, cpi.length, newAssets)
     .accountsStrict({
       authority: ctx.owner,
       protocolConfig: protocolConfigPda(),
       marginAccount: ctx.margin,
-      integration: integrationPda(p.target),
-      targetProgram: p.target,
-      spentAsset: p.spent.address,
-      spentMint: p.spent.mint,
-      spentVault: marginVault(ctx.margin, p.spent.mint, p.spent.tokenProgram),
-      receivedAsset: p.received.address,
-      receivedMint: p.received.mint,
-      receivedVault: marginVault(ctx.margin, p.received.mint, p.received.tokenProgram),
-      spentTokenProgram: p.spent.tokenProgram,
-      receivedTokenProgram: p.received.tokenProgram,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
+      integration: integrationPda(call.target),
+      targetProgram: call.target,
+      validator: VALIDATOR_PROGRAM_ID,
+      venueAsset: call.venue ? call.venue.asset.address : null,
+      venueAccount: call.venue ? venueAccountOf(ctx.margin) : null,
     } as any)
-    .remainingAccounts([...cpi, ...health])
+    .remainingAccounts([...cpi, ...health, ...validatorSegment])
     .instruction();
-  ctx.model.execute(p.spent.assetIndex, p.expectedSpent, p.received.assetIndex, p.expectedReceived);
+  if (call.token) {
+    const t = call.token;
+    ctx.model.execute(t.spent.assetIndex, t.expectedSpent, t.received.assetIndex, t.expectedReceived);
+  }
+  if (call.venue) ctx.model.venueCall(call.venue.asset.assetIndex, call.venue.opensLeg ? call.venue.leg : null);
   return ix;
 }
 
@@ -139,6 +154,8 @@ let apiBase = "";
 export function setExecApiBase(base: string) {
   apiBase = base.replace(/\/$/, "");
 }
+/** The app's API origin ("" in the browser). */
+export const appApiBase = () => apiBase;
 
 export interface MarginSwapRequest {
   fromSymbol: string;
@@ -148,7 +165,14 @@ export interface MarginSwapRequest {
   slippageBps: number;
 }
 
-/** Exact-input quote for a margin swap (same routing as wallet swaps). */
+/**
+ * Route size budget for a margin swap. `margin_execute` carries the route's accounts plus every
+ * position group and the agent segments, and the core program runs out of heap ("memory allocation
+ * failed") on long routes, so ask Jupiter for a shorter one (the guide's `maxAccounts` advice).
+ */
+const MARGIN_SWAP_MAX_ACCOUNTS = 20;
+
+/** Exact-input quote for a margin swap (same routing as wallet swaps, shorter routes). */
 export function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQuote> {
   const from = getToken(req.fromSymbol);
   const to = getToken(req.toSymbol);
@@ -157,13 +181,14 @@ export function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQuote> {
     outputMint: to.mint.toBase58(),
     amount: toRaw(req.amount, from.decimals),
     slippageBps: req.slippageBps,
+    maxAccounts: MARGIN_SWAP_MAX_ACCOUNTS,
   });
 }
 
 /**
  * Swaps collateral inside the margin account through Jupiter. The route is built with the margin
  * PDA as `userPublicKey` (no SOL wrap, shared accounts → no intermediate user accounts), only the
- * swap instruction is wrapped, and `min_received` is Jupiter's own slippage floor.
+ * swap instruction is wrapped; Jupiter's own minimum out is the slippage floor.
  */
 export async function executeMarginSwap(req: MarginSwapRequest, quote: JupiterQuote, opts: MarginServiceOptions = {}): Promise<MarginTxResult> {
   const signer = opts.signer ?? getActiveSigner();
@@ -200,17 +225,14 @@ export async function executeMarginSwap(req: MarginSwapRequest, quote: JupiterQu
     throw new Error("Jupiter returned a route type the margin adapter doesn't allow — try a different amount");
   }
 
+  // The route carries Jupiter's own minimum out (otherAmountThreshold); Vanna adds no second check.
   const ix = await marginExecuteIx(ctx, {
     target: JUPITER_V6_PROGRAM_ID,
-    spent,
-    received,
     data,
     cpiAccounts: swapIx.accounts.map((a) => ({ pubkey: new PublicKey(a.pubkey), isSigner: false, isWritable: a.isWritable })),
-    minReceived: BigInt(quote.otherAmountThreshold ?? quote.outAmount),
-    expectedSpent: amount,
-    expectedReceived: BigInt(quote.outAmount),
+    token: { spent, received, expectedSpent: amount, expectedReceived: BigInt(quote.outAmount) },
   });
-  const signature = await sendInstructions([ix], {
+  const signature = await sendInstructions([...ctx.instructions, ix], {
     signer,
     label: `Swap ${from.symbol} → ${to.symbol}`,
     computeUnits: EXEC_COMPUTE_UNITS,
@@ -230,9 +252,6 @@ async function readRate(r: KaminoReceipt) {
   return readReserveRate(info.data, r.collateralMint);
 }
 
-/** Slippage allowance on the cTokens minted (the reserve accrues between quote and landing). */
-const RECEIPT_SLIPPAGE_BPS = 50n;
-
 export interface FarmDepositRequest {
   /** Registry symbol of the asset to supply to Kamino. */
   symbol: string;
@@ -245,7 +264,7 @@ export interface FarmDepositRequest {
 }
 
 /**
- * ONE transaction: [deposit from wallet] → [open debt + borrow] → `margin_execute` Kamino
+ * ONE transaction: [deposit from wallet] → [borrow] → `margin_execute` Kamino
  * `deposit_reserve_liquidity` of (wallet + margin + borrowed) amount. The cTokens stay in the
  * margin account as collateral.
  */
@@ -277,7 +296,6 @@ export async function farmDeposit(req: FarmDepositRequest, opts: MarginServiceOp
 
   const rate = await readRate(r);
   const expectedReceipts = receiptsForUnderlying(rate, total);
-  const minReceived = (expectedReceipts * (10_000n - RECEIPT_SLIPPAGE_BPS)) / 10_000n;
   const cpiAccounts = kaminoCallAccounts(
     "deposit",
     r,
@@ -287,13 +305,9 @@ export async function farmDeposit(req: FarmDepositRequest, opts: MarginServiceOp
   );
   const ix = await marginExecuteIx(ctx, {
     target: KLEND_PROGRAM_ID,
-    spent: underlying,
-    received: receiptAsset,
     data: kaminoCallData("deposit", total),
     cpiAccounts,
-    minReceived,
-    expectedSpent: total,
-    expectedReceived: expectedReceipts,
+    token: { spent: underlying, received: receiptAsset, expectedSpent: total, expectedReceived: expectedReceipts },
   });
   const signature = await sendInstructions([...ctx.instructions, ix, ...ctx.suffix], {
     signer,
@@ -341,15 +355,11 @@ export async function farmWithdraw(req: FarmWithdrawRequest, opts: MarginService
   );
   const ix = await marginExecuteIx(ctx, {
     target: KLEND_PROGRAM_ID,
-    spent: receiptAsset,
-    received: underlying,
     data: kaminoCallData("redeem", amount),
     cpiAccounts,
-    minReceived: (expected * (10_000n - RECEIPT_SLIPPAGE_BPS)) / 10_000n,
-    expectedSpent: amount,
-    expectedReceived: expected,
+    token: { spent: receiptAsset, received: underlying, expectedSpent: amount, expectedReceived: expected },
   });
-  const signature = await sendInstructions([ix], {
+  const signature = await sendInstructions([...ctx.instructions, ix], {
     signer,
     label: `Withdraw ${token.symbol} from Kamino`,
     computeUnits: EXEC_COMPUTE_UNITS,

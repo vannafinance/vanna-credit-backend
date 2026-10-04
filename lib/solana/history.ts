@@ -17,8 +17,9 @@ import { getConnection } from "./connection";
 import { marginPda, reservePda } from "./pdas";
 import { getProgram } from "./program";
 import { fromRaw } from "./math";
-import { TOKENS, tokenByMint, type TokenInfo } from "./tokens";
+import { getToken, TOKENS, tokenByMint, type TokenInfo } from "./tokens";
 import { receiptByMint } from "./kamino";
+import { GMTRADE_PROGRAM_ID } from "./perps-accounts";
 
 let parser: EventParser | null = null;
 const getParser = () => (parser ??= new EventParser(VANNA_PROGRAM_ID, getProgram().coder));
@@ -59,7 +60,13 @@ export type MarginEventType =
   /** `margin_execute` Kamino deposit: `symbol`/`amount` = underlying supplied. */
   | "farm-deposit"
   /** `margin_execute` Kamino redeem: `symbol`/`amount` = underlying received back. */
-  | "farm-withdraw";
+  | "farm-withdraw"
+  /** `margin_execute` into GMTrade that funded an order: `symbol`/`amount` = USDC moved in. */
+  | "perp-open"
+  /** `margin_execute` into GMTrade that moved no USDC (close, cancel, account setup). */
+  | "perp-order"
+  /** `public_venue_settle`: `symbol`/`amount` = USDC swept back into the margin account. */
+  | "perp-settle";
 
 export interface MarginHistoryRow {
   type: MarginEventType;
@@ -208,10 +215,22 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
           push("close-collateral", tokenOfMint(field(e.data, "mint", "mint")), 0n);
           break;
         case "MarginExecuted": {
-          const spentMint = key(field(e.data, "spent_mint", "spentMint"));
-          const receivedMint = key(field(e.data, "received_mint", "receivedMint"));
-          const spent = bigOf(field(e.data, "amount_spent", "amountSpent"));
-          const received = bigOf(field(e.data, "amount_received", "amountReceived"));
+          // `spent` / `received`: [{ mint, amount }] per margin vault paid out of / into; a GMTrade
+          // order's USDC funding counts as spent.
+          const amounts = (name: string) =>
+            ((field(e.data, name, name) as any[] | undefined) ?? []).map((t) => ({ mint: key(field(t, "mint", "mint")), amount: bigOf(field(t, "amount", "amount")) }));
+          const spentList = amounts("spent");
+          const receivedList = amounts("received");
+          if (key(field(e.data, "program_id", "programId")) === GMTRADE_PROGRAM_ID.toBase58()) {
+            const funded = spentList[0];
+            if (funded) push("perp-open", tokenOfMint(funded.mint), funded.amount, { healthFactor: hf(e.data) });
+            else push("perp-order", undefined, 0n, { healthFactor: hf(e.data) });
+            break;
+          }
+          const spentMint = spentList[0]?.mint ?? "";
+          const receivedMint = receivedList[0]?.mint ?? "";
+          const spent = spentList[0]?.amount ?? 0n;
+          const received = receivedList[0]?.amount ?? 0n;
           const kIn = receiptByMint(receivedMint);
           const kOut = receiptByMint(spentMint);
           if (kIn) {
@@ -226,6 +245,11 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
               toAmount: to ? fromRaw(received, to.decimals) : "0",
             });
           }
+          break;
+        }
+        case "VenueSettled": {
+          const swept = bigOf(field(e.data, "swept", "swept"));
+          if (swept > 0n) push("perp-settle", getToken("USDC"), swept);
           break;
         }
       }

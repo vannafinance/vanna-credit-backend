@@ -28,6 +28,16 @@ export const VANNA_PROGRAM_ID = new PublicKey(
 );
 
 /** Pyth Solana Receiver — owner of every PriceUpdateV2 account. */
+/** The core program's oracle agent: prices every token (price book) and venue account (market book). */
+export const ORACLE_PROGRAM_ID = new PublicKey(
+  process.env.NEXT_PUBLIC_VANNA_ORACLE_PROGRAM_ID ?? "FXY5DRfekMUTbUp4uyCFpCZmCccrp6kPq3hTM4GRihnc",
+);
+
+/** The core program's validator agent: reviews every `margin_execute` call (Kamino, Jupiter, GMTrade). */
+export const VALIDATOR_PROGRAM_ID = new PublicKey(
+  process.env.NEXT_PUBLIC_VANNA_VALIDATOR_PROGRAM_ID ?? "6fND3vhtstp486iE6rsSNVUox3kcjNNRsSLAN7ZPs7th",
+);
+
 export const PYTH_RECEIVER_PROGRAM_ID = new PublicKey("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
 /** Pyth push-oracle program — derives the long-lived "price feed account" addresses. */
 export const PYTH_PUSH_ORACLE_PROGRAM_ID = new PublicKey("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");

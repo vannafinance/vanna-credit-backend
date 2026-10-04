@@ -8,7 +8,10 @@ export const navbarItems = [
   { title: "Farm", link: "/farm", group: "bordered" },
 ];
 
-export const tradeItems = [{ title: "Spot", link: "/trade/spot" }];
+export const tradeItems = [
+  { title: "Spot", link: "/trade/spot" },
+  { title: "Perps", link: "/trade/perps" },
+];
 
 /**
  * Asset dropdown options everywhere in the app — straight from the token registry

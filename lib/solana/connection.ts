@@ -30,11 +30,31 @@ export async function forkUnixTimestamp(connection: Connection = getConnection()
   return clock.data.readBigInt64LE(32);
 }
 
-/** Reads many accounts, chunked at the RPC's 100-key limit. */
+/**
+ * The hosted fork answers a read of an account it doesn't hold by asking its upstream mainnet RPC,
+ * and that upstream rate-limits bursts — the fork then returns a bare "Internal error" (or 429). The
+ * request itself is fine, so retry it a few times with backoff before failing.
+ */
+const TRANSIENT_RPC_ERROR = /Internal error|429|Too Many Requests|fetch failed|ECONNRESET|timed out/i;
+
+async function withRetry<T>(run: () => Promise<T>, attempts = 4): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= attempts || !TRANSIENT_RPC_ERROR.test(message)) throw error;
+      await new Promise((r) => setTimeout(r, 300 * 2 ** (attempt - 1)));
+    }
+  }
+}
+
+/** Reads many accounts, chunked at the RPC's 100-key limit, retrying the fork's transient errors. */
 export async function getMultipleAccountsChunked(connection: Connection, keys: PublicKey[]) {
   const out = [];
   for (let i = 0; i < keys.length; i += 100) {
-    out.push(...(await connection.getMultipleAccountsInfo(keys.slice(i, i + 100), "confirmed")));
+    const chunk = keys.slice(i, i + 100);
+    out.push(...(await withRetry(() => connection.getMultipleAccountsInfo(chunk, "confirmed"))));
   }
   return out;
 }

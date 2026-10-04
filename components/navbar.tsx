@@ -22,6 +22,11 @@ interface Navbar {
   }[];
 }
 
+/** A Trade sub-item is active on its own route and any nested route (e.g. `/trade/perps/ethusdc`). */
+function isTradeItemActive(pathname: string, link: string): boolean {
+  return pathname === link || pathname.startsWith(`${link}/`);
+}
+
 /**
  * Resolves whether a nav item is the active route. Handles the special cases:
  * Trade is active for any `/trade/*` route or sub-item, and Margin lives at both `/`
@@ -35,7 +40,7 @@ function isNavItemActive(
     return (
       pathname === item.link ||
       pathname.startsWith(`${item.link}/`) ||
-      tradeItems.some((tradeItem) => pathname === tradeItem.link)
+      tradeItems.some((tradeItem) => isTradeItemActive(pathname, tradeItem.link))
     );
   }
   if (item.title === "Margin") {
@@ -255,6 +260,7 @@ export const Navbar = (props: Navbar) => {
             {(() => {
               if (pathname === "/" || pathname === "/margin") return "Margin";
               if (pathname.startsWith("/trade/spot")) return "Spot";
+              if (pathname.startsWith("/trade/perps")) return "Perps";
               if (pathname.startsWith("/trade")) return "Trade";
               if (pathname.startsWith("/farm")) return "Farm";
               if (pathname.startsWith("/earn")) return "Earn";
@@ -392,8 +398,10 @@ export const Navbar = (props: Navbar) => {
                         >
                           <div className="p-[6px]">
                             {tradeItems.map((tradeItem) => {
-                              const isTradeActive =
-                                pathname === tradeItem.link;
+                              const isTradeActive = isTradeItemActive(
+                                pathname,
+                                tradeItem.link
+                              );
                               return (
                                 <motion.div
                                   key={tradeItem.link}
@@ -489,6 +497,8 @@ export const Navbar = (props: Navbar) => {
                                     >
                                       {tradeItem.title === "Spot"
                                         ? "Leveraged Spot"
+                                        : tradeItem.title === "Perps"
+                                        ? "Perpetuals on GMTrade"
                                         : "Leverage over Leverage"}
                                     </p>
                                   </div>
@@ -1578,8 +1588,10 @@ export const Navbar = (props: Navbar) => {
                                 }`}
                               >
                                 {tradeItems.map((tradeItem, subIdx) => {
-                                  const isSubActive =
-                                    pathname === tradeItem.link;
+                                  const isSubActive = isTradeItemActive(
+                                    pathname,
+                                    tradeItem.link
+                                  );
                                   return (
                                     <motion.div
                                       key={tradeItem.link}

@@ -1,9 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Margin-account service layer for `vanna_lending` (the NEW program: user_create_margin,
- * user_deposit_collateral, user_open_debt_position, user_borrow, user_repay_from_margin,
- * public_repay_from_wallet, user_withdraw_collateral, user_close_debt_position,
- * user_close_collateral_position).
+ * Margin-account service layer for the core program `vanna_credit_layer` (Frontend Integration
+ * Guide): user_create_margin, user_deposit_collateral, user_borrow (opens the debt position itself),
+ * user_repay_from_margin (the only repay path), user_withdraw_collateral, user_reclaim_rent.
+ *
+ * Prices come from the oracle AGENT: health-checked instructions end their `remaining_accounts`
+ * with its segment `[vanna_oracle, price_book, ...price accounts]`. A GMTrade venue account counts
+ * as one holding at the value the oracle reports (idle + escrow + position equity).
  *
  * Health model (V1, account-wide): HF = Σ collateral USD / Σ debt USD, liquidatable at HF <= 1.10.
  * The margin vault's live balance IS the collateral, and borrowed tokens land in the vault, so a
@@ -25,7 +28,7 @@ import {
   createCloseAccountInstruction,
 } from "@solana/spl-token";
 import { PublicKey, SystemProgram, type AccountMeta, type AccountInfo, type TransactionInstruction } from "@solana/web3.js";
-import { BATCH_COMPUTE_UNITS, SAFE_HEALTH_FACTOR, LIQUIDATION_HEALTH_FACTOR } from "./config";
+import { BATCH_COMPUTE_UNITS, ORACLE_PROGRAM_ID, SAFE_HEALTH_FACTOR, LIQUIDATION_HEALTH_FACTOR } from "./config";
 import { forkUnixTimestamp, getConnection, getMultipleAccountsChunked } from "./connection";
 import { accounts, big, getProgram } from "./program";
 import {
@@ -33,6 +36,7 @@ import {
   debtPositionPda,
   marginPda,
   marginVault,
+  priceBookPda,
   protocolConfigPda,
   reservePda,
   reserveVault,
@@ -66,6 +70,8 @@ import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { ensureFreshPrices } from "./price-refresh";
 import { temporaryWsolReceiver, wrapSolInstructions } from "./wsol";
 import { readReserveRate, receiptByMint, underlyingForReceipts, type ReserveRate } from "./kamino";
+import { fetchMarketBook, readVenueState, type VenueState } from "./perps-state";
+import { venueAccountOf, venueOracleAccounts, type MarketBookState } from "./perps-accounts";
 
 /** Sentinel for an empty slot in `collateral_asset_indexes` / `debt_asset_indexes`. */
 export const EMPTY_ASSET_INDEX = 65535;
@@ -90,7 +96,14 @@ export interface MarginAccountRaw {
   debtCount: number;
   collateralAssetIndexes: number[];
   debtAssetIndexes: number[];
+  /** Per venue (by asset index): the bitmap of legs (markets) that may hold exposure. */
+  venueLegs: { assetIndex: number; legs: bigint }[];
   eventSequence: bigint;
+}
+
+/** `MarginAccount::legs_of`: a venue's tracked legs (0 when none). */
+export function legsOf(raw: MarginAccountRaw | null, assetIndex: number): bigint {
+  return raw?.venueLegs.find((v) => v.legs !== 0n && v.assetIndex === assetIndex)?.legs ?? 0n;
 }
 
 export async function fetchMarginAccount(owner: PublicKey): Promise<MarginAccountRaw | null> {
@@ -105,6 +118,7 @@ export async function fetchMarginAccount(owner: PublicKey): Promise<MarginAccoun
     debtCount: Number(raw.debtCount),
     collateralAssetIndexes: (raw.collateralAssetIndexes as number[]).map(Number),
     debtAssetIndexes: (raw.debtAssetIndexes as number[]).map(Number),
+    venueLegs: ((raw.venueLegs ?? []) as any[]).map((v) => ({ assetIndex: Number(v.assetIndex), legs: big(v.legs) })),
     eventSequence: big(raw.eventSequence),
   };
 }
@@ -158,6 +172,8 @@ export interface MarginSnapshot {
   /** null = infinite (no debt). */
   healthFactor: number | null;
   healthFactorWad: bigint | null;
+  /** The GMTrade venue account, when the margin holds one (counted in the totals above). */
+  venue: VenueState | null;
   prices: Record<string, OnchainPrice | null>;
   /** Symbols whose on-chain price is older than their asset's max_price_age_secs. */
   stalePrices: string[];
@@ -196,6 +212,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     totalDebtUsd: 0,
     healthFactor: null,
     healthFactorWad: null,
+    venue: null,
     prices: {},
     stalePrices: [],
   };
@@ -214,7 +231,9 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     const a = assetMap.get(i);
     if (a) readAssets.set(i, a);
   }
-  const assetList = [...readAssets.values()];
+  // A venue isn't a token: the oracle values it from its venue account (below), not from a vault.
+  const assetList = [...readAssets.values()].filter((a) => a.kind === "token");
+  const venueAsset = [...assetMap.values()].find((a) => a.kind === "venue" && activeCol.includes(a.assetIndex)) ?? null;
 
   // Per asset: [margin vault, debt position, reserve]. Prices come from each asset's own on-chain
   // OracleConfig (Scope chain first, Pyth fallback), read from one deduplicated fetch of every
@@ -325,6 +344,27 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     }
   });
 
+  let venue: VenueState | null = null;
+  if (venueAsset) {
+    const book = await fetchMarketBook(connection);
+    if (book) {
+      venue = await readVenueState(connection, margin, book, legsOf(raw, venueAsset.assetIndex), now);
+      // Counted at full value, like every holding (the guide: LTV/threshold aren't used yet).
+      totalCollateralNano += venue.valueNano;
+      collateral.push({
+        symbol: "GMTrade",
+        token: null,
+        assetIndex: venueAsset.assetIndex,
+        mint: venueAsset.mint,
+        vault: venue.venueAccount,
+        amountRaw: 0n,
+        amount: 0,
+        valueNano: venue.valueNano,
+        usd: Number(venue.valueNano) / NANO,
+        active: true,
+      });
+    }
+  }
   const hfWad = healthFactorWad(totalCollateralNano, totalDebtNano);
   // Order rows by the registry, unknown assets last.
   const order = (s: string) => {
@@ -349,6 +389,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     totalDebtUsd: Number(totalDebtNano) / NANO,
     healthFactor: hfWad === null ? null : Number((hfWad * 1_000_000n) / WAD) / 1e6,
     healthFactorWad: hfWad,
+    venue,
     prices,
     stalePrices,
   };
@@ -369,6 +410,8 @@ export class MarginIndexModel {
   debt: number[];
   /** Simulated vault balances per asset index (only used for was-zero decisions). */
   vault = new Map<number, bigint>();
+  /** Tracked venue legs per venue asset index (`MarginAccount::venue_legs`). */
+  venueLegs = new Map<number, bigint>();
   /** Simulated debt shares > 0 per asset index. */
   hasDebt = new Set<number>();
 
@@ -378,6 +421,7 @@ export class MarginIndexModel {
     for (const c of snapshot?.collateral ?? []) this.vault.set(c.assetIndex, c.amountRaw);
     for (const d of snapshot?.debts ?? []) if (d.borrowShares > 0n) this.hasDebt.add(d.assetIndex);
     for (const i of this.debt) if (i !== EMPTY_ASSET_INDEX) this.hasDebt.add(i);
+    for (const v of raw?.venueLegs ?? []) if (v.legs !== 0n) this.venueLegs.set(v.assetIndex, v.legs);
   }
 
   private add(list: number[], index: number) {
@@ -428,6 +472,16 @@ export class MarginIndexModel {
     if (received > 0n) this.add(this.collateral, receivedIndex);
   }
 
+  /**
+   * `margin_execute` at a venue: an order that opens a leg puts the venue on the collateral list
+   * and tracks the leg. Funding from the USDC vault never deactivates it.
+   */
+  venueCall(venueIndex: number, openedLeg: number | null) {
+    if (openedLeg === null) return;
+    this.add(this.collateral, venueIndex);
+    this.venueLegs.set(venueIndex, (this.venueLegs.get(venueIndex) ?? 0n) | (1n << BigInt(openedLeg)));
+  }
+
   /** Repay that fully clears the debt (and, from margin, may empty the vault). */
   repay(index: number, clearsDebt: boolean, vaultAfter?: bigint) {
     if (clearsDebt) {
@@ -443,35 +497,52 @@ export class MarginIndexModel {
 
 const readonlyMeta = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false });
 
+/** The venue part of a scan when the margin holds (or a call targets) the GMTrade venue. */
+export interface VenueScan {
+  book: MarketBookState;
+  /** Legs to value on top of the tracked ones (the guide's `venueLegs`: the call's target market). */
+  extraLegs?: bigint;
+  /** A call AT the venue: the program values the venue account even before a leg is tracked. */
+  always?: boolean;
+}
+
 /**
- * Builds the health-check `remaining_accounts` exactly as `risk_engine.rs` consumes them (same
- * layout as `vanna-credit-layer/scripts/src/devnet-positions.ts::buildRemainingAccounts`):
- *   1. position groups, in the margin account's SLOT order (skip 65535), skipping the instruction's
- *      own (`exclude`): collateral `[asset_config, margin_vault]`, then debt
- *      `[asset_config, reserve, debt_position]`;
- *   2. then the oracle accounts (Scope / Pyth / Pyth factor / a receipt's klend reserve, from each
- *      asset's on-chain OracleConfig) of EVERY active position — excluded ones included — and of
- *      `priced` (the instruction's own assets), each once. The program finds oracle accounts by key,
- *      so their order doesn't matter, but a needed one that is missing is an error.
- * The margin vault is derived with the asset's OWN token program (never a hardcoded one).
+ * Builds a health-checked instruction's `remaining_accounts` as the guide's "Position accounts in
+ * remaining_accounts" (port of `scripts/src/devnet-positions.ts::buildRemainingAccounts`):
+ *   1. collateral groups in the margin's SLOT order (skip 65535), minus `exclude`:
+ *      `[asset_config, margin vault]`, or `[asset_config, venue account]` for GMTrade;
+ *   2. debt groups `[asset_config, reserve, debt_position]`, minus `exclude.debt`;
+ *   3. `extraGroups` (margin_execute's `new_assets` groups);
+ *   4. the oracle segment `[vanna_oracle, price_book, ...]`: the price accounts of EVERY active
+ *      position (excluded ones too) and of `priced`, each once; with GMTrade also the market book,
+ *      USDC price accounts, venue USDC ATA and every tracked (+ extra) leg's accounts.
  */
 export function buildHealthRemainingAccounts(
   margin: PublicKey,
-  model: { collateral: number[]; debt: number[] },
+  model: { collateral: number[]; debt: number[]; venueLegs?: Map<number, bigint> },
   assetMap: Map<number, AssetConfigState>,
   exclude: { collateral?: number[]; debt?: number } = {},
   priced: AssetConfigState[] = [],
+  opts: { venue?: VenueScan; writable?: PublicKey[]; extraGroups?: AccountMeta[] } = {},
 ): AccountMeta[] {
   const metas: AccountMeta[] = [];
   const oracles: PublicKey[] = priced.flatMap((a) => a.oracleAccounts);
   const skipCol = new Set(exclude.collateral ?? []);
+  const writable = new Set((opts.writable ?? []).map((k) => k.toBase58()));
+  const meta = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: writable.has(pubkey.toBase58()) });
+  let venueLegs: bigint | null = null;
   for (const index of model.collateral) {
     if (index === EMPTY_ASSET_INDEX) continue;
     const asset = assetMap.get(index);
     if (!asset) throw new Error(`Active collateral asset index ${index} has no AssetConfig on-chain`);
+    if (asset.kind === "venue") {
+      venueLegs = model.venueLegs?.get(index) ?? 0n;
+      if (!skipCol.has(index)) metas.push(meta(asset.address), meta(venueAccountOf(margin)));
+      continue;
+    }
     oracles.push(...asset.oracleAccounts);
     if (skipCol.has(index)) continue;
-    metas.push(readonlyMeta(asset.address), readonlyMeta(marginVault(margin, asset.mint, asset.tokenProgram)));
+    metas.push(meta(asset.address), meta(marginVault(margin, asset.mint, asset.tokenProgram)));
   }
   for (const index of model.debt) {
     if (index === EMPTY_ASSET_INDEX) continue;
@@ -480,9 +551,15 @@ export function buildHealthRemainingAccounts(
     oracles.push(...asset.oracleAccounts);
     if (index === exclude.debt) continue;
     const reserve = reservePda(asset.mint);
-    metas.push(readonlyMeta(asset.address), readonlyMeta(reserve), readonlyMeta(debtPositionPda(margin, reserve)));
+    metas.push(meta(asset.address), meta(reserve), meta(debtPositionPda(margin, reserve)));
   }
-  const seen = new Set<string>();
+  metas.push(...(opts.extraGroups ?? []));
+  if (venueLegs !== null || opts.venue?.always) {
+    if (!opts.venue) throw new Error("This margin account holds GMTrade positions — refresh and try again");
+    oracles.push(...venueOracleAccounts(venueAccountOf(margin), opts.venue.book, (venueLegs ?? 0n) | (opts.venue.extraLegs ?? 0n)));
+  }
+  metas.push(readonlyMeta(ORACLE_PROGRAM_ID), readonlyMeta(priceBookPda()));
+  const seen = new Set<string>([ORACLE_PROGRAM_ID.toBase58(), priceBookPda().toBase58()]);
   for (const key of oracles) {
     const id = key.toBase58();
     if (seen.has(id)) continue;
@@ -522,23 +599,6 @@ export async function depositIx(owner: PublicKey, token: TokenInfo, amount: bigi
       marginVault: marginVault(margin, token.mint, token.tokenProgram),
       tokenProgram: token.tokenProgram,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    } as any)
-    .instruction();
-}
-
-export async function openDebtIx(owner: PublicKey, token: TokenInfo): Promise<TransactionInstruction> {
-  const margin = marginPda(owner);
-  const reserve = reservePda(token.mint);
-  return getProgram()
-    .methods.userOpenDebtPosition()
-    .accountsStrict({
-      authority: owner,
-      payer: owner,
-      marginAccount: margin,
-      assetConfig: assetConfigPda(token.mint),
-      reserve,
-      debtPosition: debtPositionPda(margin, reserve),
       systemProgram: SystemProgram.programId,
     } as any)
     .instruction();
@@ -593,25 +653,6 @@ export async function repayFromMarginIx(owner: PublicKey, token: TokenInfo, maxA
     .instruction();
 }
 
-export async function repayFromWalletIx(payer: PublicKey, marginOwner: PublicKey, token: TokenInfo, maxAssets: bigint, repayAll: boolean, payerTokenAccount: PublicKey) {
-  const margin = marginPda(marginOwner);
-  const reserve = reservePda(token.mint);
-  return getProgram()
-    .methods.publicRepayFromWallet(new BN(maxAssets.toString()), repayAll)
-    .accountsStrict({
-      payer,
-      marginAccount: margin,
-      assetConfig: assetConfigPda(token.mint),
-      reserve,
-      debtPosition: debtPositionPda(margin, reserve),
-      mint: token.mint,
-      payerTokenAccount,
-      reserveVault: reserveVault(token.mint, token.tokenProgram),
-      tokenProgram: token.tokenProgram,
-    } as any)
-    .instruction();
-}
-
 export async function withdrawIx(
   owner: PublicKey,
   asset: AssetConfigState,
@@ -638,31 +679,21 @@ export async function withdrawIx(
     .instruction();
 }
 
-export async function closeDebtIx(owner: PublicKey, token: TokenInfo) {
-  const margin = marginPda(owner);
-  const reserve = reservePda(token.mint);
-  return getProgram()
-    .methods.userCloseDebtPosition()
-    .accountsStrict({
-      authority: owner,
-      marginAccount: margin,
-      assetConfig: assetConfigPda(token.mint),
-      reserve,
-      debtPosition: debtPositionPda(margin, reserve),
-    } as any)
-    .instruction();
-}
-
-export async function closeCollateralIx(owner: PublicKey, token: TokenInfo) {
+/**
+ * `user_reclaim_rent`: closes an empty, inactive margin vault and/or a zero-share, inactive debt
+ * position of one token, returning their rent to the owner. Pass at least one.
+ */
+export async function reclaimRentIx(owner: PublicKey, token: TokenInfo, close: { vault?: boolean; debt?: boolean }) {
   const margin = marginPda(owner);
   return getProgram()
-    .methods.userCloseCollateralPosition()
+    .methods.userReclaimRent()
     .accountsStrict({
       authority: owner,
       marginAccount: margin,
       assetConfig: assetConfigPda(token.mint),
       mint: token.mint,
-      marginVault: marginVault(margin, token.mint, token.tokenProgram),
+      marginVault: close.vault ? marginVault(margin, token.mint, token.tokenProgram) : null,
+      debtPosition: close.debt ? debtPositionPda(margin, reservePda(token.mint)) : null,
       tokenProgram: token.tokenProgram,
     } as any)
     .instruction();
@@ -738,8 +769,15 @@ export interface BatchContext {
   assetMap: Map<number, AssetConfigState>;
   pools: Record<string, PoolState>;
   model: MarginIndexModel;
+  /** The GMTrade market book, when the margin holds a venue account (or a GMTrade call needs it). */
+  venueBook: MarketBookState | null;
   instructions: TransactionInstruction[];
   suffix: TransactionInstruction[];
+}
+
+/** The venue part of this batch's health scans (undefined when GMTrade isn't involved). */
+export function venueScan(ctx: BatchContext): VenueScan | undefined {
+  return ctx.venueBook ? { book: ctx.venueBook } : undefined;
 }
 
 export async function loadContext(owner: PublicKey): Promise<BatchContext> {
@@ -751,6 +789,7 @@ export async function loadContext(owner: PublicKey): Promise<BatchContext> {
     assetMap,
     pools,
     model: new MarginIndexModel(snapshot.raw, snapshot),
+    venueBook: snapshot.venue?.book ?? null,
     instructions: [],
     suffix: [],
   };
@@ -781,7 +820,6 @@ export async function appendDeposits(ctx: BatchContext, deposits: AmountItem[]) 
 }
 
 export async function appendBorrows(ctx: BatchContext, borrows: AmountItem[]) {
-  const opened = new Set(ctx.snapshot.openDebtPositions);
   for (const item of borrows) {
     const token = getToken(item.symbol);
     // The app only lends out its Earn-pool tokens (SOL, USDC, USDT); staking tokens are collateral-only.
@@ -795,11 +833,7 @@ export async function appendBorrows(ctx: BatchContext, borrows: AmountItem[]) {
     if (amount > pool.projected.accountedLiquidityAssets) {
       throw new Error(`The ${token.symbol} pool only has ${fromRaw(pool.projected.accountedLiquidityAssets, token.decimals)} ${token.symbol} available to borrow`);
     }
-    if (!opened.has(token.symbol)) {
-      // user_open_debt_position must precede the first user_borrow of an asset.
-      ctx.instructions.push(await openDebtIx(ctx.owner, token));
-      opened.add(token.symbol);
-    }
+    // The first borrow of a token creates its debt position itself (no separate "open" call).
     // Bound debt shares at +0.5% over the projection (interest accrues between quote and landing
     // only in the borrower's favour for share count — more assets per share → fewer shares).
     const expectedShares = assetsToDebtSharesUp(amount, pool.projected.totalBorrowShares, pool.projected.totalBorrowAssets);
@@ -811,6 +845,7 @@ export async function appendBorrows(ctx: BatchContext, borrows: AmountItem[]) {
       ctx.assetMap,
       { collateral: [asset.assetIndex], debt: asset.assetIndex },
       [asset],
+      { venue: venueScan(ctx) },
     );
     ctx.instructions.push(await borrowIx(ctx.owner, asset, token, amount, maxShares, remaining));
     ctx.model.borrow(asset.assetIndex, amount, asset.collateralEnabled);
@@ -843,7 +878,7 @@ export async function createMarginAccount(opts: MarginServiceOptions = {}): Prom
 
 /**
  * THE margin write path: optionally create the account, deposit any number of assets from the
- * wallet, then open debt positions + borrow any number of assets (single / dual / cross-asset),
+ * wallet, then borrow any number of assets (single / dual / cross-asset),
  * all in ONE transaction (600k CU). Prices are refreshed first when anything is borrowed.
  */
 export async function depositAndBorrow(
@@ -890,13 +925,16 @@ export interface RepayRequest {
   amount?: string | number;
   /** Repay the entire accrued debt (`repay_all = true`). */
   all?: boolean;
-  /** "margin" = from the margin vault (user_repay_from_margin); "wallet" = public_repay_from_wallet. */
+  /**
+   * "margin" = from the margin vault; "wallet" = the wallet's tokens are deposited into the margin
+   * vault and repaid from it in the same transaction (repay always pays from the margin vault).
+   */
   source: "margin" | "wallet";
   /** After a full repay, also close the (now empty) debt position to reclaim its rent. Default true. */
   closePosition?: boolean;
 }
 
-/** Headroom when wrapping SOL for a wallet repay_all: covers interest accrued before landing. */
+/** Headroom for a repay_all: covers interest accrued between quote and landing. */
 const REPAY_ALL_BUFFER_BPS = 20n; // 0.2%
 
 export async function repay(req: RepayRequest, opts: MarginServiceOptions = {}): Promise<MarginTxResult> {
@@ -911,34 +949,36 @@ export async function repay(req: RepayRequest, opts: MarginServiceOptions = {}):
   if (requested <= 0n) throw new Error("Enter an amount greater than zero");
   const target = requested > debt.debtRaw ? debt.debtRaw : requested;
   const repayAll = Boolean(req.all) || target >= debt.debtRaw;
-  const withBuffer = repayAll ? target + (target * REPAY_ALL_BUFFER_BPS) / 10_000n + 1n : target;
+  const needed = repayAll ? target + (target * REPAY_ALL_BUFFER_BPS) / 10_000n + 1n : target;
 
   const instructions: TransactionInstruction[] = [];
   const suffix: TransactionInstruction[] = [];
   if (req.source === "margin") {
     const vault = snapshot.collateral.find((c) => c.symbol === token.symbol)?.amountRaw ?? 0n;
-    if (vault < (repayAll ? withBuffer : target)) {
+    if (vault < needed) {
       throw new Error(
-        `Your margin account holds ${fromRaw(vault, token.decimals)} ${token.symbol}, less than the ${fromRaw(repayAll ? withBuffer : target, token.decimals)} needed${repayAll ? " (debt + accrual buffer)" : ""}. Repay from wallet or deposit more ${token.symbol} first.`,
+        `Your margin account holds ${fromRaw(vault, token.decimals)} ${token.symbol}, less than the ${fromRaw(needed, token.decimals)} needed${repayAll ? " (debt + accrual buffer)" : ""}. Repay from wallet or deposit more ${token.symbol} first.`,
       );
     }
-    instructions.push(await repayFromMarginIx(owner, token, target, repayAll));
   } else {
+    // user_deposit_collateral then user_repay_from_margin, in one transaction (the guide's wallet
+    // repay). A repay_all's small accrual buffer stays in the margin account as collateral.
     const balances = await fetchWalletBalances(owner);
-    let payerAccount = walletAta(owner, token.mint, token.tokenProgram);
+    let source = walletAta(owner, token.mint, token.tokenProgram);
     if (token.isNative) {
-      const need = withBuffer > balances.wsolRaw ? withBuffer - balances.wsolRaw : 0n;
-      if (need > spendableLamports(balances.raw.SOL)) throw new Error(`Insufficient SOL in wallet to repay ${fromRaw(withBuffer, 9)} SOL`);
+      const need = needed > balances.wsolRaw ? needed - balances.wsolRaw : 0n;
+      if (need > spendableLamports(balances.raw.SOL)) throw new Error(`Insufficient SOL in wallet to repay ${fromRaw(needed, 9)} SOL`);
       const wrap = await wrapSolInstructions(owner, need);
       instructions.push(...wrap.instructions);
-      payerAccount = wrap.ata;
+      source = wrap.ata;
       if (!wrap.existed) suffix.push(createCloseAccountInstruction(wrap.ata, owner, owner));
-    } else if ((balances.raw[token.symbol] ?? 0n) < (repayAll ? withBuffer : target)) {
-      throw new Error(`Insufficient ${token.symbol} in wallet: need ${fromRaw(repayAll ? withBuffer : target, token.decimals)}`);
+    } else if ((balances.raw[token.symbol] ?? 0n) < needed) {
+      throw new Error(`Insufficient ${token.symbol} in wallet: need ${fromRaw(needed, token.decimals)}`);
     }
-    instructions.push(await repayFromWalletIx(owner, owner, token, target, repayAll, payerAccount));
+    instructions.push(await depositIx(owner, token, needed, source));
   }
-  if (repayAll && req.closePosition !== false) instructions.push(await closeDebtIx(owner, token));
+  instructions.push(await repayFromMarginIx(owner, token, target, repayAll));
+  if (repayAll && req.closePosition !== false) instructions.push(await reclaimRentIx(owner, token, { debt: true }));
   const signature = await sendInstructions([...instructions, ...suffix], {
     signer,
     label: `Repay ${repayAll ? "all " : ""}${token.symbol}`,
@@ -983,16 +1023,20 @@ export async function withdrawCollateral(req: WithdrawRequest, opts: MarginServi
     ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(owner, destination, owner, token.mint, token.tokenProgram));
   }
   // Exclude this asset's collateral: user_withdraw_collateral values the projected vault itself.
-  const remaining = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, { collateral: [asset.assetIndex] }, [asset]);
+  // No debt → no health check and no remaining accounts (the guide's user_withdraw_collateral).
+  const remaining =
+    ctx.model.debt.some((i) => i !== EMPTY_ASSET_INDEX)
+      ? buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, { collateral: [asset.assetIndex] }, [asset], { venue: venueScan(ctx) })
+      : [];
   ctx.instructions.push(await withdrawIx(owner, asset, token, amount, req.minHealthFactorWad ?? 0n, destination, remaining));
   return { signature: await send(ctx, `Withdraw ${fromRaw(amount, token.decimals)} ${token.symbol}`, opts, signer) };
 }
 
-/** Close an empty collateral vault (reclaims its rent). */
+/** Close an empty, inactive collateral vault (reclaims its rent). */
 export async function closeCollateralPosition(symbol: string, opts: MarginServiceOptions = {}): Promise<MarginTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   const token = getToken(symbol);
-  const signature = await sendInstructions([await closeCollateralIx(signer.publicKey, token)], {
+  const signature = await sendInstructions([await reclaimRentIx(signer.publicKey, token, { vault: true })], {
     signer,
     label: `Close ${token.symbol} collateral position`,
     onStatus: opts.onStatus as never,
@@ -1004,7 +1048,7 @@ export async function closeCollateralPosition(symbol: string, opts: MarginServic
 export async function closeDebtPosition(symbol: string, opts: MarginServiceOptions = {}): Promise<MarginTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   const token = getToken(symbol);
-  const signature = await sendInstructions([await closeDebtIx(signer.publicKey, token)], {
+  const signature = await sendInstructions([await reclaimRentIx(signer.publicKey, token, { debt: true })], {
     signer,
     label: `Close ${token.symbol} debt position`,
     onStatus: opts.onStatus as never,

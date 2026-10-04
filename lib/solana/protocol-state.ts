@@ -3,10 +3,14 @@ import { AccountLayout, MintLayout } from "@solana/spl-token";
 import { PublicKey, type AccountInfo, type Connection } from "@solana/web3.js";
 import { getConnection, forkUnixTimestamp, getMultipleAccountsChunked } from "./connection";
 import { big, getProgram } from "./program";
-import { assetConfigPda, reservePda, shareMintPda } from "./pdas";
-import { isReceiptOracle, normaliseOracle, oracleAccounts, type OracleConfigState } from "./oracle";
+import { assetConfigPda, priceBookPda, reservePda, shareMintPda } from "./pdas";
+import { decodePriceBook, emptyOracleConfig, isReceiptOracle, oracleAccounts, type OracleConfigState, type PriceSource } from "./oracle";
 import { TOKENS, type TokenInfo } from "./tokens";
 import { KAMINO_RECEIPTS } from "./kamino";
+import { GMTRADE_STORE } from "./perps-accounts";
+
+/** Venues this app trades through (their AssetConfig is keyed by the venue, not a mint). */
+const VENUE_KEYS = [GMTRADE_STORE];
 import {
   annualBorrowRate,
   annualSupplyRate,
@@ -22,10 +26,18 @@ import {
 /** Decoded AssetConfig, bigint/primitive-normalised. */
 export interface AssetConfigState {
   address: PublicKey;
+  /** A token's mint, or a venue's key (GMTrade: its store). */
   mint: PublicKey;
   tokenProgram: PublicKey;
   reserve: PublicKey;
-  /** How the program prices this asset (Scope chain, Pyth fallback, klend reserve for receipts). */
+  /** "token" for a plain token; "venue" for GMTrade, held through the margin's venue account. */
+  kind: "token" | "venue";
+  /** The oracle agent that values this asset (`AssetConfig.oracle`). */
+  oracleProgram: PublicKey;
+  /** A venue's settle token (USDC for GMTrade); PublicKey.default for a token. */
+  settleMint: PublicKey;
+  /** How the oracle prices this token: its price-book entry (Scope chain, Pyth fallback, a receipt's
+   * klend reserve). Empty for a venue, which the oracle values from its market book. */
   oracle: OracleConfigState;
   /** Every account the program reads to price this asset (oracle accounts + a receipt's reserve). */
   oracleAccounts: PublicKey[];
@@ -82,13 +94,18 @@ export interface PoolState {
 
 const STATUS_LABELS = ["Active", "Supply only", "Repay only", "Frozen"];
 
-function normaliseAsset(address: PublicKey, a: any): AssetConfigState {
-  const oracle = normaliseOracle(a.oracle);
+function normaliseAsset(address: PublicKey, a: any, sources: Map<string, PriceSource>): AssetConfigState {
+  const mint = new PublicKey(a.mint);
+  const kind = a.kind && ("venue" in a.kind || "Venue" in a.kind) ? "venue" : "token";
+  const oracle = sources.get(mint.toBase58())?.config ?? emptyOracleConfig();
   return {
     address,
-    mint: a.mint,
+    mint,
     tokenProgram: a.tokenProgram,
     reserve: a.reserve,
+    kind,
+    oracleProgram: new PublicKey(a.oracle),
+    settleMint: new PublicKey(a.settleMint),
     oracle,
     oracleAccounts: oracleAccounts(oracle),
     maxCollateralPerMargin: big(a.maxCollateralPerMargin),
@@ -128,9 +145,22 @@ function normaliseReserve(address: PublicKey, r: any): ReserveState {
   };
 }
 
-export function decodeAssetConfig(address: PublicKey, info: AccountInfo<Buffer> | null): AssetConfigState | null {
+/**
+ * An AssetConfig plus its price-book entry (`sources`, from {@link priceSourcesFrom}): the core
+ * keeps the risk parameters, the oracle agent keeps how each token is priced.
+ */
+export function decodeAssetConfig(
+  address: PublicKey,
+  info: AccountInfo<Buffer> | null,
+  sources: Map<string, PriceSource> = new Map(),
+): AssetConfigState | null {
   if (!info) return null;
-  return normaliseAsset(address, getProgram().coder.accounts.decode("assetConfig", info.data));
+  return normaliseAsset(address, getProgram().coder.accounts.decode("assetConfig", info.data), sources);
+}
+
+/** The oracle agent's price book, decoded (empty when it isn't opened yet). */
+export function priceSourcesFrom(info: AccountInfo<Buffer> | null): Map<string, PriceSource> {
+  return info ? decodePriceBook(Buffer.from(info.data)) : new Map();
 }
 
 export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | null): ReserveState | null {
@@ -139,8 +169,8 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
 }
 
 /**
- * Every AssetConfig this app knows about — the registry tokens plus their Kamino receipt
- * (cToken) assets — keyed by asset_index, read by PDA in one batched `getMultipleAccounts`.
+ * Every AssetConfig this app knows about — the registry tokens, their Kamino receipt
+ * (cToken) assets and the GMTrade venue — keyed by asset_index, read by PDA in one batched `getMultipleAccounts`.
  *
  * Deliberately NOT `getProgramAccounts`: the hosted Surfpool fork forwards that call to its
  * upstream mainnet RPC, which rate-limits it (HTTP 429 → "Internal error"). Every asset the
@@ -149,12 +179,13 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
  * reject an incomplete scan anyway), so this fails closed rather than hiding a position.
  */
 export async function fetchAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
-  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint)];
+  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), ...VENUE_KEYS];
   const addresses = mints.map((m) => assetConfigPda(m));
-  const infos = await getMultipleAccountsChunked(connection, addresses);
+  const [book, ...infos] = await getMultipleAccountsChunked(connection, [priceBookPda(), ...addresses]);
+  const sources = priceSourcesFrom(book as AccountInfo<Buffer> | null);
   const map = new Map<number, AssetConfigState>();
   infos.forEach((info, i) => {
-    const asset = decodeAssetConfig(addresses[i], info as AccountInfo<Buffer> | null);
+    const asset = decodeAssetConfig(addresses[i], info as AccountInfo<Buffer> | null, sources);
     if (asset) map.set(asset.assetIndex, asset);
   });
   return map;
@@ -193,13 +224,17 @@ function buildPoolState(token: TokenInfo, asset: AssetConfigState | null, reserv
 export async function fetchPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
   const keys: PublicKey[] = [];
   for (const t of TOKENS) keys.push(assetConfigPda(t.mint), reservePda(t.mint), shareMintPda(t.mint));
-  const [infos, now] = await Promise.all([getMultipleAccountsChunked(connection, keys), forkUnixTimestamp(connection)]);
+  const [[book, ...infos], now] = await Promise.all([
+    getMultipleAccountsChunked(connection, [priceBookPda(), ...keys]),
+    forkUnixTimestamp(connection),
+  ]);
+  const sources = priceSourcesFrom(book as AccountInfo<Buffer> | null);
   const out: Record<string, PoolState> = {};
   TOKENS.forEach((token, i) => {
     const assetInfo = infos[i * 3] as AccountInfo<Buffer> | null;
     const reserveInfo = infos[i * 3 + 1] as AccountInfo<Buffer> | null;
     const mintInfo = infos[i * 3 + 2] as AccountInfo<Buffer> | null;
-    const asset = decodeAssetConfig(keys[i * 3], assetInfo);
+    const asset = decodeAssetConfig(keys[i * 3], assetInfo, sources);
     const reserve = decodeReserve(keys[i * 3 + 1], reserveInfo);
     const shareSupply = mintInfo ? MintLayout.decode(mintInfo.data.subarray(0, MintLayout.span)).supply : 0n;
     out[token.symbol] = buildPoolState(token, asset, reserve, shareSupply, now);

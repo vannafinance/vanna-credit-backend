@@ -320,7 +320,11 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
       // Re-quote a stale quote right before signing. If the fresh quote's minimum output is
       // worse than what the user reviewed, stop and show it instead of silently accepting it.
       if (Date.now() - quoteFetchedAt > QUOTE_MAX_AGE_MS) {
-        const fresh = await fetchJupiterQuote({ inputMint: tokenIn.id, outputMint: tokenOut.id, amount: amountInRaw, slippageBps });
+        // Margin swaps re-quote through quoteMarginSwap too (its shorter route fits margin_execute).
+        const fresh =
+          swapMode === "margin"
+            ? await quoteMarginSwap({ fromSymbol: tokenIn.symbol, toSymbol: tokenOut.symbol, amount: amountIn, slippageBps })
+            : await fetchJupiterQuote({ inputMint: tokenIn.id, outputMint: tokenOut.id, amount: amountInRaw, slippageBps });
         const reviewedMin = BigInt(quote.otherAmountThreshold ?? quote.outAmount);
         const freshMin = BigInt(fresh.otherAmountThreshold ?? fresh.outAmount);
         setQuote(fresh);

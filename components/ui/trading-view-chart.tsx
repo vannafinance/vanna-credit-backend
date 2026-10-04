@@ -2,11 +2,23 @@
 
 import React, { useEffect, useRef, memo } from "react";
 
-function TradingViewChart() {
+interface TradingViewChartProps {
+  /** TradingView symbol, e.g. "PYTH:ETHUSD". */
+  symbol?: string;
+  theme?: "light" | "dark";
+  interval?: string;
+}
+
+function TradingViewChart({
+  symbol = "COINBASE:BTCUSD",
+  theme = "light",
+  interval = "D",
+}: TradingViewChartProps) {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!container.current) return;
+    const el = container.current;
+    if (!el) return;
 
     const script = document.createElement("script");
     script.src =
@@ -16,13 +28,13 @@ function TradingViewChart() {
 
     const chartConfig = {
       autosize: true,
-      symbol: "COINBASE:BTCUSD",
-      interval: "D",
+      symbol,
+      interval,
       timezone: "Etc/UTC",
-      theme: "light",
+      theme,
       style: "1",
       locale: "en",
-      backgroundColor: "#FFFFFF",
+      backgroundColor: theme === "dark" ? "#222222" : "#FFFFFF",
       allow_symbol_change: true,
       save_image: false,
       calendar: false,
@@ -31,15 +43,13 @@ function TradingViewChart() {
 
     script.innerHTML = JSON.stringify(chartConfig);
 
-    container.current.innerHTML = "";
-    container.current.appendChild(script);
+    el.innerHTML = "";
+    el.appendChild(script);
 
     return () => {
-      if (container.current) {
-        container.current.innerHTML = "";
-      }
+      el.innerHTML = "";
     };
-  }, []);
+  }, [symbol, theme, interval]);
 
   return (
     <div
