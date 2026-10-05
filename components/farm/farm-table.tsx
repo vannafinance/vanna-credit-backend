@@ -5,7 +5,7 @@
  * - Debounced text search + a suite of value/tag/column filters (see
  *   {@link applyFilters}).
  * - Optional supply-APY threshold filter and per-column numeric/string sorting.
- * - Client-side pagination (ITEMS_PER_PAGE per page) with horizontal
+ * - Client-side pagination (ITEMS_PER_PAGE per page, or every row with `paginate={false}`) with horizontal
  *   scroll-shadow indicators.
  * Cells are polymorphic: they can render text, icons, tags/badges, pie charts,
  * progress bars, and explorer links depending on which fields are present.
@@ -111,6 +111,8 @@ interface TableProps {
   showProgressBar?: boolean;
   /** Text for the empty state (default "No data available"). */
   emptyMessage?: string;
+  /** false = render every row on one page (the page itself scrolls); default paginates. */
+  paginate?: boolean;
 }
 
 type FiltersState = {
@@ -965,10 +967,12 @@ export const FarmTable = memo((props: TableProps) => {
 
   const totalPages = Math.ceil(sortedData.length / ITEMS_PER_PAGE);
 
+  const paginate = props.paginate !== false;
   const paginatedData = useMemo(() => {
+    if (!paginate) return sortedData;
     const start = (currentPage - 1) * ITEMS_PER_PAGE;
     return sortedData.slice(start, start + ITEMS_PER_PAGE);
-  }, [sortedData, currentPage]);
+  }, [sortedData, currentPage, paginate]);
 
   const handlePreviousPage = useCallback(() => {
     setCurrentPage((prev) => Math.max(1, prev - 1));
@@ -1486,7 +1490,7 @@ export const FarmTable = memo((props: TableProps) => {
         </section>
       )}
 
-      {hasData && totalPages > 1 && (
+      {hasData && paginate && totalPages > 1 && (
         <nav className="flex items-center justify-center gap-4 py-4" aria-label="Table Pagination">
           <button
             type="button"

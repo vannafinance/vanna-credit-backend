@@ -231,28 +231,31 @@ const PerpsOrderPlacementForm = ({
         </p>
       </div>
 
-      <div className={`rounded-xl border p-3 flex flex-col gap-2 ${isDark ? "bg-[#191919] border-[#333333]" : "bg-white border-[#E2E2E2]"}`}>
-        <div className="flex items-center justify-between">
-          <span className={`text-[11px] ${muted}`}>Position size</span>
+      {/* Position size: one compact row (size = collateral × leverage; tokens at the index price). */}
+      <div
+        className={`rounded-lg border px-3 py-2 flex items-center justify-between gap-2 ${isDark ? "bg-[#191919] border-[#333333]" : "bg-white border-[#E2E2E2]"}`}
+        title="Size = collateral × leverage. Token quantity is estimated at the index price."
+      >
+        <div className="flex flex-col min-w-0">
+          <span className={`text-[11px] leading-[15px] ${muted}`}>Position size</span>
+          <span className={`text-[10px] leading-[14px] truncate ${muted}`}>
+            {collateral > 0 ? (sizeInUsd ? `≈ ${fmtTokenSize(sizeTokens)} ${marketKey}` : `≈ $${fmtUsd(sizeUsd)}`) : "Enter collateral"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <output className={`text-[15px] leading-5 font-semibold ${primary}`}>
+            {collateral > 0 ? (sizeInUsd ? `$${fmtUsd(sizeUsd)}` : fmtTokenSize(sizeTokens)) : "—"}
+            <span className={`ml-1 text-[11px] font-medium ${muted}`}>{sizeInUsd ? "USD" : marketKey}</span>
+          </output>
           <button
             type="button"
             aria-label={`Show position size in ${sizeInUsd ? marketKey : "USD"}`}
             onClick={() => setSizeInUsd((value) => !value)}
-            className={`rounded-md p-1.5 cursor-pointer ${isDark ? "bg-[#333333]" : "bg-[#F4F4F4]"}`}
+            className={`rounded-md p-1 cursor-pointer ${isDark ? "bg-[#333333] hover:bg-[#444444]" : "bg-[#F4F4F4] hover:bg-[#E2E2E2]"}`}
           >
-            <ArrowLeftRight size={14} aria-hidden="true" />
+            <ArrowLeftRight size={12} aria-hidden="true" />
           </button>
         </div>
-        <output className={`text-[22px] leading-7 font-semibold break-words ${primary}`}>
-          {collateral > 0 ? (sizeInUsd ? fmtUsd(sizeUsd) : fmtTokenSize(sizeTokens)) : "—"}
-          <span className={`ml-2 text-[12px] ${muted}`}>{sizeInUsd ? "USD" : marketKey}</span>
-        </output>
-        <span className={`text-[11px] ${muted}`}>
-          {collateral > 0
-            ? sizeInUsd ? `≈ ${fmtTokenSize(sizeTokens)} ${marketKey}` : `≈ $${fmtUsd(sizeUsd)} USD`
-            : "Enter collateral to preview your exposure"}
-        </span>
-        <span className={`text-[10px] ${muted}`}>Size = collateral × leverage. Token quantity is estimated at the index price.</span>
       </div>
 
       {/* leverage */}
