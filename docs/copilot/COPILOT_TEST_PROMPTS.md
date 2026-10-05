@@ -167,6 +167,9 @@ each step claims once, re-checks the 1.15 floor, rebuilds fresh, then asks for y
 | L13 | deposit 1 SOL and borrow USDC with 2x leverage | One lever plan: open account, deposit 1 SOL, borrow USDC, margin swap, report. Verified live | 🤖 | ✅ |
 | L14 | swap 20 USDC to JupSOL inside my margin account | Builds and simulates since the MCP fix (it was always "too large" before) | 🤖 | |
 | L9 | lever my SOL 2x and then supply 1 USDC | Lever cannot be chained: asks to split | 🤖 | |
+| L16 | deposit 100 usdc, 100 usdt and 1 sol in lending pool | One plan, three Earn supply steps (100 USDC, 100 USDT, 1 SOL) | 🤖 | ✅ unit |
+| L17 | can you deposit 100 USDC in margin account and borrow SOL 3x against that USDC | Deposit 100 USDC, borrow SOL sized by the server (2 x the deposit's value), notes say what 3x means | 🤖 | ✅ unit |
+| L18 | put 100 USDC plus 100 USDT plus 1 SOL into the pool | Not read as pool rates: the model reads it as three Earn supply steps with the typed amounts | 🤖 | ✅ unit |
 | L10 | lever SOL 5x keeping my health factor above 2 | Conflict with the user's floor: refuse or reduce | 🤖 | |
 | L11 | lever my SOL 2x (near-liquidation account) | Must not breach the floor | 🤖 | |
 

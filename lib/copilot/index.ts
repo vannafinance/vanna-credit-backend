@@ -26,6 +26,7 @@ import { isConversationId, savePending, takePending } from "./workflow/pending";
 import { planLever, type PlannedWorkflow } from "./workflow/strategy";
 import { planUnwind } from "./workflow/unwind";
 import { checkFunding } from "./workflow/funding";
+import { sizeLevBorrow } from "./workflow/leverage-borrow";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
 import type { CopilotUser } from "./types";
@@ -185,6 +186,7 @@ async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ 
   if (a.kind === "exact") return { ok: true, amount: a.value };
   if (a.kind === "all") return { ok: true, amount: "all" };
   if (a.kind === "out") return { ok: true, amount: `${OUT_PREFIX}${a.value}` };
+  if (a.kind === "lev") return { ok: false, message: "A leverage target is sized together with the deposit it applies to. Say it in one request, for example: deposit 100 USDC in margin and borrow SOL at 3x." };
   if (index > 0) return { ok: false, message: "A percentage can only be used on the first step, because later amounts depend on earlier steps. Give an exact amount or say \"all\"." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
   const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.source === "margin" }, t.ctx);
@@ -195,6 +197,7 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
   const { base } = t;
   const writes = items.map((i) => ("write" in i ? i.write : "report" in i ? null : i));
   const steps: StepSpec[] = [];
+  const extras: string[] = [];
   let k = 0;
   for (let i = 0; i < items.length; i++) {
     const w = writes[i];
@@ -204,6 +207,15 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
     }
     if (w.op !== "create_account" && w.op !== "close_account" && !w.amount) {
       return { kind: "clarification", message: `How much${w.asset ? ` ${w.asset}` : ""} do you want to ${w.op.replace(/^earn_|^farm_/, "").replace("_", " ")}?`, ...base };
+    }
+    if (w.amount?.kind === "lev") {
+      // "borrow SOL 3x against that deposit": the amount is sized here from live prices and the health floor, never typed.
+      const sized = await sizeLevBorrow(w, steps, t.ctx, copilotConfig.minHealthFactor);
+      if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
+      steps.push(stepFromWrite(w, sized.amount));
+      extras.push(...sized.notes);
+      k++;
+      continue;
     }
     const r = await resolveAmount(w, k, t);
     if (!r.ok) return { kind: "clarification", message: r.message, ...base };
@@ -219,7 +231,6 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
   // Margin ops need a margin account: open one first when the user is depositing, say so otherwise.
   const firstMargin = steps.find((s) => s.kind === "write" && MARGIN_OPS.has(s.op));
   const hasCreate = steps.some((s) => s.op === "create_account");
-  const extras: string[] = [];
   if (firstMargin && !hasCreate) {
     const h = await loadHealth(t.ctx);
     if (h.kind === "no_account") {

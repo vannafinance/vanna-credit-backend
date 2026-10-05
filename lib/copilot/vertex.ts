@@ -156,6 +156,7 @@ const stepProps = {
   to_asset: { type: "STRING", enum: ASSET_ENUM, description: "swap only: the asset bought." },
   amount: { type: "STRING", description: 'A positive decimal number as text ("1.5"), or "all", or a percentage like "50%". Omit if the user gave none.' },
   source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays. swap: margin = swap collateral inside the margin account; default wallet." },
+  leverage: { type: "NUMBER", description: 'borrow only. Set this INSTEAD of amount when the user asks to borrow "to reach Nx leverage" / "Nx against that deposit" without giving a borrow amount. N is the multiple of equity (3 = collateral three times equity). The server sizes the amount; never compute it.' },
 };
 
 export const ROUTER_TOOLS: LlmFunctionDecl[] = [
@@ -232,6 +233,10 @@ Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borro
 - A bare "deposit" or "withdraw" with no venue is ambiguous: call ask_user.
 - Amounts: copy the number the user typed. Never compute, convert or guess an amount. "all"/"max" = "all".
 - If the user did not give an amount, omit it (the server will ask).
+- Understand the intent, not the wording. Several assets or actions in one sentence ("deposit 100 USDC, 100 USDT and 1 SOL in the lending pool", "supply 5 SOL and 10 USDC") are SEPARATE steps of one action_chain, each repeating the shared venue (lending pool / earn = earn_supply; margin / collateral = deposit) with its own typed amount.
+- "Deposit X in margin and borrow Y Nx against it" (a leverage target on a borrow, no borrow amount given) = an action_chain: a deposit step, then a borrow step of Y with leverage N and no amount. If the user instead levers one asset by borrowing a stable ("lever my SOL 3x", "deposit 1 SOL and borrow USDC with 3x") use lever_position.
+- A leverage multiple ("3x") is never an amount; do not copy it into amount.
+- Use the conversation history to resolve "it", "that", "the same", but still take amounts only from numbers the user typed.
 - Only the assets in the enums exist. For any other token call decline.`;
 
 function amountSpecOf(v: unknown): AmountSpec | null {
@@ -271,11 +276,13 @@ function guardOutcome(message: string): Intent {
 function writeFromArgs(a: Record<string, unknown>): WriteIntent | null {
   const op = a.op;
   if (typeof op !== "string" || !(WRITE_OPS as string[]).includes(op)) return null;
+  const lev = typeof a.leverage === "number" ? a.leverage : typeof a.leverage === "string" ? Number(a.leverage) : null;
+  const sizedToLeverage = op === "borrow" && lev !== null && Number.isFinite(lev) && !amountSpecOf(a.amount);
   return {
     op: op as WriteOp,
     asset: assetOf(a.asset),
     to_asset: assetOf(a.to_asset),
-    amount: amountSpecOf(a.amount),
+    amount: sizedToLeverage ? { kind: "lev", multiple: lev as number } : amountSpecOf(a.amount),
     source: a.source === "margin" ? "margin" : a.source === "wallet" ? "wallet" : null,
   };
 }

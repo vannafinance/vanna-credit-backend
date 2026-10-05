@@ -65,7 +65,12 @@ export type AmountSpec =
   | { kind: "all" }
   | { kind: "pct"; pct: number }
   /** swap only: receive at least this much of `to_asset`; the input is sized from live quotes. */
-  | { kind: "out"; value: string };
+  | { kind: "out"; value: string }
+  /**
+   * borrow only: "borrow SOL to reach 3x". The amount is NOT typed by the user or the model; the server sizes it from
+   * live prices so that the account's collateral is `multiple` times its equity (see index.ts `levBorrowAmount`).
+   */
+  | { kind: "lev"; multiple: number };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
@@ -283,6 +288,11 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
       if (tooFine) return fail(tooFine);
     }
     if (w.amount.kind === "pct" && !(w.amount.pct > 0 && w.amount.pct <= 100)) return fail("Percentages must be between 0 and 100.");
+    if (w.amount.kind === "lev") {
+      if (w.op !== "borrow") return fail("Only a borrow can be sized to a leverage target.");
+      if (!Number.isFinite(w.amount.multiple) || w.amount.multiple <= 1) return fail("Leverage has to be above 1x.");
+      if (w.amount.multiple > 10) return fail("I won't size above 10x; at this protocol's health rules it could never hold the 1.15 floor.");
+    }
     if (w.amount.kind === "out") {
       if (w.op !== "swap") return fail("Only a swap can be sized by the amount you want to receive.");
       if (parseDecimalString(w.amount.value) === null) return fail("That amount is not valid.");
@@ -384,6 +394,19 @@ export function tokenAfterAmount(text: string): string | null {
     if (m[1] === m[1].toUpperCase()) return m[1];
   }
   return null;
+}
+
+/** Every number the user typed (commas as thousands, "k" suffix), for checking that a model never invents an amount. */
+export function typedNumbers(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.toLowerCase().matchAll(NUMBER_TOKEN_RE)) {
+    const body = m[2].replace(/[.,]+$/, "");
+    if (!body) continue;
+    const k = body.endsWith("k");
+    const n = Number(body.replace(/k$/, "").replace(/,/g, ""));
+    if (Number.isFinite(n)) out.push(k ? n * 1000 : n);
+  }
+  return out;
 }
 
 export function parseAmount(text: string): AmountSpec | null {

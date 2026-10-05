@@ -16,6 +16,7 @@ import {
   parseClauseFacts,
   parseMinHf,
   splitClauses,
+  typedNumbers,
   validateLever,
   validateRead,
   validateWrite,
@@ -91,7 +92,9 @@ function writeIntent(op: WriteOp, f: ParsedClause, lower: string, extra: Partial
   }
   let amount = f.amount;
   if (needsAsset && !amount) {
-    if (ALL_WORDS.test(lower)) amount = { kind: "all" };
+    // "borrow SOL 3x": no amount, but a leverage target. The server sizes it from live prices (index.ts), never a typed number.
+    if (op === "borrow" && f.leverage) amount = { kind: "lev", multiple: f.leverage };
+    else if (ALL_WORDS.test(lower)) amount = { kind: "all" };
     else if (op === "farm_redeem" && f.receipts.length) amount = { kind: "all" };
     else return ask(amountOrAsk(f, verbText[op] ?? "use", asset).question as string);
   }
@@ -441,9 +444,43 @@ function fromPrevious(clause: string, prev: WriteIntent | null): string | null {
   return clause.replace(PRONOUN, `${prev.amount.value} ${prev.asset}`);
 }
 
+const LIST_VERB = /^\s*(?:(?:please|pls)\s+|(?:can|could|would)\s+you\s+|i\s+(?:want|wanna|would\s+like|need)\s+to\s+|i'd\s+like\s+to\s+)?(deposit|supply|lend|withdraw|borrow|repay|redeem)\b/i;
+
+/**
+ * "deposit 100 USDC, 100 USDT and 1 SOL in the lending pool": one verb over a list of amount+asset pairs is one step per
+ * pair, each keeping what follows the list ("in the lending pool"). Only a plain list qualifies: if anything after it
+ * is another action, the sentence is left to the normal clause splitter (and to the model).
+ */
+export function expandAmountList(message: string): string[] | null {
+  const head = message.match(LIST_VERB);
+  if (!head) return null;
+  const verb = head[1].toLowerCase();
+  const rest = message.slice(head[0].length);
+  const pair = /\s*(\d[\d.,]*k?)\s*([a-z][a-z0-9]*)/iy;
+  const sep = /\s*(?:,|&|\+|\band\b)\s*/iy;
+  const pairs: string[] = [];
+  let at = 0;
+  let committed = 0;
+  for (;;) {
+    pair.lastIndex = at;
+    const m = pair.exec(rest);
+    if (!m || !normalizeAsset(m[2])) break;
+    pairs.push(`${m[1]} ${m[2]}`);
+    committed = pair.lastIndex;
+    sep.lastIndex = committed;
+    const s = sep.exec(rest);
+    if (!s) break;
+    at = sep.lastIndex;
+  }
+  if (pairs.length < 2) return null;
+  const suffix = rest.slice(committed);
+  if (/\b(?:then|and|also|after|before)\b|[;]/i.test(suffix) && ACTION_VERB.test(suffix.toLowerCase())) return null;
+  return pairs.map((p) => `${verb} ${p}${suffix}`.replace(/\s+/g, " ").trim());
+}
+
 /** Keyword route for a whole message, including "A then B" chains. */
 export function keywordRoute(message: string): Intent {
-  const clauses = splitClauses(message);
+  const clauses = expandAmountList(message) ?? splitClauses(message);
   if (clauses.length <= 1) return routeClause(message);
 
   // "Close everything and unwind my positions" is one exit request, not a chain of clauses.
@@ -500,20 +537,70 @@ export interface RouteResult {
   tokens: number;
 }
 
+/**
+ * A model-read intent may carry only amounts the user typed (in this message or an earlier message of theirs).
+ * The model understands the sentence; it never supplies a number. A "leverage" multiple on a borrow is not an
+ * amount (the server sizes it), so it is not checked here.
+ */
+export function amountsAreTyped(intent: Intent, message: string, history: Array<{ role: "user" | "assistant"; text: string }> = []): boolean {
+  const typed = [message, ...history.filter((h) => h.role === "user").map((h) => h.text)].flatMap(typedNumbers);
+  const typedAs = (v: string) => {
+    const n = Number(v);
+    return typed.some((t) => Math.abs(t - n) <= 1e-9 * Math.max(1, Math.abs(n)));
+  };
+  const amountOk = (a: WriteIntent["amount"] | undefined) => !a || !(a.kind === "exact" || a.kind === "out") || typedAs(a.value);
+  switch (intent.lane) {
+    case "write":
+      return amountOk(intent.write.amount);
+    case "chain":
+      return intent.steps.every((s) => !("write" in s) || amountOk(s.write.amount));
+    case "lever":
+      return !intent.lever.amount || typedAs(intent.lever.amount);
+    case "read":
+      return intent.read.kind !== "quote" || typedAs(intent.read.amount);
+    default:
+      return true;
+  }
+}
+
+/** The keyword router is trusted when it resolved the request or refused it. A question it asked only because
+ * its patterns could not read the sentence (an amount list, a missing amount in a chain) is given to the model. */
+const INFO_READS = new Set(["price", "pool", "earn_position", "farm_markets", "farm_positions", "positions", "wallet", "debt", "collateral", "history", "protocol"]);
+const AMOUNT_OF_ASSET = /\d[\d.,]*k?\s*(?:sol|usdc|usdt|jitosol|jupsol|ksol|kusdc|kusdt)\b/i;
+
+/**
+ * An imperative sentence full of amounts that the patterns read as an information request ("put 100 USDC plus 100 USDT
+ * into the pool" read as "pool rates") is a verb the patterns do not know, not a question. Those go to the model too.
+ */
+function looksLikeUnrecognisedAction(i: Intent, message: string): boolean {
+  if (i.lane !== "read" || !INFO_READS.has(i.read.kind)) return false;
+  const lower = message.trim().toLowerCase();
+  return AMOUNT_OF_ASSET.test(message) && !lower.includes("?") && !QUESTION_OPENER.test(lower) && !HYPOTHETICAL.test(lower);
+}
+
+const keywordIsConfident = (i: Intent, message: string): boolean =>
+  i.lane !== "unknown" && !(i.lane === "ask" && !i.options?.length) && !looksLikeUnrecognisedAction(i, message);
+
 export async function routeMessage(
   message: string,
   history: Array<{ role: "user" | "assistant"; text: string }>,
   signal?: AbortSignal,
 ): Promise<RouteResult> {
   const keyword = keywordRoute(message);
-  if (keyword.lane !== "unknown") return { intent: keyword, source: "keyword", tokens: 0 };
-  if (!llmConfigured()) return { intent: keyword, source: "unavailable", tokens: 0 };
+  if (keywordIsConfident(keyword, message)) return { intent: keyword, source: "keyword", tokens: 0 };
+  if (!llmConfigured()) return { intent: keyword, source: keyword.lane === "unknown" ? "unavailable" : "keyword", tokens: 0 };
   try {
     const { intent, tokens } = await routeWithModel(message, history, signal);
+    // The model may fill in what the patterns could not; it may not override a refusal, add an amount, or turn a
+    // question into silence. Anything it cannot ground falls back to the keyword router's own answer.
+    if (intent.lane === "unknown" || intent.lane === "refuse" || !amountsAreTyped(intent, message, history)) {
+      return keyword.lane === "unknown" ? { intent: intent.lane === "refuse" ? intent : { lane: "unknown" }, source: "model", tokens } : { intent: keyword, source: "keyword", tokens };
+    }
+    if (intent.lane === "ask" && keyword.lane === "ask") return { intent: keyword, source: "keyword", tokens };
     return { intent, source: "model", tokens };
   } catch (e) {
     if (!(e instanceof LlmUnavailable)) console.warn("[copilot] model routing failed:", e instanceof Error ? e.message : e);
-    return { intent: keyword, source: "unavailable", tokens: 0 };
+    return { intent: keyword, source: keyword.lane === "unknown" ? "unavailable" : "keyword", tokens: 0 };
   }
 }
 

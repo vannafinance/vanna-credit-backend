@@ -395,6 +395,18 @@ WorkOS environment.
   - *"Deposit X and borrow Y with Nx leverage"* in one sentence is rewritten to the lever request it means
     (`lever X ASSET Nx borrowing Y`); a message that mixes leverage with other real steps is still refused as
     its own request.
+  - *Understanding, not phrase matching (2026-10-05).* The keyword router is free and trusted when it resolves a request or
+    refuses it. When it only asks a question it could not avoid because its patterns could not read the sentence
+    (several amounts, a borrow with no amount), or reads an imperative sentence full of amounts as an information
+    request ("put 100 USDC plus 100 USDT into the pool"), the language model reads the sentence into the same guarded
+    intent. The model supplies no number: every amount it returns must be one the user typed (this message or an
+    earlier user message), and a model answer never overrides a refusal. A plain list ("deposit 100 USDC, 100 USDT and
+    1 SOL in the lending pool") is also split deterministically into one step per asset (`expandAmountList`).
+  - *Leverage target on a borrow.* "Deposit 100 USDC in margin and borrow SOL 3x against it": the multiple is not an
+    amount. The server sizes the borrow from live prices so collateral is N times equity, on the deposits in the same
+    request (or the account's equity when there is none), checks the health floor first, and says what it did
+    (`workflow/leverage-borrow.ts`). It also says that borrowing an asset and holding it adds leverage but no price
+    exposure to that asset; a long position is a lever (deposit it, borrow a stable).
   - *Slow fork-RPC reads* (about 22 s once in ten) were cut off by a 20 s timeout and the body-read timeout
     escaped unretried. The timeout is now 30 s and a body-read timeout is wrapped and retried once.
   - *First call on a new instance* can fail ("fetch failed") while VPC egress and NAT come up; the WorkOS
