@@ -9,6 +9,7 @@
  * - MARGIN mode lives in lib/solana/exec.ts (`quoteMarginSwap` / `executeMarginSwap`): the same
  *   Jupiter routing, built for the margin PDA and wrapped in the program's `margin_execute`.
  */
+import { Buffer } from "buffer";
 import { VersionedTransaction } from "@solana/web3.js";
 import { getConnection } from "./connection";
 import { confirmSignatureHttp } from "./confirmation";
@@ -39,6 +40,8 @@ export async function fetchJupiterQuote(params: {
   /** Raw input amount (base units). */
   amount: string | number | bigint;
   slippageBps?: number;
+  /** Cap on the route's accounts (Jupiter's `maxAccounts`): a shorter route for margin swaps. */
+  maxAccounts?: number;
 }): Promise<JupiterQuote> {
   const qs = new URLSearchParams({
     inputMint: params.inputMint,
@@ -46,6 +49,7 @@ export async function fetchJupiterQuote(params: {
     amount: String(params.amount),
     slippageBps: String(params.slippageBps ?? 100),
   });
+  if (params.maxAccounts) qs.set("maxAccounts", String(params.maxAccounts));
   const response = await fetch(`${apiBase}/api/jupiter/quote?${qs.toString()}`);
   const body = await response.json();
   if (!response.ok || body?.error) throw new Error(body?.error ?? body?.message ?? "Quote failed");

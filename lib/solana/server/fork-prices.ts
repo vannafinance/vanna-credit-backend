@@ -1,9 +1,10 @@
-// Server-side only: the fork price keeper. Ported from vanna-credit-layer/scripts/src/oracle.ts
+// Server-side only, FORK ONLY (the guide's "fork-only helpers" — never port to production): the
+// fork price keeper. Ported from vanna-credit-layer/scripts/src/oracle.ts
 // (refreshOraclesOnFork: Scope copied from mainnet, restamped) and devnet-pyth.ts
 // (buildForkPriceAccountData), driven by each asset's on-chain OracleConfig.
 import { Connection, PublicKey } from "@solana/web3.js";
 import { PYTH_RECEIVER_PROGRAM_ID, SOLANA_RPC_URL } from "../config";
-import { forkUnixTimestamp } from "../connection";
+import { forkUnixTimestamp, forkFetch } from "../connection";
 import {
   CONF_OFFSET,
   EMA_CONF_OFFSET,
@@ -20,6 +21,8 @@ import {
 import { TOKENS, type TokenInfo } from "../tokens";
 import { fetchAllAssetConfigs } from "../protocol-state";
 import { SCOPE_CHAIN_UNUSED, scopeEntryOffset, type OracleConfigState } from "../oracle";
+import { GMTRADE_PROGRAM_ID, GMTRADE_STORE } from "../perps-accounts";
+import { fetchMarketBook } from "../perps-state";
 import { callCheatcode } from "./cheatcodes";
 import { jupiterBaseUrl, jupiterHeaders } from "./jupiter-api";
 
@@ -64,8 +67,20 @@ export function buildForkPriceAccountData(template: Buffer, feedId: string, usdP
   return data;
 }
 
+/**
+ * Spot tokens Jupiter prices for each GMTrade index (GMTrade's index mints are synthetic): ETH =
+ * Wormhole WETH, BTC = cbBTC, SOL = wSOL. Only used to refresh a market's Pyth fallback on the fork.
+ */
+const PERP_INDEX_PROXY: Record<string, PublicKey> = {
+  ETH: new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
+  BTC: new PublicKey("cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"),
+  SOL: new PublicKey("So11111111111111111111111111111111111111112"),
+};
+
+type Priced = Pick<TokenInfo, "symbol" | "mint">;
+
 /** Live USD prices for every registry mint from Jupiter's price API (one request). */
-export async function fetchJupiterUsdPrices(tokens: readonly TokenInfo[] = TOKENS): Promise<Record<string, number>> {
+export async function fetchJupiterUsdPrices(tokens: readonly Priced[] = TOKENS): Promise<Record<string, number>> {
   const ids = tokens.map((t) => t.mint.toBase58()).join(",");
   const out: Record<string, number> = {};
   const urls = [`${jupiterBaseUrl()}/price/v3?ids=${ids}`];
@@ -151,24 +166,43 @@ async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigS
  * reference table (flagged `source: "reference"`).
  */
 export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promise<RefreshedPrice[]> {
-  const connection = new Connection(rpcUrl, "confirmed");
-  const [assetMap, now, live] = await Promise.all([fetchAllAssetConfigs(connection), forkUnixTimestamp(connection), fetchJupiterUsdPrices()]);
-  const configs = TOKENS.map((token) => ({ token, asset: [...assetMap.values()].find((a) => a.mint.equals(token.mint)) ?? null }));
-  await refreshScopeOnFork(connection, configs.flatMap((c) => (c.asset ? [c.asset.oracle] : [])), now);
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const book = await fetchMarketBook(connection).catch(() => null);
+  const perps = (book?.markets ?? [])
+    .filter((e) => e.meta && PERP_INDEX_PROXY[e.meta.key])
+    .map((e) => ({ symbol: e.meta!.key, mint: PERP_INDEX_PROXY[e.meta!.key], oracle: e.indexPrice }));
+  const [assetMap, now, live] = await Promise.all([
+    fetchAllAssetConfigs(connection),
+    forkUnixTimestamp(connection),
+    fetchJupiterUsdPrices([...TOKENS, ...perps]),
+  ]);
+  // Every price the program reads: the registry tokens' price-book entries, then each listed GMTrade
+  // market's index price (from the oracle's market book).
+  const configs: { token: Priced; oracle: OracleConfigState | null }[] = [
+    ...TOKENS.map((token) => ({ token: token as Priced, oracle: [...assetMap.values()].find((a) => a.mint.equals(token.mint))?.oracle ?? null })),
+    ...perps.map((p) => ({ token: { symbol: p.symbol, mint: p.mint }, oracle: p.oracle })),
+  ];
+  await refreshScopeOnFork(connection, configs.flatMap((c) => (c.oracle ? [c.oracle] : [])), now);
+  if (book) await alignGmtradeStoreOnFork(connection);
 
   // USD per token for the fallback feeds (live → reference), and which token each Pyth account prices.
   const usdOf = (symbol: string) => live[symbol] ?? REFERENCE_PRICE_USD[symbol];
   const tokenByPyth = new Map<string, string>();
-  for (const { token, asset } of configs) if (asset && !asset.oracle.pythPrice.equals(PublicKey.default)) tokenByPyth.set(asset.oracle.pythPrice.toBase58(), token.symbol);
+  for (const { token, oracle } of configs) if (oracle && !oracle.pythPrice.equals(PublicKey.default)) tokenByPyth.set(oracle.pythPrice.toBase58(), token.symbol);
 
-  const pythKeys = configs.flatMap((c) => (c.asset && !c.asset.oracle.pythPrice.equals(PublicKey.default) ? [c.asset.oracle.pythPrice] : []));
+  const pythKeys = [
+    ...new Map(configs.flatMap((c) => (c.oracle && !c.oracle.pythPrice.equals(PublicKey.default) ? [c.oracle.pythPrice] : [])).map((k) => [k.toBase58(), k])).values(),
+  ];
   const infos = await connection.getMultipleAccountsInfo(pythKeys, "confirmed");
   const infoByKey = new Map(pythKeys.map((k, i) => [k.toBase58(), infos[i]]));
 
   const results: RefreshedPrice[] = [];
-  for (const { token, asset } of configs) {
-    if (!asset || asset.oracle.pythPrice.equals(PublicKey.default)) continue;
-    const address = asset.oracle.pythPrice;
+  const written = new Set<string>();
+  for (const { token, oracle } of configs) {
+    if (!oracle || oracle.pythPrice.equals(PublicKey.default)) continue;
+    const address = oracle.pythPrice;
+    if (written.has(address.toBase58())) continue;
+    written.add(address.toBase58());
     const current = infoByKey.get(address.toBase58());
     if (!current?.owner.equals(PYTH_RECEIVER_PROGRAM_ID) || current.data.length < MIN_PRICE_ACCOUNT_SIZE) {
       // The bootstrap creates every configured feed account; without one there's no feed id to keep.
@@ -178,8 +212,8 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     let source: RefreshedPrice["source"] = usd ? "jupiter" : "reference";
     if (!usd) usd = REFERENCE_PRICE_USD[token.symbol];
     let value = usd;
-    if (!asset.oracle.pythFactor.equals(PublicKey.default)) {
-      const factorSymbol = tokenByPyth.get(asset.oracle.pythFactor.toBase58());
+    if (!oracle.pythFactor.equals(PublicKey.default)) {
+      const factorSymbol = tokenByPyth.get(oracle.pythFactor.toBase58());
       const factorUsd = factorSymbol ? usdOf(factorSymbol) : undefined;
       if (!factorUsd) continue; // can't express the rate without the factor's USD price
       value = usd / factorUsd;
@@ -199,6 +233,28 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     results.push({ symbol: token.symbol, account: address.toBase58(), usd, source, publishTime: Number(now) });
   }
   return results;
+}
+
+const LAST_RESTART_SLOT_SYSVAR = new PublicKey("SysvarLastRestartS1ot1111111111111111111111");
+/** `Store.last_restarted_slot`: GMTrade refuses orders while it differs from the sysvar. */
+const STORE_LAST_RESTARTED_SLOT_OFFSET = 8 + 4792;
+
+/**
+ * Fork only: GMTrade checks its store's recorded last-restart slot against the LastRestartSlot
+ * sysvar, and a fork's sysvar differs from mainnet's, so align it once (same as the scripts'
+ * `alignGmtradeStoreOnFork`).
+ */
+export async function alignGmtradeStoreOnFork(connection: Connection): Promise<void> {
+  const [store, sysvar] = await connection.getMultipleAccountsInfo([GMTRADE_STORE, LAST_RESTART_SLOT_SYSVAR]);
+  if (!store) return;
+  const forkRestart = sysvar && sysvar.data.length >= 8 ? sysvar.data.readBigUInt64LE(0) : 0n;
+  if (store.data.readBigUInt64LE(STORE_LAST_RESTARTED_SLOT_OFFSET) === forkRestart) return;
+  const data = Buffer.from(store.data);
+  data.writeBigUInt64LE(forkRestart, STORE_LAST_RESTARTED_SLOT_OFFSET);
+  await callCheatcode("surfnet_setAccount", [
+    GMTRADE_STORE.toBase58(),
+    { lamports: store.lamports, data: data.toString("hex"), owner: GMTRADE_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
+  ]);
 }
 
 export type { PublicKey };

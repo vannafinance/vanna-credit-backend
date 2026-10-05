@@ -2,6 +2,7 @@
 
 import { useTheme } from "@/contexts/theme-context";
 import { SwapCard } from "./SwapCard";
+import { SwapHistory } from "./SwapHistory";
 
 interface SpotSwapViewProps {
   /** Registry symbol to preselect as the input token (defaults to the first registry token). */
@@ -40,6 +41,7 @@ export const SpotSwapView = ({ baseSymbol }: SpotSwapViewProps) => {
         <div className="w-full max-w-[480px]">
           <SwapCard baseSymbol={baseSymbol} />
         </div>
+        <SwapHistory />
       </div>
     </div>
   );

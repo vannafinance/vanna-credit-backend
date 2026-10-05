@@ -1,6 +1,7 @@
 // Server-side only: Surfpool fork faucet. SPL tokens via `surfnet_setTokenAccount`, SOL via
 // `surfnet_setAccount` lamports. The cheatcodes SET balances, so top-up semantics are
 // new balance = current + faucet amount.
+import { forkFetch } from "../connection";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { SOLANA_RPC_URL } from "../config";
 import { walletAta } from "../pdas";
@@ -19,7 +20,7 @@ export interface FaucetResult {
 export async function fundOnFork(symbol: string, recipient: string, rpcUrl: string = SOLANA_RPC_URL): Promise<FaucetResult> {
   const token = getToken(symbol);
   const owner = new PublicKey(recipient);
-  const connection = new Connection(rpcUrl, "confirmed");
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
   const addRaw = BigInt(token.faucetAmount) * 10n ** BigInt(token.decimals);
 
   if (token.isNative) {

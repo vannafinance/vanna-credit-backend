@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Positionstable } from "@/components/margin/positions-table";
 import { FarmSection } from "./farm-section";
 import { SpotSection } from "./spot-section";
+import { PerpsSection } from "./perps-section";
 import { useTheme } from "@/contexts/theme-context";
 import { useShallow } from "zustand/shallow";
 import { useUserStore } from "@/store/user";
@@ -21,7 +22,7 @@ const fmtUsd = (n: number): string =>
   `$${(n < 0 ? 0 : n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtHF = (hf: number): string => (!Number.isFinite(hf) || hf >= 999 ? "∞" : hf.toFixed(2));
 
-const TRADE_TABS = ["Margin", "Spot", "Farm"] as const;
+const TRADE_TABS = ["Margin", "Spot", "Perps", "Farm"] as const;
 type TradeTab = (typeof TRADE_TABS)[number];
 
 type MarginStat = { id: string; label: string; value: string; special?: string; tooltip: string };
@@ -190,6 +191,8 @@ export const TraderTab = () => {
         <FarmSection />
       ) : activeSubTab === "Spot" ? (
         <SpotSection />
+      ) : activeSubTab === "Perps" ? (
+        <PerpsSection />
       ) : (
         <div
           className={`w-full h-[300px] rounded-[16px] border-[1px] flex items-center justify-center ${

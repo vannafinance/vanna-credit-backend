@@ -2,7 +2,7 @@
 
 import { useTheme } from "@/contexts/theme-context";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/shallow";
 import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
@@ -313,6 +313,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   const [txHash, setTxHash] = useState("");
   const [txError, setTxError] = useState("");
 
+  const queryClient = useQueryClient();
   const swapMutation = useMutation({
     mutationFn: async () => {
       if (!quote || !tokenIn || !tokenOut || amountInRaw === null) throw new Error("No quote to execute");
@@ -320,7 +321,11 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
       // Re-quote a stale quote right before signing. If the fresh quote's minimum output is
       // worse than what the user reviewed, stop and show it instead of silently accepting it.
       if (Date.now() - quoteFetchedAt > QUOTE_MAX_AGE_MS) {
-        const fresh = await fetchJupiterQuote({ inputMint: tokenIn.id, outputMint: tokenOut.id, amount: amountInRaw, slippageBps });
+        // Margin swaps re-quote through quoteMarginSwap too (its shorter route fits margin_execute).
+        const fresh =
+          swapMode === "margin"
+            ? await quoteMarginSwap({ fromSymbol: tokenIn.symbol, toSymbol: tokenOut.symbol, amount: amountIn, slippageBps })
+            : await fetchJupiterQuote({ inputMint: tokenIn.id, outputMint: tokenOut.id, amount: amountInRaw, slippageBps });
         const reviewedMin = BigInt(quote.otherAmountThreshold ?? quote.outAmount);
         const freshMin = BigInt(fresh.otherAmountThreshold ?? fresh.outAmount);
         setQuote(fresh);
@@ -352,6 +357,8 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
         void refreshWalletBalancesOnChain(userAddress);
         void refreshMarginAccount(userAddress);
       }
+      // New swap row in the Swap history (and every other margin view).
+      void queryClient.invalidateQueries({ queryKey: ["margin"] });
     },
     onError: (error) => {
       const errorMsg = describeError(error, "Swap failed");

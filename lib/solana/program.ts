@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { AnchorProvider, BorshCoder, Program, type Idl } from "@coral-xyz/anchor";
 import { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
-import idlJson from "@/idl/vanna_lending.json";
+import idlJson from "@/idl/vanna_credit_layer.json";
 import { VANNA_PROGRAM_ID } from "./config";
 import { getConnection } from "./connection";
 
 /**
- * Anchor client for `vanna_lending`, built from the NEW IDL (idl/vanna_lending.json, copied from
- * vanna-credit-layer/target/idl). The IDL's embedded address is overridden with the configured
+ * Anchor client for the core program `vanna_credit_layer`, built from its IDL
+ * (idl/vanna_credit_layer.json, copied from vanna-credit-layer/target/idl). The IDL's embedded address is overridden with the configured
  * program id so a redeploy only needs NEXT_PUBLIC_VANNA_PROGRAM_ID.
  */
 export const VANNA_IDL = { ...(idlJson as Idl), address: VANNA_PROGRAM_ID.toBase58() } as Idl;

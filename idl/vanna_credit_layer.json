@@ -1,10 +1,10 @@
 {
   "address": "H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC",
   "metadata": {
-    "name": "vanna_lending",
+    "name": "vanna_credit_layer",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "Vanna Protocol native lending pools and isolated margin borrowing on Solana"
+    "description": "Vanna credit layer: lending pools, cross-margin accounts, liquidation and margin_execute"
   },
   "instructions": [
     {
@@ -276,9 +276,6 @@
         },
         {
           "name": "share_token_program",
-          "docs": [
-            "Share mints are always classic SPL."
-          ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
@@ -438,6 +435,9 @@
           }
         },
         {
+          "name": "oracle"
+        },
+        {
           "name": "token_program"
         },
         {
@@ -446,14 +446,6 @@
         }
       ],
       "args": [
-        {
-          "name": "oracle",
-          "type": {
-            "defined": {
-              "name": "OracleConfig"
-            }
-          }
-        },
         {
           "name": "max_collateral_per_margin",
           "type": "u64"
@@ -529,6 +521,9 @@
           "name": "target_program"
         },
         {
+          "name": "validator"
+        },
+        {
           "name": "integration",
           "writable": true,
           "pda": {
@@ -561,14 +556,110 @@
           "address": "11111111111111111111111111111111"
         }
       ],
+      "args": []
+    },
+    {
+      "name": "admin_register_venue",
+      "discriminator": [
+        220,
+        195,
+        85,
+        224,
+        181,
+        71,
+        110,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "protocol_config"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "venue"
+              }
+            ]
+          }
+        },
+        {
+          "name": "settle_asset",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "settle_asset.mint",
+                "account": "AssetConfig"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
       "args": [
         {
-          "name": "adapter",
-          "type": {
-            "defined": {
-              "name": "AdapterKind"
-            }
-          }
+          "name": "venue",
+          "type": "pubkey"
         }
       ]
     },
@@ -634,18 +725,12 @@
               }
             ]
           }
+        },
+        {
+          "name": "oracle"
         }
       ],
-      "args": [
-        {
-          "name": "oracle",
-          "type": {
-            "defined": {
-              "name": "OracleConfig"
-            }
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "admin_set_integration_enabled",
@@ -723,6 +808,81 @@
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "admin_set_integration_validator",
+      "discriminator": [
+        181,
+        52,
+        130,
+        129,
+        155,
+        224,
+        142,
+        226
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "protocol_config"
+          ]
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "integration",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  101,
+                  103,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "integration.program_id",
+                "account": "Integration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator"
+        }
+      ],
+      "args": []
     },
     {
       "name": "admin_set_operating_mode",
@@ -1023,9 +1183,6 @@
         },
         {
           "name": "admin",
-          "docs": [
-            "Must sign, so a front-running payer cannot initialize the protocol with themselves as admin."
-          ],
           "signer": true
         },
         {
@@ -1508,7 +1665,14 @@
           "name": "target_program"
         },
         {
-          "name": "spent_asset",
+          "name": "validator",
+          "relations": [
+            "integration"
+          ]
+        },
+        {
+          "name": "venue_asset",
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -1523,165 +1687,16 @@
               },
               {
                 "kind": "account",
-                "path": "spent_mint"
+                "path": "venue_asset.mint",
+                "account": "AssetConfig"
               }
             ]
           }
         },
         {
-          "name": "spent_mint"
-        },
-        {
-          "name": "spent_vault",
+          "name": "venue_account",
           "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "margin_account"
-              },
-              {
-                "kind": "account",
-                "path": "spent_token_program"
-              },
-              {
-                "kind": "account",
-                "path": "spent_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "received_asset",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  115,
-                  115,
-                  101,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "received_mint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "received_mint"
-        },
-        {
-          "name": "received_vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "margin_account"
-              },
-              {
-                "kind": "account",
-                "path": "received_token_program"
-              },
-              {
-                "kind": "account",
-                "path": "received_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "spent_token_program"
-        },
-        {
-          "name": "received_token_program"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
+          "optional": true
         }
       ],
       "args": [
@@ -1690,12 +1705,12 @@
           "type": "bytes"
         },
         {
-          "name": "cpi_account_count",
+          "name": "call_account_count",
           "type": "u16"
         },
         {
-          "name": "min_received",
-          "type": "u64"
+          "name": "new_assets",
+          "type": "u8"
         }
       ]
     },
@@ -1786,22 +1801,42 @@
       "args": []
     },
     {
-      "name": "public_repay_from_wallet",
+      "name": "public_venue_settle",
       "discriminator": [
-        136,
-        29,
-        241,
-        215,
-        137,
-        62,
-        170,
-        22
+        2,
+        249,
+        207,
+        219,
+        167,
+        99,
+        179,
+        111
       ],
       "accounts": [
         {
-          "name": "payer",
+          "name": "caller",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "margin_account",
@@ -1828,7 +1863,7 @@
           }
         },
         {
-          "name": "asset_config",
+          "name": "venue_asset",
           "pda": {
             "seeds": [
               {
@@ -1843,83 +1878,225 @@
               },
               {
                 "kind": "account",
-                "path": "mint"
+                "path": "venue_asset.mint",
+                "account": "AssetConfig"
               }
             ]
           }
         },
         {
-          "name": "reserve",
-          "writable": true,
+          "name": "settle_asset",
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  114,
-                  101,
+                  97,
+                  115,
                   115,
                   101,
-                  114,
-                  118,
-                  101
+                  116
                 ]
               },
               {
                 "kind": "account",
-                "path": "mint"
+                "path": "settle_mint"
               }
             ]
           }
         },
         {
-          "name": "debt_position",
+          "name": "settle_mint"
+        },
+        {
+          "name": "venue_account",
+          "writable": true
+        },
+        {
+          "name": "idle",
+          "writable": true
+        },
+        {
+          "name": "margin_vault",
           "writable": true,
           "pda": {
             "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  98,
-                  116
-                ]
-              },
               {
                 "kind": "account",
                 "path": "margin_account"
               },
               {
                 "kind": "account",
-                "path": "reserve"
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "settle_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "oracle"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "public_venue_unwind",
+      "discriminator": [
+        87,
+        27,
+        66,
+        84,
+        72,
+        200,
+        163,
+        189
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "signer": true
+        },
+        {
+          "name": "margin_account",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  103,
+                  105,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "margin_account.authority",
+                "account": "MarginAccount"
               }
             ]
           }
         },
         {
-          "name": "mint"
+          "name": "venue_asset",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  115,
+                  115,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "venue_asset.mint",
+                "account": "AssetConfig"
+              }
+            ]
+          }
         },
         {
-          "name": "payer_token_account",
-          "writable": true
+          "name": "integration",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  101,
+                  103,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target_program"
+              }
+            ]
+          }
         },
         {
-          "name": "reserve_vault",
-          "writable": true
+          "name": "target_program"
         },
         {
-          "name": "token_program"
+          "name": "validator",
+          "relations": [
+            "integration"
+          ]
         }
       ],
       "args": [
         {
-          "name": "max_assets",
-          "type": "u64"
+          "name": "data",
+          "type": "bytes"
         },
         {
-          "name": "repay_all",
-          "type": "bool"
+          "name": "call_account_count",
+          "type": "u16"
         }
       ]
     },
@@ -2067,9 +2244,6 @@
         },
         {
           "name": "margin_vault",
-          "docs": [
-            "Borrowed funds land here and count as collateral."
-          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2147,202 +2321,6 @@
           "type": "u128"
         }
       ]
-    },
-    {
-      "name": "user_close_collateral_position",
-      "discriminator": [
-        131,
-        134,
-        11,
-        62,
-        44,
-        231,
-        4,
-        79
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "margin_account"
-          ]
-        },
-        {
-          "name": "margin_account",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  97,
-                  114,
-                  103,
-                  105,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "margin_account.authority",
-                "account": "MarginAccount"
-              }
-            ]
-          }
-        },
-        {
-          "name": "asset_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  115,
-                  115,
-                  101,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "mint"
-              }
-            ]
-          }
-        },
-        {
-          "name": "mint"
-        },
-        {
-          "name": "margin_vault",
-          "writable": true
-        },
-        {
-          "name": "token_program"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "user_close_debt_position",
-      "discriminator": [
-        127,
-        138,
-        97,
-        199,
-        18,
-        176,
-        126,
-        248
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "margin_account"
-          ]
-        },
-        {
-          "name": "margin_account",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  97,
-                  114,
-                  103,
-                  105,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "margin_account.authority",
-                "account": "MarginAccount"
-              }
-            ]
-          }
-        },
-        {
-          "name": "asset_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  115,
-                  115,
-                  101,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "asset_config.mint",
-                "account": "AssetConfig"
-              }
-            ]
-          }
-        },
-        {
-          "name": "reserve",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  115,
-                  101,
-                  114,
-                  118,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "asset_config.mint",
-                "account": "AssetConfig"
-              }
-            ]
-          }
-        },
-        {
-          "name": "debt_position",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  98,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "margin_account"
-              },
-              {
-                "kind": "account",
-                "path": "reserve"
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
     },
     {
       "name": "user_close_margin",
@@ -2614,29 +2592,25 @@
       ]
     },
     {
-      "name": "user_open_debt_position",
+      "name": "user_reclaim_rent",
       "discriminator": [
-        144,
-        183,
-        201,
-        223,
-        74,
-        100,
-        20,
-        205
+        9,
+        50,
+        43,
+        151,
+        56,
+        112,
+        170,
+        161
       ],
       "accounts": [
         {
           "name": "authority",
+          "writable": true,
           "signer": true,
           "relations": [
             "margin_account"
           ]
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
         },
         {
           "name": "margin_account",
@@ -2677,39 +2651,23 @@
               },
               {
                 "kind": "account",
-                "path": "asset_config.mint",
-                "account": "AssetConfig"
+                "path": "mint"
               }
             ]
           }
         },
         {
-          "name": "reserve",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  115,
-                  101,
-                  114,
-                  118,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "asset_config.mint",
-                "account": "AssetConfig"
-              }
-            ]
-          }
+          "name": "mint"
+        },
+        {
+          "name": "margin_vault",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "debt_position",
           "writable": true,
+          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -2727,14 +2685,14 @@
               },
               {
                 "kind": "account",
-                "path": "reserve"
+                "path": "asset_config.reserve",
+                "account": "AssetConfig"
               }
             ]
           }
         },
         {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
+          "name": "token_program"
         }
       ],
       "args": []
@@ -3165,19 +3123,6 @@
       ]
     },
     {
-      "name": "CollateralPositionClosed",
-      "discriminator": [
-        171,
-        255,
-        127,
-        72,
-        137,
-        198,
-        33,
-        190
-      ]
-    },
-    {
       "name": "CollateralSeized",
       "discriminator": [
         165,
@@ -3201,32 +3146,6 @@
         173,
         72,
         82
-      ]
-    },
-    {
-      "name": "DebtPositionClosed",
-      "discriminator": [
-        175,
-        106,
-        224,
-        182,
-        49,
-        171,
-        83,
-        13
-      ]
-    },
-    {
-      "name": "DebtPositionOpened",
-      "discriminator": [
-        179,
-        70,
-        154,
-        151,
-        48,
-        88,
-        165,
-        162
       ]
     },
     {
@@ -3266,6 +3185,19 @@
         122,
         198,
         57
+      ]
+    },
+    {
+      "name": "IntegrationValidatorUpdated",
+      "discriminator": [
+        171,
+        252,
+        96,
+        58,
+        229,
+        175,
+        178,
+        4
       ]
     },
     {
@@ -3386,6 +3318,19 @@
       ]
     },
     {
+      "name": "RentReclaimed",
+      "discriminator": [
+        148,
+        54,
+        67,
+        236,
+        53,
+        252,
+        14,
+        165
+      ]
+    },
+    {
       "name": "ReserveAccrued",
       "discriminator": [
         117,
@@ -3422,6 +3367,45 @@
         120,
         20,
         49
+      ]
+    },
+    {
+      "name": "VenueRegistered",
+      "discriminator": [
+        86,
+        82,
+        191,
+        91,
+        171,
+        241,
+        178,
+        9
+      ]
+    },
+    {
+      "name": "VenueSettled",
+      "discriminator": [
+        200,
+        98,
+        120,
+        97,
+        18,
+        63,
+        203,
+        107
+      ]
+    },
+    {
+      "name": "VenueUnwound",
+      "discriminator": [
+        195,
+        163,
+        6,
+        77,
+        230,
+        43,
+        63,
+        109
       ]
     }
   ],
@@ -3553,190 +3537,181 @@
     },
     {
       "code": 6025,
-      "name": "InvalidOracleOwner",
-      "msg": "Oracle account is not owned by the expected Pyth receiver program"
-    },
-    {
-      "code": 6026,
-      "name": "InvalidPriceFeed",
-      "msg": "Oracle account feed ID does not match the registered asset"
-    },
-    {
-      "code": 6027,
       "name": "StalePrice",
       "msg": "Oracle price update is older than the configured maximum age"
     },
     {
-      "code": 6028,
-      "name": "InvalidPrice",
-      "msg": "Oracle price is zero, negative, or otherwise invalid"
-    },
-    {
-      "code": 6029,
+      "code": 6026,
       "name": "ConfidenceTooWide",
       "msg": "Oracle price confidence interval is wider than the configured maximum"
     },
     {
-      "code": 6030,
+      "code": 6027,
       "name": "HealthFactorTooLow",
       "msg": "Projected borrow health factor would fall below the required minimum"
     },
     {
-      "code": 6031,
+      "code": 6028,
       "name": "PositionHealthy",
       "msg": "Margin account is healthy and is not eligible for liquidation"
     },
     {
-      "code": 6032,
+      "code": 6029,
       "name": "CloseFactorExceeded",
       "msg": "Liquidation repay amount exceeds the configured close factor"
     },
     {
-      "code": 6033,
+      "code": 6030,
       "name": "OutstandingDebt",
       "msg": "Margin account still has outstanding debt"
     },
     {
-      "code": 6034,
+      "code": 6031,
       "name": "NonEmptyMargin",
       "msg": "Margin account still has open collateral or debt positions"
     },
     {
-      "code": 6035,
+      "code": 6032,
       "name": "MathOverflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6036,
+      "code": 6033,
       "name": "MathUnderflow",
       "msg": "Arithmetic underflow"
     },
     {
-      "code": 6037,
+      "code": 6034,
       "name": "DivisionByZero",
       "msg": "Division by zero"
     },
     {
-      "code": 6038,
+      "code": 6035,
       "name": "TimestampRegression",
       "msg": "Clock timestamp moved backwards relative to stored state"
     },
     {
-      "code": 6039,
+      "code": 6036,
       "name": "VaultAccountingInvariantFailed",
       "msg": "Reserve vault/share-mint accounting invariant failed"
     },
     {
-      "code": 6040,
+      "code": 6037,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
     },
     {
-      "code": 6041,
+      "code": 6038,
       "name": "DuplicateAccount",
       "msg": "Duplicate account passed where distinct roles are required"
     },
     {
-      "code": 6042,
+      "code": 6039,
       "name": "ReserveAlreadyExists",
       "msg": "Reserve is already registered for this asset"
     },
     {
-      "code": 6043,
+      "code": 6040,
       "name": "InvalidRiskParameters",
       "msg": "Risk parameter configuration is invalid"
     },
     {
-      "code": 6044,
+      "code": 6041,
       "name": "InvalidRateModel",
       "msg": "Interest-rate model configuration is invalid"
     },
     {
-      "code": 6045,
+      "code": 6042,
       "name": "BelowMinimumInitialSupply",
       "msg": "Requested amount is below the required initial supply floor"
     },
     {
-      "code": 6046,
+      "code": 6043,
       "name": "NonEmptyCollateralPosition",
       "msg": "Collateral position is not empty"
     },
     {
-      "code": 6047,
+      "code": 6044,
       "name": "NonEmptyDebtPosition",
       "msg": "Debt position is not empty"
     },
     {
-      "code": 6048,
+      "code": 6045,
       "name": "NonEmptyVault",
       "msg": "Collateral vault still holds a raw token balance"
     },
     {
-      "code": 6049,
-      "name": "InvalidKaminoAccounts",
-      "msg": "Kamino reserve account does not match the registered receipt asset"
-    },
-    {
-      "code": 6050,
+      "code": 6046,
       "name": "IntegrationDisabled",
       "msg": "External program integration is disabled"
     },
     {
-      "code": 6051,
+      "code": 6047,
       "name": "CallNotAllowed",
-      "msg": "Adapter does not allow this external instruction"
+      "msg": "This external call is not allowed"
     },
     {
-      "code": 6052,
+      "code": 6048,
       "name": "InvalidCallAccounts",
-      "msg": "External call accounts do not match the roles the adapter requires"
+      "msg": "External call accounts do not match the roles the validator's permit requires"
     },
     {
-      "code": 6053,
+      "code": 6049,
       "name": "InvalidCallResult",
       "msg": "External call left a margin vault in an invalid state"
     },
     {
-      "code": 6054,
-      "name": "InvalidPriceSource",
-      "msg": "Price source account is missing or does not match the asset's registered source"
-    },
-    {
-      "code": 6055,
-      "name": "UnsupportedPriceSource",
-      "msg": "Asset's price source does not support this action"
-    },
-    {
-      "code": 6056,
-      "name": "PriceUnavailable",
-      "msg": "No configured oracle source returned a usable price"
-    },
-    {
-      "code": 6057,
+      "code": 6050,
       "name": "PriceTooDivergentFromTwap",
       "msg": "Oracle price is too far from its TWAP"
     },
     {
+      "code": 6051,
+      "name": "InvalidAgentAccounts",
+      "msg": "Agent accounts are missing, out of place or not the registered agent"
+    },
+    {
+      "code": 6052,
+      "name": "InvalidAgentAnswer",
+      "msg": "Agent answer is inconsistent with the call it was asked about"
+    },
+    {
+      "code": 6053,
+      "name": "VenueAssetNotTransferable",
+      "msg": "A venue asset is held only through the margin's venue account"
+    },
+    {
+      "code": 6054,
+      "name": "NotAVenue",
+      "msg": "Asset is not a venue"
+    },
+    {
+      "code": 6055,
+      "name": "NotAToken",
+      "msg": "Asset is not a token"
+    },
+    {
+      "code": 6056,
+      "name": "InvalidVenueAccount",
+      "msg": "Account is not the margin's venue account or its token account"
+    },
+    {
+      "code": 6057,
+      "name": "VenuePositionsOpen",
+      "msg": "The venue account still holds an open position or a pending order"
+    },
+    {
       "code": 6058,
-      "name": "InvalidOracleConfig",
-      "msg": "Oracle configuration is invalid"
+      "name": "NotProtocolConfig",
+      "msg": "Account is not Vanna's protocol config"
+    },
+    {
+      "code": 6059,
+      "name": "NothingToReclaim",
+      "msg": "Pass the empty vault or debt position to close"
     }
   ],
   "types": [
-    {
-      "name": "AdapterKind",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "KaminoLend"
-          },
-          {
-            "name": "Jupiter"
-          }
-        ]
-      }
-    },
     {
       "name": "AdminAccepted",
       "type": {
@@ -3779,13 +3754,6 @@
     },
     {
       "name": "AssetConfig",
-      "docs": [
-        "Token identity, oracle and risk limits for one mint.",
-        "",
-        "`ltv_bps`, `liquidation_threshold_bps` and `liquidation_bonus_bps` stay in the layout for",
-        "compatibility only: V1 health uses the account-wide 1.10 threshold, and liquidation hands the",
-        "liquidator the whole account rather than a bonus."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -3838,12 +3806,20 @@
             "type": "u8"
           },
           {
-            "name": "oracle",
+            "name": "kind",
             "type": {
               "defined": {
-                "name": "OracleConfig"
+                "name": "AssetKind"
               }
             }
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "settle_mint",
+            "type": "pubkey"
           },
           {
             "name": "reserved",
@@ -3898,6 +3874,20 @@
       }
     },
     {
+      "name": "AssetKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Token"
+          },
+          {
+            "name": "Venue"
+          }
+        ]
+      }
+    },
+    {
       "name": "AssetOracleUpdated",
       "type": {
         "kind": "struct",
@@ -3908,11 +3898,7 @@
           },
           {
             "name": "oracle",
-            "type": {
-              "defined": {
-                "name": "OracleConfig"
-              }
-            }
+            "type": "pubkey"
           },
           {
             "name": "timestamp",
@@ -4030,30 +4016,7 @@
       }
     },
     {
-      "name": "CollateralPositionClosed",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "margin_account",
-            "type": "pubkey"
-          },
-          {
-            "name": "mint",
-            "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "CollateralSeized",
-      "docs": [
-        "One collateral balance swept to the liquidator (one per active collateral)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4126,10 +4089,6 @@
     },
     {
       "name": "DebtPosition",
-      "docs": [
-        "Borrow shares for one margin/reserve pair. Their token value grows as the reserve's",
-        "`borrow_index_wad` accrues; the share count only changes on borrow/repay."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4157,46 +4116,6 @@
                 48
               ]
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "DebtPositionClosed",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "margin_account",
-            "type": "pubkey"
-          },
-          {
-            "name": "reserve",
-            "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "DebtPositionOpened",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "margin_account",
-            "type": "pubkey"
-          },
-          {
-            "name": "reserve",
-            "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
           }
         ]
       }
@@ -4243,13 +4162,6 @@
     },
     {
       "name": "Integration",
-      "docs": [
-        "Whitelist entry for one external program a margin account may call.",
-        "Seeds: `[b\"integration\", program_id]`.",
-        "",
-        "`adapter` picks the compiled-in validator that decides which of that program's instructions",
-        "are allowed and which margin vaults they spend from and credit to."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4258,12 +4170,8 @@
             "type": "pubkey"
           },
           {
-            "name": "adapter",
-            "type": {
-              "defined": {
-                "name": "AdapterKind"
-              }
-            }
+            "name": "validator",
+            "type": "pubkey"
           },
           {
             "name": "enabled",
@@ -4299,12 +4207,8 @@
             "type": "pubkey"
           },
           {
-            "name": "adapter",
-            "type": {
-              "defined": {
-                "name": "AdapterKind"
-              }
-            }
+            "name": "validator",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",
@@ -4334,11 +4238,27 @@
       }
     },
     {
+      "name": "IntegrationValidatorUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "integration",
+            "type": "pubkey"
+          },
+          {
+            "name": "validator",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Liquidated",
-      "docs": [
-        "A whole-account liquidation: every collateral swept (`CollateralSeized`) and every debt repaid",
-        "(`DebtRepaid` with the liquidator as payer). Values are the pre-liquidation snapshot."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4455,10 +4375,6 @@
     },
     {
       "name": "MarginAccount",
-      "docs": [
-        "One isolated borrowing portfolio. Seeded only by its authority, so each wallet has exactly one",
-        "(no subaccounts)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4505,11 +4421,24 @@
             "type": "u8"
           },
           {
+            "name": "venue_legs",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "VenueLegs"
+                  }
+                },
+                6
+              ]
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                96
+                36
               ]
             }
           }
@@ -4570,28 +4499,28 @@
             "type": "pubkey"
           },
           {
-            "name": "adapter",
+            "name": "validator",
+            "type": "pubkey"
+          },
+          {
+            "name": "spent",
             "type": {
-              "defined": {
-                "name": "AdapterKind"
+              "vec": {
+                "defined": {
+                  "name": "TokenAmount"
+                }
               }
             }
           },
           {
-            "name": "spent_mint",
-            "type": "pubkey"
-          },
-          {
-            "name": "received_mint",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount_spent",
-            "type": "u64"
-          },
-          {
-            "name": "amount_received",
-            "type": "u64"
+            "name": "received",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "TokenAmount"
+                }
+              }
+            }
           },
           {
             "name": "borrow_health_factor_wad",
@@ -4629,110 +4558,7 @@
       }
     },
     {
-      "name": "OracleConfig",
-      "docs": [
-        "How one asset is priced: its entry in the oracle facade (`oracle::get_price`), the Solana",
-        "counterpart of `OracleFacade.oracle[token]` in the Solidity protocol.",
-        "",
-        "price = the Scope chain (primary), or while that is stale, Pyth price × Pyth factor (fallback),",
-        "then × the klend reserve's cToken exchange rate for Kamino receipts.",
-        "",
-        "Every account is pinned here, so a transaction can never substitute another one. An unused",
-        "source is `Pubkey::default()` (accounts) or all-`SCOPE_CHAIN_UNUSED` (chains)."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "scope_prices",
-            "docs": [
-              "Kamino Scope `OraclePrices` account."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "scope_chain",
-            "docs": [
-              "Price = product of these Scope entries, in order (e.g. JitoSOL = stake rate × SOL/USD)."
-            ],
-            "type": {
-              "array": [
-                "u16",
-                4
-              ]
-            }
-          },
-          {
-            "name": "scope_twap_chain",
-            "docs": [
-              "The same price's TWAP / EMA as a chain, for the divergence check."
-            ],
-            "type": {
-              "array": [
-                "u16",
-                4
-              ]
-            }
-          },
-          {
-            "name": "pyth_price",
-            "docs": [
-              "Pyth push (shard 0) price-feed account: the only source when Scope is unused, the",
-              "fallback while the Scope price is stale otherwise. Its EMA is the TWAP."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "pyth_factor",
-            "docs": [
-              "Optional second Pyth feed multiplied in (JupSOL: JUPSOL/SOL rate × SOL/USD)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "klend_reserve",
-            "docs": [
-              "klend reserve whose cToken exchange rate converts the underlying's price (Kamino receipts)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "klend_program",
-            "docs": [
-              "Program owning `klend_reserve`."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "max_age_secs",
-            "docs": [
-              "A price older than this is not fresh."
-            ],
-            "type": "u32"
-          },
-          {
-            "name": "max_twap_divergence_bps",
-            "docs": [
-              "Max |price − TWAP| / price. 0 disables the check."
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "max_confidence_bps",
-            "docs": [
-              "Max Pyth confidence / price."
-            ],
-            "type": "u16"
-          }
-        ]
-      }
-    },
-    {
       "name": "ProtocolConfig",
-      "docs": [
-        "Global administration and emergency state. Never written by normal user transactions, so it",
-        "never becomes a write-lock bottleneck."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -4826,42 +4652,54 @@
     },
     {
       "name": "RateCurve",
-      "docs": [
-        "Borrow-rate curve coefficients (WAD). See `math::interest::borrow_rate_per_second_wad`.",
-        "annual_rate = rate_multiplier * (linear_coeff * (u + u^32) + jump_coeff * u^64)"
-      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "linear_coeff_wad",
-            "docs": [
-              "Weight of the `u` and `u^32` terms."
-            ],
             "type": "u64"
           },
           {
             "name": "jump_coeff_wad",
-            "docs": [
-              "Weight of the `u^64` term, which dominates only near full utilization."
-            ],
             "type": "u64"
           },
           {
             "name": "rate_multiplier_wad",
-            "docs": [
-              "Overall scale applied to the whole polynomial."
-            ],
             "type": "u64"
           }
         ]
       }
     },
     {
+      "name": "RentReclaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "margin_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_closed",
+            "type": "bool"
+          },
+          {
+            "name": "debt_position_closed",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Reserve",
-      "docs": [
-        "Accounting and authority for one lending pool."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -5045,6 +4883,138 @@
           {
             "name": "borrow_cap",
             "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenAmount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VenueLegs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "asset_index",
+            "type": "u16"
+          },
+          {
+            "name": "legs",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VenueRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "asset_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "venue",
+            "type": "pubkey"
+          },
+          {
+            "name": "asset_index",
+            "type": "u16"
+          },
+          {
+            "name": "settle_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VenueSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "margin_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "venue",
+            "type": "pubkey"
+          },
+          {
+            "name": "swept",
+            "type": "u64"
+          },
+          {
+            "name": "lamports_refunded",
+            "type": "u64"
+          },
+          {
+            "name": "open_legs",
+            "type": "u64"
+          },
+          {
+            "name": "closed",
+            "type": "bool"
+          },
+          {
+            "name": "event_sequence",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VenueUnwound",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "margin_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "venue",
+            "type": "pubkey"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "program_id",
+            "type": "pubkey"
+          },
+          {
+            "name": "health_factor_wad",
+            "type": "u128"
           },
           {
             "name": "timestamp",

@@ -1,9 +1,9 @@
 import { Buffer } from "buffer";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { PYTH_PUSH_ORACLE_PROGRAM_ID, PYTH_SHARD_ID, VANNA_PROGRAM_ID } from "./config";
+import { ORACLE_PROGRAM_ID, PYTH_PUSH_ORACLE_PROGRAM_ID, PYTH_SHARD_ID, VANNA_PROGRAM_ID } from "./config";
 
-/** Mirrors programs/vanna_lending/src/constants.rs seeds exactly. */
+/** Mirrors programs/vanna_credit_layer/src/constants.rs (and the oracle agent's) seeds exactly. */
 const seed = (value: string) => Buffer.from(value, "utf8");
 
 export const protocolConfigPda = (): PublicKey =>
@@ -25,9 +25,23 @@ export const marginPda = (authority: PublicKey): PublicKey =>
 export const debtPositionPda = (margin: PublicKey, reserve: PublicKey): PublicKey =>
   PublicKey.findProgramAddressSync([seed("debt"), margin.toBuffer(), reserve.toBuffer()], VANNA_PROGRAM_ID)[0];
 
-/** Whitelist entry for an external program `margin_execute` may call (Jupiter, Kamino Lend). */
+/** Whitelist entry for an external program `margin_execute` may call (Jupiter, Kamino Lend, GMTrade). */
 export const integrationPda = (programId: PublicKey): PublicKey =>
   PublicKey.findProgramAddressSync([seed("integration"), programId.toBuffer()], VANNA_PROGRAM_ID)[0];
+
+/**
+ * A margin's account at a venue (GMTrade, keyed by its store): a system-owned PDA of the core
+ * program that owns the margin's GMTrade user, orders and positions, and that Vanna signs for.
+ */
+export const venueAccountPda = (margin: PublicKey, venue: PublicKey): PublicKey =>
+  PublicKey.findProgramAddressSync([seed("venue_account"), margin.toBuffer(), venue.toBuffer()], VANNA_PROGRAM_ID)[0];
+
+/** The oracle agent's price book: every token's OracleConfig, keyed by mint. */
+export const priceBookPda = (): PublicKey => PublicKey.findProgramAddressSync([seed("price_book")], ORACLE_PROGRAM_ID)[0];
+
+/** The oracle agent's market book for a venue: its listed markets (legs), leverage caps, index prices. */
+export const marketBookPda = (venue: PublicKey): PublicKey =>
+  PublicKey.findProgramAddressSync([seed("market_book"), venue.toBuffer()], ORACLE_PROGRAM_ID)[0];
 
 /** Reserve liquidity vault = ATA(mint, owner = reserve PDA). */
 export const reserveVault = (mint: PublicKey, tokenProgram: PublicKey): PublicKey =>

@@ -1,4 +1,5 @@
 // Server-side only: keeps the fork's cloned Kamino Lend reserves usable.
+import { forkFetch } from "../connection";
 import { Connection } from "@solana/web3.js";
 import { SOLANA_RPC_URL } from "../config";
 import { KAMINO_RECEIPTS, KLEND_PROGRAM_ID } from "../kamino";
@@ -25,7 +26,7 @@ export interface HealedReserve {
  * left untouched.
  */
 export async function healKaminoReserves(rpcUrl: string = SOLANA_RPC_URL): Promise<HealedReserve[]> {
-  const connection = new Connection(rpcUrl, "confirmed");
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
   const [slot, infos] = await Promise.all([
     connection.getSlot("confirmed"),
     connection.getMultipleAccountsInfo(KAMINO_RECEIPTS.map((r) => r.reserve), "confirmed"),

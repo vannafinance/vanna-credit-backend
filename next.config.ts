@@ -11,6 +11,12 @@ const nextConfig: NextConfig = {
   // build — without it there is no standalone server to copy into the runner.
   output: "standalone",
 
+  // /trade/perps has no page of its own: open the default market. Done here rather than with a
+  // redirect() page, which trips Next's dev-mode timing ("cannot have a negative time stamp").
+  async redirects() {
+    return [{ source: "/trade/perps", destination: "/trade/perps/ethusdc", permanent: false }];
+  },
+
   compiler: {
     // Strip console.* from production bundles at build time so the 167 dev log
     // calls across the app never ship to users — smaller bundles, no main-thread
