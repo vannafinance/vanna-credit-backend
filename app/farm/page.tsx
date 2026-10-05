@@ -198,6 +198,7 @@ export default function FarmPage() {
       {/* Pool Table */}
       <section className="w-full pb-8">
       <FarmTable
+        paginate={false}
         filterDropdownPosition="left"
         heading={{
           tabsItems: [
