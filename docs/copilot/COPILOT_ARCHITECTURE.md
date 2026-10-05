@@ -279,7 +279,7 @@ the egress was attached first and `/api/prices` returned 502 until the NAT exist
 | Run URL | `https://vanna-credit-solana-test-o3dmfat4aq-uc.a.run.app` |
 | Runtime SA | `vanna-credit-runtime@vanna-credit-solana-test.iam.gserviceaccount.com` |
 | Builder SA | `vanna-credit-builder@vanna-credit-solana-test.iam.gserviceaccount.com` |
-| Current image | `us-central1-docker.pkg.dev/vanna-credit-solana-test/vanna-credit/app:134d926` (branch `copilot`), revision `vanna-credit-solana-test-00012-d86`, deployed 2026-10-03 (changes only the image; env, secrets, VPC and NAT are kept). Revision `00005-dt6` (app `main`, no Copilot) is the rollback target |
+| Current image | `us-central1-docker.pkg.dev/vanna-credit-solana-test/vanna-credit/app:e4c5971` (branch `copilot`, merged with `main`'s `vanna_credit_layer` library), revision `vanna-credit-solana-test-00016-6fs`, deployed 2026-10-05 (previous: `…:134d926`, `00012-d86`) (changes only the image; env, secrets, VPC and NAT are kept). Revision `00005-dt6` (app `main`, no Copilot) is the rollback target |
 | Secrets | Secret Manager: `workos-m2m-client-secret`, `copilot-session-secret`, `copilot-store-secret`, readable by the runtime SA, mounted as env |
 | NAT | `vanna-internal-nat` on router `vanna-internal-router` (subnet `vanna-internal-usc1`) |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.50.0.0/24` (Private Google Access on) |
@@ -291,7 +291,7 @@ the egress was attached first and `/api/prices` returned 502 until the NAT exist
 |---|---|
 | Firestore | Native `(default)` in `us-central1` (created 2026-10-01; none existed before) |
 | Vertex | `gemini-3.8-flash`, location `global`; SA `vanna-copilot@solana-mcp.iam.gserviceaccount.com` |
-| Cloud Run | `vanna-mcp-solana`, image `mcp-solana:ac4cca1`, revision `00004` (adds `PROTOCOL_LOOKUP_TABLES=3VEqRdeCsA1Xx5GDEwBQoAaBn4mPzEYuqmVUPfbJwsVG`), `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1` (public front end), Direct VPC `vanna-internal` with `private-ranges-only` egress (it needs the public internet for the fork RPC and Jupiter and has no NAT). URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. **Not `internal`:** internal ingress rejects a caller from another project with a 404 |
+| Cloud Run | `vanna-mcp-solana`, image `mcp-solana:c751774`, revision `00005-jhg`, deployed 2026-10-05 for the `vanna_credit_layer` program (`PROTOCOL_LOOKUP_TABLES=Df9ZBRDkqd2ReYWP4HjRdn4V9u9PiQp1AgyWGVEH7H66`, rebuilt for the new oracle/validator accounts; previous `ac4cca1`, `00004`, table `3VEqRdeC…`), `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1` (public front end), Direct VPC `vanna-internal` with `private-ranges-only` egress (it needs the public internet for the fork RPC and Jupiter and has no NAT). URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. **Not `internal`:** internal ingress rejects a caller from another project with a 404 |
 | Builder SA | `vanna-mcp-builder@solana-mcp.iam.gserviceaccount.com`: `storage.objectViewer`, `artifactregistry.writer`, `logging.logWriter` only. Build with a build-only config (`logging: CLOUD_LOGGING_ONLY`); `cloudbuild.mcp.yaml`'s deploy step would use default ingress |
 | Artifact Registry | `us-central1-docker.pkg.dev/solana-mcp/vanna-credit` |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.40.0.0/24` (Private Google Access on) |
