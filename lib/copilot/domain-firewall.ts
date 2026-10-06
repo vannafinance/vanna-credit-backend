@@ -150,7 +150,11 @@ export function hasMisspelledDomainWord(message: string): boolean {
   return false;
 }
 
-export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boolean } = {}): FirewallResult {
+/**
+ * `modelDecides`: the investigation stage (Gemini) is available and decides what is on-domain, so the product-word
+ * allowlist below is skipped. The hard refusals, the abuse tripwire, other addresses and unoffered tokens still run.
+ */
+export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boolean; modelDecides?: boolean } = {}): FirewallResult {
   const m = (message ?? "").trim();
   if (!m) return { allow: false, reason: "empty", kind: "empty", message: "Type a question about your Vanna positions or an action you want to take." };
   if (m.length > MAX_MESSAGE_CHARS) {
@@ -187,6 +191,7 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
     };
   }
 
+  if (opts.modelDecides) return { allow: true, reason: "allow:model_decides" };
   if (SELF_REFERENTIAL.some((re) => re.test(m))) return { allow: true, reason: "allow:self" };
   if (DOMAIN_WORD_RE.test(m)) return { allow: true, reason: "allow:domain_word" };
   if (EXIT_PHRASE_RE.test(m)) return { allow: true, reason: "allow:exit_phrase" };

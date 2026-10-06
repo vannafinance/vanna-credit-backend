@@ -70,7 +70,9 @@ export type AmountSpec =
    * borrow only: "borrow SOL to reach 3x". The amount is NOT typed by the user or the model; the server sizes it from
    * live prices so that the account's collateral is `multiple` times its equity (see index.ts `levBorrowAmount`).
    */
-  | { kind: "lev"; multiple: number };
+  | { kind: "lev"; multiple: number }
+  /** "swap the borrowed USDC": the exact amount the previous step of the same plan was sized to. */
+  | { kind: "prev" };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */

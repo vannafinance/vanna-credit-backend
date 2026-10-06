@@ -114,10 +114,14 @@ beforeEach(() => {
   Object.assign(pendingDeps, { store: () => conv });
   setLimitStoreForTests(new MemoryStore());
   setLlmClient(null);
+  // This suite covers the deterministic lanes and the router's model fallback; the investigation stage has its own
+  // suite (investigation.test.ts).
+  process.env.COPILOT_INVESTIGATION = "off";
   installFake();
 });
 
 afterEach(() => {
+  delete process.env.COPILOT_INVESTIGATION;
   vi.restoreAllMocks();
   Object.assign(workflowDeps, originalDeps);
   Object.assign(pendingDeps, originalPending);

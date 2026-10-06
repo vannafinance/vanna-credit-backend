@@ -58,7 +58,7 @@ Solana differs, it is simpler:
 | | Stellar Copilot | Solana Copilot |
 |---|---|---|
 | Where it runs | Inside the website's server | Same: inside `vanna-credit-backend`'s server |
-| AI | Gemini on Vertex AI | Same |
+| AI | Gemini on Vertex AI: investigates with read tools, then plans (`investigation/`, `llm-planner.ts`) | Same model since 2026-10-06 (§4.0). Before that, Gemini was only a fallback router behind keyword patterns |
 | Tools | Vanna MCP (14 tools) | Same pattern: Vanna Solana MCP (14 tools) |
 | Two lanes (quick answers vs. multi-step plans) | Yes | Same |
 | Plans stored server-side, approved, run step by step | Yes | Same |
@@ -75,7 +75,7 @@ So everything to do with auto-sign, signer binding and the Sign Service is simpl
 |---|---|---|
 | **Copilot UI** | `vanna-credit-backend/components/copilot`, `/copilot` page | Chat, plan card, approval, step-by-step progress, asks the wallet to sign |
 | **Copilot brain** | `vanna-credit-backend/lib/copilot` (server code) | Classifies the request, refuses off-topic or unsafe things, sizes amounts, keeps plans, calls the MCP |
-| **Gemini** | Google Vertex AI in GCP project `solana-mcp`, model `gemini-3.8-flash` (location `global`) | Language understanding and answer wording only |
+| **Gemini** | Google Vertex AI in GCP project `solana-mcp`, model `gemini-3.8-flash` (location `global`) | Understands the request, investigates the account with read tools, and decides (answer, actions, strategy, question, refusal). Never sizes an amount or signs (§4.0) |
 | **Plan and conversation store** | Firestore (a local encrypted file in development) | Keeps each plan and its state, so a step can never run twice |
 | **Vanna MCP** | this repo, a separate service | 14 tools: reads (positions, prices, pools, history) and transaction builders (supply, borrow, swap, farm, ...). Never signs or sends |
 | **App's Solana code** | `vanna-credit-backend/lib/solana` (already exists) | The same reads the app's pages use, plus the wallet send-and-confirm pipeline |
@@ -84,8 +84,28 @@ So everything to do with auto-sign, signer binding and the Sign Service is simpl
 
 ## 4. How a request flows
 
-The Copilot has two lanes. A classifier picks one per message; a refusal (off-topic, liquidation, admin,
-unknown token) always wins first.
+### 4.0 Stages of a turn (since 2026-10-06, the Stellar Copilot's model)
+
+The model reads and proposes; sealed code owns money movement, sizing, approval and execution.
+
+| Stage | Key files (`lib/copilot/`) | What happens |
+|---|---|---|
+| 1 Firewall | `index.ts` `handleChat`, `domain-firewall.ts`, `limits.ts` | Session and rate limit. Hard refusals (liquidating someone, admin, perps/shorts, other addresses, unoffered tokens, abuse) run before any model call. With the investigation on, the model decides what is on-topic (no product-word allowlist). |
+| 2 Investigate | `investigation/runtime.ts`, `catalog.ts`, `prompt.ts`, `decision.ts` | Gemini (thinking `MEDIUM`) is given the conversation, the evidence so far and 16 read tools backed by the MCP (health, positions, wallet, prices, pool rates, Earn and Kamino positions, safe capacity, what-if, leverage capacity, liquidation risk, swap quote, history, protocol, concepts). Each turn it either calls reads (batched) or ends with one decision tool: `answer`, `propose_actions`, `propose_leverage`, `propose_unwind`, `ask_user`, `decline`. Budgets: 6 turns, 16 reads, 50 s, 15 s per read; the last turn may only decide. The wallet is bound from the session, never from model arguments. |
+| 3 Size | `index.ts` `handleWrite`, `workflow/leverage-borrow.ts`, `workflow/strategy.ts`, `workflow/unwind.ts`, `risk.ts`, `mcp-facts.ts` | A decision names amounts only as a number the user typed (`literal`, checked) or a sizing word: `fraction`, `all`, `max_safe`, `previous_leg`, `leverage`, `receive`. Code turns each into an exact amount from live MCP data with the protocol's maths (HF = collateral / debt; safe borrow (C − F·D)/(F − 1); lever borrow (N − 1)·equity at worst-case slippage). |
+| 4 Review | `workflow.ts`, `plan.ts`, `components/copilot/plan-approval-card.tsx` | The plan is frozen with exact amounts and a digest, shown with its warnings and simulation, valid 5 minutes. A model question is shown as a clarification; the answer to it comes back through the conversation. |
+| 5 Execute | `app/api/copilot/workflow/[id]/*`, `workflow/steps.ts` | Each step is re-checked (`preflightStep`), built and simulated by the MCP (`buildStepTx`), signed by the wallet, relayed and confirmed. |
+| 6 Complete | `workflow.ts`, `workflow/submit-verify.ts` | Per-step confirmation and the plan's final state. |
+
+Guards on the model's decision (`investigation/decision.ts`): every op, asset and amount goes through the same
+`intent.ts` guards as before; a literal amount must be a number in the user's messages; an `answer` or question
+whose figures are not in any tool result is rejected and the reason is fed back for one more turn. If the model is
+off (`COPILOT_INVESTIGATION=off`), unreachable or out of budget, the deterministic keyword router (`router.ts`)
+answers instead (degraded mode). Settings: `COPILOT_THINKING_LEVEL` (default `MEDIUM`),
+`COPILOT_INVESTIGATION_MAX_TURNS` (6), `COPILOT_INVESTIGATION_TIMEOUT_MS` (50000). In development the server log
+shows each turn's tool calls (`[copilot:investigate]`), and `x-copilot-debug: 1` returns the trace.
+
+Sections 4.1 to 4.3 describe the lanes stage 2 hands to.
 
 ### 4.1 A question — *"What's my health factor?"* (quick lane)
 

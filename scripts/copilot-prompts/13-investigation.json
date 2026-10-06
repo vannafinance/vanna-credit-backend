@@ -1,0 +1,16 @@
+{
+  "category": "13_investigation",
+  "group": "investigation",
+  "prompts": [
+    { "id": "inv-001", "prompt": "deposit 100 usdc, 100 usdt and 1 sol in lending pool", "kinds": ["plan_preview", "blocked"], "plan": { "steps": [{ "op": "earn_supply", "asset": "USDC" }, { "op": "earn_supply", "asset": "USDT" }, { "op": "earn_supply", "asset": "SOL" }] }, "why": "a list of amounts is three Earn supply steps" },
+    { "id": "inv-002", "prompt": "can you deposit 100 USDC in margin account and borrow SOL 3x against that USDC", "kinds": ["plan_preview", "clarification", "blocked"], "forbid": ["How much SOL do you want to borrow"], "why": "a leverage target on a borrow is sized by the server" },
+    { "id": "inv-003", "prompt": "put 100 USDC plus 100 USDT plus 1 SOL into the pool", "kinds": ["plan_preview", "blocked"], "forbid": ["supply APR"], "why": "an unfamiliar verb is understood as supplying, not read as pool rates" },
+    { "id": "inv-004", "prompt": "how much more could I borrow in USDC without getting close to liquidation?", "kinds": ["answer"], "why": "investigates capacity at the floor and answers with tool figures" },
+    { "id": "inv-005", "prompt": "which pool pays me the most right now if I just want to earn on stables?", "kinds": ["answer"], "why": "reads pool rates and compares USDC vs USDT" },
+    { "id": "inv-006", "prompt": "I want 2x long SOL exposure, use USDC as the loan", "kinds": ["plan_preview", "clarification", "blocked"], "why": "a leveraged long goes to the lever planner" },
+    { "id": "inv-007", "prompt": "borrow the max usdc that is safe and swap it to SOL inside my margin account", "kinds": ["plan_preview", "clarification", "blocked"], "why": "max_safe borrow then previous_leg swap" },
+    { "id": "inv-008", "prompt": "what's the weather like in Delhi", "kinds": ["blocked"], "why": "off-topic is declined by the model" },
+    { "id": "inv-009", "prompt": "is my account safe if SOL drops 20%?", "kinds": ["answer"], "why": "liquidation distance from tools, no price prediction" },
+    { "id": "inv-010", "prompt": "move half my wallet USDC into earn", "kinds": ["preview", "clarification", "blocked"], "why": "fraction sizing from the wallet balance" }
+  ]
+}

@@ -1,8 +1,18 @@
 /**
  * Copilot brain: one chat turn.
  *
- * Order (each step can end the turn, and none can be skipped):
- *   session -> rate limit -> firewall -> (clarify pick | route) -> lane
+ * Stages (each can end the turn, and none can be skipped):
+ *   1 firewall    session -> rate limit -> hard refusals (domain-firewall.ts)
+ *   2 investigate Gemini reads the account with tools and decides (investigation/); the keyword router
+ *                 (router.ts) is only the fallback when the model is off or unreachable
+ *   3 size        sizing words become exact amounts from live data and the protocol maths (handleWrite,
+ *                 workflow/strategy.ts, workflow/unwind.ts, workflow/leverage-borrow.ts, risk.ts)
+ *   4 review      the plan is frozen, fingerprinted and shown for approval (workflow.ts)
+ *   5 execute     /api/copilot/workflow/[id]/* builds each step fresh, the wallet signs, the app relays
+ *   6 complete    confirmation per step and the plan's final state
+ *
+ * Order inside a turn:
+ *   session -> rate limit -> firewall -> (clarify pick | investigate | route) -> lane
  *     read  : MCP facts -> structured answer (Gemini may re-word it, never change a figure)
  *     write : one-step workflow. Fresh checks + limits + MCP build/simulate -> `preview`
  *     plan  : frozen, digest-bound workflow -> `plan_preview`
@@ -14,11 +24,13 @@ import { copilotConfig } from "./config";
 import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount } from "./explain";
-import type { AmountSpec, Intent, WriteIntent } from "./intent";
+import type { AmountSpec, Asset, Intent, WriteIntent } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens } from "./limits";
-import { loadHealth, runRead, type ReadCtx } from "./mcp-facts";
+import { loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { routeMessage } from "./router";
+import { investigate } from "./investigation";
+import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
 import { wordAnswer } from "./vertex";
 import { createWorkflow, toPlanView, WorkflowError } from "./workflow";
@@ -33,9 +45,10 @@ import type { CopilotUser } from "./types";
 
 export { WorkflowError };
 
-const MAX_HISTORY_TURNS = 8;
-const MAX_HISTORY_CHARS = 600;
-const LLM_TIMEOUT_MS = 25_000;
+const MAX_HISTORY_TURNS = 12;
+const MAX_HISTORY_CHARS = 1000;
+/** The whole turn's model budget: the investigation plus the answer wording. */
+const LLM_TIMEOUT_MS = 75_000;
 
 function cleanHistory(h: ChatRequest["history"]): Array<{ role: "user" | "assistant"; text: string }> {
   if (!Array.isArray(h)) return [];
@@ -81,13 +94,33 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
       intent = picked;
       source = "clarify";
     } else {
-      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history) });
+      const modelDecides = copilotConfig.investigationEnabled && llmConfigured();
+      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides });
       if (!fw.allow) return { kind: fw.kind === "empty" ? "clarification" : "blocked", message: fw.message, ...base };
-      const routed = await routeMessage(message, history, signal);
-      intent = routed.intent;
-      source = routed.source;
-      tokens += routed.tokens;
-      debugNote("route", { source: routed.source, lane: intent.lane, intent });
+      let decided: Intent | null = null;
+      if (modelDecides) {
+        // Stage 2: Gemini investigates with read tools and decides. Its decision is already guarded (decision.ts).
+        const inv = await investigate({ message, history, ctx, signal });
+        tokens += inv.trace.tokens;
+        debugNote("investigation", inv.trace);
+        if (inv.outcome.kind === "answer") {
+          return { kind: "answer", message: answerToText(inv.outcome.answer), answer: inv.outcome.answer, ...base };
+        }
+        if (inv.outcome.kind === "intent") {
+          decided = inv.outcome.intent;
+          source = "model";
+        }
+      }
+      if (decided) {
+        intent = decided;
+      } else {
+        // The model is off, unreachable, or ran out of budget: the deterministic router answers instead.
+        const routed = await routeMessage(message, history, signal);
+        intent = routed.intent;
+        source = routed.source;
+        tokens += routed.tokens;
+      }
+      debugNote("route", { source, lane: intent.lane, intent });
     }
 
     const res = await dispatch(intent, { ctx, user, message, history, surface, conversationId, source, signal, base });
@@ -186,6 +219,7 @@ async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ 
   if (a.kind === "exact") return { ok: true, amount: a.value };
   if (a.kind === "all") return { ok: true, amount: "all" };
   if (a.kind === "out") return { ok: true, amount: `${OUT_PREFIX}${a.value}` };
+  if (a.kind === "prev") return { ok: false, message: "That amount depends on an earlier step. Say it in the same request." };
   if (a.kind === "lev") return { ok: false, message: "A leverage target is sized together with the deposit it applies to. Say it in one request, for example: deposit 100 USDC in margin and borrow SOL at 3x." };
   if (index > 0) return { ok: false, message: "A percentage can only be used on the first step, because later amounts depend on earlier steps. Give an exact amount or say \"all\"." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
@@ -207,6 +241,25 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
     }
     if (w.op !== "create_account" && w.op !== "close_account" && !w.amount) {
       return { kind: "clarification", message: `How much${w.asset ? ` ${w.asset}` : ""} do you want to ${w.op.replace(/^earn_|^farm_/, "").replace("_", " ")}?`, ...base };
+    }
+    if (w.amount?.kind === "prev") {
+      // "swap what I borrowed": the exact amount the previous write of this plan was sized to.
+      const prior = [...steps].reverse().find((s) => s.kind === "write" && s.op !== "create_account" && s.op !== "close_account");
+      let value = prior?.amount;
+      // "borrow the max USDC and swap it": size the safe borrow now so the next step can use its exact amount. Only when
+      // nothing earlier in the plan changes the account, because the size is taken from the account as it is now.
+      if (prior && prior.op === "borrow" && value === "all" && prior.asset && steps.filter((s) => s.kind === "write").length === 1) {
+        const sized = await sizeSafeBorrow(prior.asset as Asset, t.ctx);
+        if (!sized.ok) return { kind: "clarification", message: sized.reason, ...base };
+        prior.amount = sized.amount;
+        value = sized.amount;
+      }
+      if (!prior || !value || value === "all" || value.startsWith(OUT_PREFIX)) {
+        return { kind: "clarification", message: `How much${w.asset ? ` ${w.asset}` : ""} should the step after "${prior ? labelFor(prior) : "the first step"}" use? Its amount is only known once it runs.`, ...base };
+      }
+      steps.push(stepFromWrite(w, value));
+      k++;
+      continue;
     }
     if (w.amount?.kind === "lev") {
       // "borrow SOL 3x against that deposit": the amount is sized here from live prices and the health floor, never typed.

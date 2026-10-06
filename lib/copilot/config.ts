@@ -116,6 +116,24 @@ export const copilotConfig = {
     return env("VERTEX_MODEL", "gemini-3.8-flash");
   },
 
+  /**
+   * Investigation (lib/copilot/investigation): Gemini reads the account through tools and decides, like the Stellar
+   * Copilot. Off = the keyword router alone (also the fallback when the model is unreachable).
+   */
+  get investigationEnabled(): boolean {
+    return env("COPILOT_INVESTIGATION", "on") !== "off";
+  },
+  get investigationThinking(): "LOW" | "MEDIUM" | "HIGH" {
+    const v = env("COPILOT_THINKING_LEVEL", "MEDIUM").toUpperCase();
+    return v === "LOW" || v === "HIGH" ? v : "MEDIUM";
+  },
+  get investigationMaxTurns(): number {
+    return Math.min(10, Math.max(2, envNumber("COPILOT_INVESTIGATION_MAX_TURNS", 6)));
+  },
+  get investigationTimeoutMs(): number {
+    return Math.min(90_000, Math.max(10_000, envNumber("COPILOT_INVESTIGATION_TIMEOUT_MS", 50_000)));
+  },
+
   // ── Limits ─────────────────────────────────────────────────────────────────
   get rateChatPerMin(): number {
     return envNumber("COPILOT_RATE_CHAT_PER_MIN", 20);

@@ -158,7 +158,15 @@ describe("a leverage target on a borrow is sized by the server", () => {
   });
 });
 
-describe("the model reads what the patterns cannot, but supplies no number", () => {
+describe("fallback router: the model reads what the patterns cannot, but supplies no number", () => {
+  // These exercise the keyword router's own model fallback (used when the investigation stage is off or down).
+  beforeEach(() => {
+    process.env.COPILOT_INVESTIGATION = "off";
+  });
+  afterEach(() => {
+    delete process.env.COPILOT_INVESTIGATION;
+  });
+
   it("reads a differently worded list through the model and still draws the same plan", async () => {
     const llm = fakeLlm(() => ({
       calls: [{ name: "action_chain", args: { steps: [

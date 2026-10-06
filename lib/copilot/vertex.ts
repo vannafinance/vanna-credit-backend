@@ -37,7 +37,8 @@ import {
 export interface LlmFunctionDecl {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  /** Omitted for a tool without arguments: Vertex rejects an OBJECT schema with no properties. */
+  parameters?: Record<string, unknown>;
 }
 
 export interface LlmRequest {
@@ -49,6 +50,8 @@ export interface LlmRequest {
   forceTool?: boolean;
   responseSchema?: Record<string, unknown>;
   maxOutputTokens?: number;
+  /** How much the model may reason before answering. Routing and wording need little; investigation needs more. */
+  thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
   signal?: AbortSignal;
 }
 
@@ -98,7 +101,7 @@ class VertexClient implements LlmClient {
         maxOutputTokens: req.maxOutputTokens ?? 512,
         // Gemini 3.x bills thinking tokens against maxOutputTokens; unbounded thinking can leave no room for the
         // answer (empty text). Routing and wording need little reasoning.
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        thinkingConfig: { thinkingLevel: ThinkingLevel[req.thinkingLevel ?? "LOW"] },
         ...(req.tools?.length
           ? {
               tools: [{ functionDeclarations: req.tools as never }],
