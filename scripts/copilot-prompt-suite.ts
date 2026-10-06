@@ -1064,8 +1064,16 @@ const HANDLERS: Record<string, Handler> = {
     checks.push({ ok: typeof ra === "number" && ra > 0, note: `429 carries retry_after_s=${ra}` });
     await sleep(65_000);
     const seq: number[] = [];
+    const seqStart = Date.now();
     for (let i = 0; i < 26; i++) seq.push((await chat(a, { message: "what is the weather today" }, { burst: true })).status);
-    checks.push({ ok: seq.includes(429) && seq.every((c) => c < 500), note: `26 rapid sequential chats: ${seq.join(",")} (a 429 must appear by request 21, never a 5xx)` });
+    const seqSeconds = Math.round((Date.now() - seqStart) / 1000);
+    // The limit is per minute. When each turn takes several seconds (the model investigates), 26 one-after-another chats
+    // span more than a minute and can legitimately stay under it; the simultaneous burst above is then the real check.
+    const windowExceeded = seqSeconds <= 60;
+    checks.push({
+      ok: seq.every((c) => c < 500) && (!windowExceeded || seq.includes(429)),
+      note: `26 rapid sequential chats in ${seqSeconds}s: ${seq.join(",")} (${windowExceeded ? "a 429 must appear by request 21" : "spanned more than the 60 s window, so no 429 is required"}; never a 5xx)`,
+    });
     await sleep(65_000);
     const after = await chat(a, { message: "what is the weather today" }, { burst: true });
     checks.push({ ok: after.status === 200, note: `after waiting, the same wallet is served again: HTTP ${after.status}` });

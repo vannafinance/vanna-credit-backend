@@ -86,6 +86,12 @@ const ABUSE_TRIPWIRE: RegExp[] = [
   /\bhow\s+to\s+(?:hack|phish|exploit|drain|rug)\b/i,
   /\b(?:ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts|rules)|system\s+prompt|reveal\s+(?:your\s+)?(?:instructions|prompt)|print\s+(?:your\s+)?system\s+prompt|jailbreak|dan\s+mode|developer\s+mode)\b/i,
   /\b(?:pretend\s+(?:to\s+be|you\s+are)|act\s+as\s+(?:a|an))\b/i,
+  // Persona and rule-rewrite attempts: "you are now DAN", "forget your rules", "new rule:", "no restrictions".
+  /\byou\s+are\s+now\b|\bforget\s+(?:all\s+|your\s+|the\s+|previous\s+)*(?:rules|instructions|guidelines|restrictions|limits)\b|\bnew\s+rules?\s*:|\b(?:with\s+)?no\s+(?:restrictions|guardrails|rules|filters)\b/i,
+  // Encoded or obfuscated instructions are not followed, whatever they decode to.
+  /\b(?:rot-?13|base-?64|caesar\s+cipher|hex[\s-]?encoded|decode\s+(?:this|the\s+following|and))\b/i,
+  // Debug and diagnostics belong to developers, not to the chat.
+  /\bx-copilot-debug\b|\bdebug\s+(?:trace|mode|output|info)\b|\binternal\s+(?:trace|state|logs?)\b/i,
   /\b(?:time\s+complexity|space\s+complexity)\b/i,
 ];
 
@@ -159,6 +165,15 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
   if (!m) return { allow: false, reason: "empty", kind: "empty", message: "Type a question about your Vanna positions or an action you want to take." };
   if (m.length > MAX_MESSAGE_CHARS) {
     return { allow: false, reason: "too_long", kind: "off_domain", message: "That message is too long. Ask one thing at a time, in a sentence or two." };
+  }
+
+  // Invisible and direction-changing characters (zero-width, bidi overrides) are how text is made to read as something else.
+  if (/[​-‏‪-‮⁠-⁤⁦-⁩﻿]/.test(m)) {
+    return { allow: false, reason: "refuse:hidden_characters", kind: "refused", message: "Your message contains hidden formatting characters that can disguise what it says. Type it again in plain text." };
+  }
+  // A word mixing Latin with Cyrillic or Greek letters ("SОL" with a Cyrillic О) is how token names are spoofed.
+  if (m.split(/\s+/).some((w) => /[A-Za-z]/.test(w) && /[Ͱ-ϿЀ-ӿ]/.test(w))) {
+    return { allow: false, reason: "refuse:mixed_script", kind: "refused", message: "A word in your message mixes alphabets (for example a Cyrillic letter that looks like a Latin one), which is how token names are spoofed. Type token names in plain Latin letters: SOL, USDC, USDT, JitoSOL, JupSOL." };
   }
 
   for (const re of ABUSE_TRIPWIRE) {

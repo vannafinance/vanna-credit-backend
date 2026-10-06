@@ -9,6 +9,7 @@
  */
 
 import { copilotConfig } from "../config";
+import { debugMcp } from "../debug";
 import { getLlm, LlmUnavailable } from "../vertex";
 import type { ReadCtx } from "../mcp-facts";
 import { executeRead, READ_TOOL_NAMES, READ_TOOLS } from "./catalog";
@@ -112,7 +113,8 @@ export async function investigate(args: {
       continue;
     }
 
-    const seen = new Set(evidence.map((o) => `${o.tool}:${JSON.stringify(o.args)}`));
+    // A read that failed (timed out, MCP hiccup) may be asked for again; one that succeeded may not.
+    const seen = new Set(evidence.filter((o) => o.ok).map((o) => `${o.tool}:${JSON.stringify(o.args)}`));
     const reads = calls
       .filter((c) => READ_TOOL_NAMES.has(c.name))
       .filter((c) => {
@@ -132,6 +134,8 @@ export async function investigate(args: {
         const a = (c.args ?? {}) as Record<string, unknown>;
         try {
           const out = await withTimeout(investigationDeps.executeRead(c.name, a, args.ctx), limits.maxReadDurationMs);
+          // Dev-only trace (no-op otherwise): the figures the model saw, including those computed by code.
+          debugMcp(`investigate:${c.name}`, a, out.ok, out.result);
           return { tool: c.name, args: a, ok: out.ok, result: compact(out.result, limits.maxObservationChars), ms: investigationDeps.now() - t0 };
         } catch (err) {
           return { tool: c.name, args: a, ok: false, result: compact({ error: err instanceof Error ? err.message : "read failed" }, 300), ms: investigationDeps.now() - t0 };

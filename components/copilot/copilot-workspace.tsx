@@ -71,14 +71,28 @@ export function CopilotWorkspace() {
   const positions: RailPosition[] = useMemo(() => {
     const rows = (map: typeof collateralBalances, role: string): RailPosition[] =>
       Object.entries(map)
-        .filter(([, v]) => Number(v.amount) > 0)
+        // Hide anything that would read as 0: dust left by interest rounding after a repay is not a position.
+        .filter(([, v]) => Number(v.amount).toLocaleString(undefined, { maximumFractionDigits: 4 }) !== "0" && Number(v.amount) > 0)
         .map(([symbol, v]) => ({
           symbol,
           role,
           amount: Number(v.amount).toLocaleString(undefined, { maximumFractionDigits: 4 }),
           usd: usd(Number(v.usdValue)),
         }));
-    return [...rows(collateralBalances, "Margin · Collateral"), ...rows(borrowedBalances, "Margin · Borrowed")];
+    // A borrow lands in the margin vault, so the vault balance of an asset includes what was borrowed of it. The panel
+    // shows the two apart: Borrowed is the debt, Collateral is the vault balance minus that debt (what the user put in or
+    // swapped into). Borrowing then changes only the Borrowed row, and depositing only the Collateral row. The health
+    // factor and the app's other pages still use the full vault balance, as the program does.
+    const ownCollateral: typeof collateralBalances = {};
+    for (const [symbol, v] of Object.entries(collateralBalances)) {
+      const held = Number(v.amount);
+      const owed = Number(borrowedBalances[symbol]?.amount ?? 0);
+      const diff = held - (Number.isFinite(owed) ? owed : 0);
+      const own = diff > 1e-9 ? diff : 0; // float dust from the subtraction is not a position
+      const price = held > 0 ? Number(v.usdValue) / held : 0;
+      ownCollateral[symbol] = { amount: String(own), usdValue: String(own * price) };
+    }
+    return [...rows(ownCollateral, "Margin · Collateral"), ...rows(borrowedBalances, "Margin · Borrowed")];
   }, [collateralBalances, borrowedBalances]);
 
   const chips: RailStatusChip[] = useMemo(() => {

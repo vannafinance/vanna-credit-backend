@@ -150,6 +150,31 @@ function deferredRefusal(nowVersion: string): Intent {
   return refuse(`I can't watch prices or act at a later time, so I won't set that up; I only prepare actions you approve right now.${offer}`);
 }
 
+/**
+ * A conditional, scheduled or standing order in an instruction ("top up if HF < 1.2", "auto-compound every hour") is
+ * refused before any model call, with the product's own wording and an offer to do the immediate part now. A question
+ * about a condition ("what happens if SOL drops 20%?") is not an order and passes.
+ */
+export function conditionalRefusal(message: string): string | null {
+  const raw = message.trim();
+  const lower = raw.toLowerCase().replace(/[’`]/g, "'");
+  if (!lower) return null;
+  const questionish = QUESTION_OPENER.test(lower) || lower.endsWith("?") || HYPOTHETICAL.test(lower);
+  if (questionish && !POLITE.test(lower)) return null;
+  const cond = detectConditional(raw);
+  if (cond) {
+    const rest = immediateRemainder(raw, cond);
+    const offer = rest.length > 3 && WRITE_VERB.test(rest.toLowerCase()) ? ` If you want it now, tell me: "${rest}" and I will prepare it for your approval.` : "";
+    return `${CONDITIONAL_BASE_MESSAGE}${offer}`;
+  }
+  const now = deferredSpan(lower);
+  if (now !== null) {
+    const r = deferredRefusal(now);
+    return r.lane === "refuse" ? r.message : null;
+  }
+  return null;
+}
+
 /** The asset named closest to `at`, so "how many USDC can I borrow" picks USDC, not another asset in the sentence. */
 function assetNear(lower: string, assets: Asset[], at: number): Asset | null {
   let best: { a: Asset; d: number } | null = null;

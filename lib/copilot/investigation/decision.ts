@@ -18,6 +18,7 @@ import {
   validateLever,
   validateWrite,
   type AmountSpec,
+  type AskOption,
   type Intent,
   type WriteIntent,
   type WriteOp,
@@ -112,8 +113,23 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "ask_user",
-    description: "Finish: one short question, when an essential detail is genuinely missing or two readings would lead to different transactions. Do not ask what the evidence or the conversation already answers.",
-    parameters: { type: "OBJECT", properties: { question: { type: "STRING" } }, required: ["question"] },
+    description: "Finish: one short question, when an essential detail is genuinely missing or two readings would lead to different transactions. Do not ask what the evidence or the conversation already answers. When the answer is a choice between concrete alternatives (for example the Earn pool or margin collateral), give each alternative as an option the user can pick.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        question: { type: "STRING" },
+        options: {
+          type: "ARRAY",
+          description: "2 to 4 concrete alternatives, each a complete set of actions (same shape as propose_actions).",
+          items: {
+            type: "OBJECT",
+            properties: { label: { type: "STRING", description: "Short button text." }, description: { type: "STRING" }, actions: { type: "ARRAY", items: leg } },
+            required: ["label", "actions"],
+          },
+        },
+      },
+      required: ["question"],
+    },
   },
   {
     name: "decline",
@@ -184,9 +200,44 @@ function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amo
   }
 }
 
-function guardMessage(message: string): ParsedDecision {
-  // A guard asking "Which asset?" is a model slip the next turn can fix; a policy refusal is final.
-  return no(message);
+const STANDARD_DECLINE = "I can't help with that here. I only help with Vanna on Solana: Earn, margin, swaps, Kamino farm and your positions.";
+
+type ActionsResult = { ok: true; intent: Intent } | { ok: false; reason: string };
+
+/** A list of action legs (propose_actions, or one choice of ask_user) -> a guarded write or chain intent. */
+function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionContext): ActionsResult {
+  const rows = Array.isArray(raw) ? raw : [];
+  if (!rows.length) return { ok: false, reason: "at least one action is needed" };
+  if (rows.length > MAX_PLAN_STEPS) return { ok: true, intent: { lane: "refuse", reason: "guard", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.` } };
+  const steps: Array<{ write: WriteIntent } | { report: true }> = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] as Record<string, unknown>;
+    if (!r || typeof r !== "object" || !WRITE_OPS.includes(r.op as WriteOp)) return { ok: false, reason: `action ${i + 1} has an unknown op` };
+    const op = r.op as WriteOp;
+    for (const k of ["asset", "to_asset"]) {
+      const v = r[k];
+      if (typeof v === "string" && v.trim() && !normalizeAsset(v)) return { ok: true, intent: { lane: "refuse", reason: "guard", message: unofferedMessage(v) } };
+    }
+    const sized = sizingToAmount(r.sizing, op, i);
+    if (!sized.ok) return { ok: false, reason: sized.reason };
+    const w: WriteIntent = {
+      op,
+      asset: typeof r.asset === "string" ? normalizeAsset(r.asset) : null,
+      to_asset: typeof r.to_asset === "string" ? normalizeAsset(r.to_asset) : null,
+      amount: sized.amount,
+      source: r.source === "margin" ? "margin" : r.source === "wallet" ? "wallet" : null,
+    };
+    const v = validateWrite(w);
+    // A guard message ("Pick two different assets") goes back to the model, which can ask the user or decline.
+    if (!v.ok) return { ok: false, reason: `action ${i + 1} (${op}): ${v.message}. If that is what the user asked, tell them with ask_user or decline` };
+    steps.push({ write: v.value });
+  }
+  if (reportHealth) steps.push({ report: true });
+  const intent: Intent = steps.length === 1 && "write" in steps[0] ? { lane: "write", write: steps[0].write } : { lane: "chain", steps };
+  if (!amountsAreTyped(intent, ctx.message, ctx.history)) {
+    return { ok: false, reason: "a literal amount is not a number the user typed. Use literal only for numbers in the user's messages; otherwise use a sizing word, or ask_user for the amount" };
+  }
+  return { ok: true, intent };
 }
 
 export function parseDecision(name: string, args: Record<string, unknown>, ctx: DecisionContext): ParsedDecision {
@@ -211,11 +262,25 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       const q = str(args.question, 400);
       if (!q) return no("ask_user needs a question");
       if (!numbersGrounded(q, sources)) return no("the question contains a figure that is not in any tool result");
-      return { ok: true, name, outcome: { kind: "intent", intent: { lane: "ask", question: plain(q) } } };
+      // Each choice is a complete set of actions, checked exactly like propose_actions; an invalid one is left out.
+      const options: AskOption[] = (Array.isArray(args.options) ? args.options : []).slice(0, 4).flatMap((o) => {
+        if (!o || typeof o !== "object") return [];
+        const opt = o as Record<string, unknown>;
+        const label = str(opt.label, 80);
+        if (!label || !numbersGrounded(label, sources)) return [];
+        const r = actionsToIntent(opt.actions, false, ctx);
+        if (!r.ok || (r.intent.lane !== "write" && r.intent.lane !== "chain")) return [];
+        const description = str(opt.description, 160);
+        return [{ label: plain(label), ...(description && numbersGrounded(description, sources) ? { description: plain(description) } : {}), apply: r.intent }];
+      });
+      const intent: Intent = { lane: "ask", question: plain(q), ...(options.length >= 2 ? { options } : {}) };
+      return { ok: true, name, outcome: { kind: "intent", intent } };
     }
     case "decline": {
       const reason = str(args.reason, 400);
-      const message = reason && numbersGrounded(reason, sources) ? plain(reason) : "That is outside what I can do here. I help with Vanna on Solana: Earn, margin, swaps, Kamino farm and your health factor.";
+      // A refusal never discusses how the Copilot works inside (tools, instructions, debugging, the model).
+      const internal = reason && /\b(?:debug\w*|traces?|system\s+prompt|prompts?|instructions?|tools?|internals?|function\s+calls?|gemini|model)\b/i.test(reason);
+      const message = reason && !internal && numbersGrounded(reason, sources) ? plain(reason) : STANDARD_DECLINE;
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "refuse", reason: "model_decline", message } } };
     }
     case "propose_unwind": {
@@ -237,37 +302,8 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "lever", lever: v.value } } };
     }
     case "propose_actions": {
-      const rows = Array.isArray(args.actions) ? args.actions : [];
-      if (!rows.length) return no("propose_actions needs at least one action");
-      if (rows.length > MAX_PLAN_STEPS) return { ok: true, name, outcome: { kind: "intent", intent: { lane: "refuse", reason: "guard", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.` } } };
-      const steps: Array<{ write: WriteIntent } | { report: true }> = [];
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i] as Record<string, unknown>;
-        if (!r || typeof r !== "object" || !WRITE_OPS.includes(r.op as WriteOp)) return no(`action ${i + 1} has an unknown op`);
-        const op = r.op as WriteOp;
-        for (const k of ["asset", "to_asset"]) {
-          const v = r[k];
-          if (typeof v === "string" && v.trim() && !normalizeAsset(v)) return { ok: true, name, outcome: { kind: "intent", intent: { lane: "refuse", reason: "guard", message: unofferedMessage(v) } } };
-        }
-        const sized = sizingToAmount(r.sizing, op, i);
-        if (!sized.ok) return no(sized.reason);
-        const w: WriteIntent = {
-          op,
-          asset: typeof r.asset === "string" ? normalizeAsset(r.asset) : null,
-          to_asset: typeof r.to_asset === "string" ? normalizeAsset(r.to_asset) : null,
-          amount: sized.amount,
-          source: r.source === "margin" ? "margin" : r.source === "wallet" ? "wallet" : null,
-        };
-        const v = validateWrite(w);
-        if (!v.ok) return guardMessage(`action ${i + 1} (${op}): ${v.message}`);
-        steps.push({ write: v.value });
-      }
-      if (args.report_health === true) steps.push({ report: true });
-      const intent: Intent = steps.length === 1 && "write" in steps[0] ? { lane: "write", write: steps[0].write } : { lane: "chain", steps };
-      if (!amountsAreTyped(intent, ctx.message, ctx.history)) {
-        return no("a literal amount is not a number the user typed. Use literal only for numbers in the user's messages; otherwise use a sizing word, or ask_user for the amount");
-      }
-      return { ok: true, name, outcome: { kind: "intent", intent } };
+      const r = actionsToIntent(args.actions, args.report_health === true, ctx);
+      return r.ok ? { ok: true, name, outcome: { kind: "intent", intent: r.intent } } : no(r.reason);
     }
     default:
       return no(`unknown decision ${name}`);

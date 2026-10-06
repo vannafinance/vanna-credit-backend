@@ -28,7 +28,7 @@ import type { AmountSpec, Asset, Intent, WriteIntent } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens } from "./limits";
 import { loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
-import { routeMessage } from "./router";
+import { conditionalRefusal, routeMessage } from "./router";
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -99,6 +99,9 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
       if (!fw.allow) return { kind: fw.kind === "empty" ? "clarification" : "blocked", message: fw.message, ...base };
       let decided: Intent | null = null;
       if (modelDecides) {
+        // Conditional, scheduled and standing orders are product policy: refused in the product's words, before Gemini.
+        const conditional = conditionalRefusal(message);
+        if (conditional) return { kind: "blocked", message: conditional, ...base };
         // Stage 2: Gemini investigates with read tools and decides. Its decision is already guarded (decision.ts).
         const inv = await investigate({ message, history, ctx, signal });
         tokens += inv.trace.tokens;

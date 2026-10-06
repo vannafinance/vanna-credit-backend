@@ -15,6 +15,7 @@ import { fmtAmount, fmtHf, fmtUsd } from "../explain";
 import type { WriteIntent } from "../intent";
 import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
 import type { StepSpec } from "../plan";
+import { debugMcp } from "../debug";
 import { hfAfter, maxBorrowUsd, usdToUnits } from "../risk";
 
 export type LevBorrowResult = { ok: true; amount: string; notes: string[] } | { ok: false; message: string };
@@ -73,6 +74,8 @@ export async function sizeLevBorrow(w: WriteIntent, earlier: StepSpec[], ctx: Re
   const amount = usdToUnits(borrowUsd, price.usd, asset);
   if (!(Number(amount) > 0)) return { ok: false, message: `That leverage works out to less than the smallest ${asset} amount, so there is nothing to borrow.` };
 
+  // Dev-only trace (no-op otherwise): the figures this sizing computed, so a turn's numbers are all traceable.
+  debugMcp("size:leverage_borrow", { asset, multiple }, true, { base_usd: baseUsd, borrow_usd: borrowUsd, borrow_amount: amount, price_usd: price.usd, hf_after: after, collateral_usd: c0, debt_usd: debtUsd });
   const notes = [
     `${multiple}x on ${basis}: borrowing ${fmtAmount(amount, asset)} (about ${fmtUsd(borrowUsd)}) so your collateral is ${multiple} times your equity. Health after: ${fmtHf(after)}.`,
     `The borrowed ${asset} stays in your margin account as collateral. Because you owe ${asset} and also hold it, this raises your leverage ratio but does not add price exposure to ${asset}. To go long an asset, deposit it (or lever it) and borrow a stable.`,

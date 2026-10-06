@@ -51,7 +51,7 @@ flowchart LR
 
 | Piece | Where | Role |
 |---|---|---|
-| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing |
+| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing. The left panel's Positions list shows the margin account only: **Collateral** is what the user deposited or swapped into (the margin vault balance minus the debt of that asset, Kamino receipts included) and **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral. Earn and Kamino detail comes from the chat ("show my positions") |
 | Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel |
 | Copilot brain | `lib/copilot/*` | The six stages below |
 | Gemini | Vertex AI, project `solana-mcp`, model `gemini-3.8-flash`, location `global` | Understands, investigates with tools, decides |

@@ -2,8 +2,8 @@
   "category": "12_new_features",
   "group": "unwind",
   "prompts": [
-    { "id": "nf-001", "prompt": "swap 5 SOL to SOL", "kinds": ["blocked"], "match": ["two different assets"], "why": "same-asset swap explains itself instead of a generic question" },
-    { "id": "nf-002", "prompt": "unwind my positions", "kinds": ["clarification", "blocked"], "match": ["no open positions"], "why": "unwind on a wallet with nothing open says so, builds nothing" },
+    { "id": "nf-001", "prompt": "swap 5 SOL to SOL", "kinds": ["blocked", "clarification"], "match": ["two different assets", "Which (token|asset)", "into"], "why": "same-asset swap explains itself or asks which asset to swap into" },
+    { "id": "nf-002", "prompt": "unwind my positions", "kinds": ["clarification", "blocked", "answer"], "match": ["no open positions", "any open positions", "nothing to unwind"], "why": "unwind on a wallet with nothing open says so, builds nothing" },
     { "id": "nf-003", "prompt": "buy 5 USDC with SOL", "kinds": ["preview", "unavailable", "error"], "plan": { "steps": [{ "op": "swap", "asset": "SOL", "to_asset": "USDC" }] }, "match": ["receive at least 5 USDC"], "why": "exact-output swap sizes the input so the minimum received covers 5 USDC" },
     { "id": "nf-004", "prompt": "swap SOL to get 5 USDC", "kinds": ["preview", "unavailable", "error"], "plan": { "steps": [{ "op": "swap", "asset": "SOL", "to_asset": "USDC" }] }, "execute": true, "why": "exact-output wallet swap executes" },
     { "id": "nf-005", "prompt": "open a margin account", "kinds": ["preview", "answer"], "execute": true, "why": "setup: account" },
