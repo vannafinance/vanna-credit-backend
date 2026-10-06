@@ -297,6 +297,16 @@ describe("questions with choices", () => {
 });
 
 describe("spending limits are checked before a plan is offered", () => {
+  // No limit is the default; these tests turn the limits on.
+  beforeEach(() => {
+    process.env.COPILOT_MAX_ACTION_USD = "5000";
+    process.env.COPILOT_MAX_DAILY_USD = "25000";
+  });
+  afterEach(() => {
+    delete process.env.COPILOT_MAX_ACTION_USD;
+    delete process.env.COPILOT_MAX_DAILY_USD;
+  });
+
   it("refuses a leverage borrow over the per-action limit up front, with the largest multiple that fits", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
       { op: "deposit", asset: "JitoSOL", sizing: { kind: "literal", amount: "10" } },
@@ -320,5 +330,17 @@ describe("spending limits are checked before a plan is offered", () => {
     expect(res.kind).toBe("blocked");
     expect(res.message).toMatch(/Step 2 .* above the per-action limit/);
     expect(workflows.docs.size).toBe(0);
+  });
+});
+
+describe("no spending limit by default", () => {
+  it("offers a plan above $5,000 when no limit is set", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" } },
+      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" } },
+    ] } }]]));
+    const res = await chat("deposit 1 SOL and borrow 6000 USDC");
+    expect(res.kind).toBe("plan_preview");
+    expect(res.plan?.steps.map((s) => s.amount)).toEqual(["1", "6000"]);
   });
 });

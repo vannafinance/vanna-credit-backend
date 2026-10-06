@@ -144,11 +144,15 @@ export const copilotConfig = {
   get dailyTokenCap(): number {
     return envNumber("COPILOT_DAILY_TOKEN_CAP", 2_000_000);
   },
+  /**
+   * USD value of one action / of a UTC day's actions per wallet. No limit unless set (Infinity); set a positive number to
+   * turn a limit on. The health-factor floor applies either way.
+   */
   get maxActionUsd(): number {
-    return envNumber("COPILOT_MAX_ACTION_USD", 5_000);
+    return envNumber("COPILOT_MAX_ACTION_USD", Infinity);
   },
   get maxDailyUsd(): number {
-    return envNumber("COPILOT_MAX_DAILY_USD", 25_000);
+    return envNumber("COPILOT_MAX_DAILY_USD", Infinity);
   },
 
   /** Protocol liquidates at 1.10; the Copilot sizes to this floor. */

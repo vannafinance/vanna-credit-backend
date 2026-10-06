@@ -51,7 +51,7 @@ flowchart LR
 
 | Piece | Where | Role |
 |---|---|---|
-| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing. The left panel's Positions list shows the margin account only: **Collateral** is what the user deposited or swapped into (the margin vault balance minus the debt of that asset, Kamino receipts included) and **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral. Earn and Kamino detail comes from the chat ("show my positions") |
+| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing. The left panel has two lists. **Margin Positions** shows the margin account: **Collateral** is what the user deposited or swapped into (the margin vault balance minus the debt of that asset, Kamino receipts included) and **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral. **Earn Positions** shows Earn pool deposits (the amount redeemable now, from the same lender positions the Earn page reads). Rows that would read 0 are hidden |
 | Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel |
 | Copilot brain | `lib/copilot/*` | The six stages below |
 | Gemini | Vertex AI, project `solana-mcp`, model `gemini-3.8-flash`, location `global` | Understands, investigates with tools, decides |
@@ -243,8 +243,9 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
   orders.
 - **Liquidation:** read-only. The Copilot can say whether an account is at risk, never execute a liquidation.
 - **Health:** liquidation at 1.10; the Copilot keeps actions at or above 1.15, the same as the website's max buttons.
-- **Limits:** $5,000 per action, $25,000 per day, 6 transaction builds per minute, 20 chats per minute, a daily token
-  cap, 8 steps per plan.
+- **Limits:** no USD limit per action or per day unless `COPILOT_MAX_ACTION_USD` / `COPILOT_MAX_DAILY_USD` is set (a set
+  limit is checked for the whole plan before it is offered, and again for each step); 6 transaction builds per minute,
+  20 chats per minute, a daily token cap, 8 steps per plan.
 - **Never:** price predictions, holding keys, signing, or claiming success before confirmation.
 
 ## 7. How the Copilot talks to the MCP
@@ -308,7 +309,7 @@ Local stack for the live suite: the MCP (`python scripts/run_local.py` in `Vanna
 | Liquidation, admin, faucet, perps | Not offered by the Copilot |
 | AI | Vertex Gemini `gemini-3.8-flash` in `solana-mcp`; service account `vanna-copilot` (`roles/aiplatform.user`); no service-account keys (organization policy), so hosted uses the attached account and local uses a developer's login |
 | Copilot → MCP auth | WorkOS machine-to-machine token plus Cloud Run IAM (§7); the M2M secret lives only in Secret Manager |
-| Limits | Per-user limits in the Copilot |
+| Limits | Per-user rate and token limits in the Copilot; no USD limit per action or per day unless configured |
 | Mainnet | Not in scope; everything targets the fork |
 
 ## 11. Hosting

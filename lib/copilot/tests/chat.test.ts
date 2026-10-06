@@ -364,11 +364,16 @@ describe("single write", () => {
     expect((await chat("borrow 100 USDC")).kind).toBe("blocked");
   });
 
-  it("enforces the per-action USD cap BEFORE building", async () => {
-    const res = await chat("supply 6000 USDC");
-    expect(res.kind).toBe("error");
-    expect(res.limit?.kind).toBe("spend");
-    expect(buildCalls()).toHaveLength(0);
+  it("enforces the per-action USD cap BEFORE building, when one is set", async () => {
+    process.env.COPILOT_MAX_ACTION_USD = "5000";
+    try {
+      const res = await chat("supply 6000 USDC");
+      expect(res.kind).toBe("error");
+      expect(res.limit?.kind).toBe("spend");
+      expect(buildCalls()).toHaveLength(0);
+    } finally {
+      delete process.env.COPILOT_MAX_ACTION_USD;
+    }
   });
 
   it("enforces the per-minute write-build rate", async () => {

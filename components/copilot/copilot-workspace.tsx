@@ -6,6 +6,8 @@ import { useMarginAccountInfoStore } from "@/store/margin-account-info-store";
 import { HEALTH_FACTOR_INFINITY_SENTINEL } from "@/lib/margin-health";
 import { NETWORK_LABEL } from "@/lib/solana/config";
 import { useCopilot } from "@/lib/copilot/client/use-copilot";
+import { useUserPositions } from "@/hooks/use-earn";
+import { useTokenPrices } from "@/hooks/use-token-prices";
 import type { BrainHealth } from "@/lib/copilot/types";
 import { CopilotShell } from "./copilot-shell";
 import {
@@ -95,6 +97,26 @@ export function CopilotWorkspace() {
     return [...rows(ownCollateral, "Margin · Collateral"), ...rows(borrowedBalances, "Margin · Borrowed")];
   }, [collateralBalances, borrowedBalances]);
 
+  // Earn pool deposits: the same lender positions and oracle prices the Earn page reads (share balance × the pool's
+  // exchange rate = the amount redeemable now). They are outside the margin account, so they get their own list.
+  const { positions: lenderPositions } = useUserPositions();
+  const prices = useTokenPrices();
+  const earnPositions: RailPosition[] = useMemo(
+    () =>
+      Object.values(lenderPositions)
+        .filter((p) => p.assets > 0 && p.assets.toLocaleString(undefined, { maximumFractionDigits: 4 }) !== "0")
+        .map((p) => {
+          const price = prices[p.symbol] ?? 0;
+          return {
+            symbol: p.symbol,
+            role: "Earn · Supplied",
+            amount: p.assets.toLocaleString(undefined, { maximumFractionDigits: 4 }),
+            usd: price > 0 ? usd(p.assets * price) : "—",
+          };
+        }),
+    [lenderPositions, prices],
+  );
+
   const chips: RailStatusChip[] = useMemo(() => {
     const list: RailStatusChip[] = [{ label: NETWORK_LABEL, tone: "muted" }];
     if (server === "unreachable") list.push({ label: "Server unreachable", tone: "bad", title: "The Copilot API did not answer." });
@@ -162,6 +184,7 @@ export function CopilotWorkspace() {
             healthFactor={healthFactor}
             noDebt={noDebt}
             positions={positions}
+            earnPositions={earnPositions}
             conversations={copilot.conversations}
             activeId={copilot.activeId}
             onOpen={copilot.open}

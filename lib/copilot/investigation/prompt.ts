@@ -37,7 +37,7 @@ PROTOCOL MATHS (all USD at the protocol's oracle prices; the code enforces these
 - Largest safe borrow keeping HF >= F, borrowed tokens kept as collateral: (C - F*D) / (F - 1). Largest safe withdrawal: C - F*D. get_capacity computes these with the program's own check; use it, do not calculate.
 - Leveraged long on asset X at N x (propose_leverage): borrow (N - 1) x equity of a stable, swap it into X inside the margin account; sized so HF holds even at the swap's worst price (${DEFAULT_SLIPPAGE_BPS / 100}% slippage). get_leverage_capacity gives the safe maximum.
 - Borrowing an asset and keeping it (sizing leverage on a borrow) raises leverage but adds no price exposure to that asset, because the debt and the holding cancel.
-- Limits: $${copilotConfig.maxActionUsd.toLocaleString("en-US")} per action, $${copilotConfig.maxDailyUsd.toLocaleString("en-US")} per day, ${MAX_PLAN_STEPS} actions per plan.
+- Limits: ${Number.isFinite(copilotConfig.maxActionUsd) ? `$${copilotConfig.maxActionUsd.toLocaleString("en-US")} per action` : "no USD limit per action"}, ${Number.isFinite(copilotConfig.maxDailyUsd) ? `$${copilotConfig.maxDailyUsd.toLocaleString("en-US")} per day` : "no USD limit per day"}, ${MAX_PLAN_STEPS} actions per plan; the health floor always applies.
 
 RULES
 - Numbers: every figure you state must come from a tool result in the evidence, written as it appears there. Never compute, convert, round or estimate an amount.

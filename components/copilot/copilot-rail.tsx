@@ -35,7 +35,7 @@ export interface RailPosition {
   usd: string;
 }
 
-/** Down chevron for in-place sections (Positions, Recents). Open rotates it to point up. */
+/** Down chevron for in-place sections (Margin Positions, Earn Positions, Recents). Open rotates it to point up. */
 function Caret({ open }: { open: boolean }) {
   return (
     <span
@@ -112,6 +112,7 @@ export function CopilotRailBody({
   healthFactor,
   noDebt = false,
   positions,
+  earnPositions = [],
   conversations,
   activeId,
   onOpen,
@@ -123,7 +124,10 @@ export function CopilotRailBody({
   healthFactor: number | null;
   /** The account has collateral and no debt: the ratio is infinite, not missing. */
   noDebt?: boolean;
+  /** Margin account holdings: collateral and borrowed. */
   positions: RailPosition[];
+  /** Earn pool deposits (redeemable amount), separate from the margin account. */
+  earnPositions?: RailPosition[];
   conversations: ConversationSummary[];
   activeId: string | null;
   onOpen: (id: string) => void;
@@ -131,6 +135,7 @@ export function CopilotRailBody({
   onDelete: (id: string) => void;
 }) {
   const [positionsOpen, setPositionsOpen] = useState(true);
+  const [earnOpen, setEarnOpen] = useState(true);
   const [recentsOpen, setRecentsOpen] = useState(true);
 
   if (!hasWallet) {
@@ -170,57 +175,8 @@ export function CopilotRailBody({
         </div>
       </div>
 
-      <div>
-        <button
-          type="button"
-          onClick={() => setPositionsOpen((v) => !v)}
-          aria-expanded={positionsOpen}
-          className="cp-icon-button flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
-        >
-          <span className="flex-1 text-left text-[14px] leading-[21px] font-semibold">Positions</span>
-          <Caret open={positionsOpen} />
-        </button>
-        {positionsOpen && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0 2px" }}>
-            {positions.length === 0 ? (
-              <p className="text-[12px] leading-[18px] text-vgray-400">Nothing open.</p>
-            ) : (
-              positions.map((p) => (
-                <div key={`${p.role}:${p.symbol}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {/* The app's own icon map, not the mock's assets — a token must not be
-                      drawn from two sources that can disagree about what it looks like. */}
-                  <div style={{ position: "relative", width: p.pairedSymbol ? 26 : 20, height: 20, flex: "none" }}>
-                    <img
-                      src={COIN_ICONS[p.symbol.toUpperCase()] ?? "/coins/default.svg"}
-                      alt=""
-                      width={20}
-                      height={20}
-                      style={{ position: "absolute", left: 0, top: 0, zIndex: 1, borderRadius: 999 }}
-                    />
-                    {p.pairedSymbol && (
-                      <img
-                        src={COIN_ICONS[p.pairedSymbol.toUpperCase()] ?? "/coins/default.svg"}
-                        alt=""
-                        width={20}
-                        height={20}
-                        style={{ position: "absolute", left: 8, top: 0, zIndex: 0, borderRadius: 999 }}
-                      />
-                    )}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="truncate text-[14px] leading-[21px] font-semibold text-vgray-900">{p.symbol}</div>
-                    <div className="truncate text-[12px] leading-[18px] text-vgray-500">{p.role}</div>
-                  </div>
-                  <div style={{ flex: "none", textAlign: "right" }}>
-                    <div className="text-[13px] leading-[20px] font-semibold text-vgray-900" style={{ fontFamily: VANNA_FONT }}>{p.amount}</div>
-                    <div className="text-[12px] leading-[18px] text-vgray-400" style={{ fontFamily: VANNA_FONT }}>{p.usd}</div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
+      <PositionsSection title="Margin Positions" open={positionsOpen} onToggle={() => setPositionsOpen((v) => !v)} positions={positions} />
+      <PositionsSection title="Earn Positions" open={earnOpen} onToggle={() => setEarnOpen((v) => !v)} positions={earnPositions} empty="Nothing supplied to the Earn pool." />
 
       <RecentsList
         recentsOpen={recentsOpen}
@@ -231,6 +187,75 @@ export function CopilotRailBody({
         onRename={onRename}
         onDelete={onDelete}
       />
+    </div>
+  );
+}
+
+/** One collapsible list of holdings (Margin Positions, Earn Positions). */
+function PositionsSection({
+  title,
+  open,
+  onToggle,
+  positions,
+  empty = "Nothing open.",
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  positions: RailPosition[];
+  empty?: string;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="cp-icon-button flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
+      >
+        <span className="flex-1 text-left text-[14px] leading-[21px] font-semibold">{title}</span>
+        <Caret open={open} />
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0 2px" }}>
+          {positions.length === 0 ? (
+            <p className="text-[12px] leading-[18px] text-vgray-400">{empty}</p>
+          ) : (
+            positions.map((p) => (
+              <div key={`${p.role}:${p.symbol}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {/* The app's own icon map, not the mock's assets — a token must not be
+                    drawn from two sources that can disagree about what it looks like. */}
+                <div style={{ position: "relative", width: p.pairedSymbol ? 26 : 20, height: 20, flex: "none" }}>
+                  <img
+                    src={COIN_ICONS[p.symbol.toUpperCase()] ?? "/coins/default.svg"}
+                    alt=""
+                    width={20}
+                    height={20}
+                    style={{ position: "absolute", left: 0, top: 0, zIndex: 1, borderRadius: 999 }}
+                  />
+                  {p.pairedSymbol && (
+                    <img
+                      src={COIN_ICONS[p.pairedSymbol.toUpperCase()] ?? "/coins/default.svg"}
+                      alt=""
+                      width={20}
+                      height={20}
+                      style={{ position: "absolute", left: 8, top: 0, zIndex: 0, borderRadius: 999 }}
+                    />
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="truncate text-[14px] leading-[21px] font-semibold text-vgray-900">{p.symbol}</div>
+                  <div className="truncate text-[12px] leading-[18px] text-vgray-500">{p.role}</div>
+                </div>
+                <div style={{ flex: "none", textAlign: "right" }}>
+                  <div className="text-[13px] leading-[20px] font-semibold text-vgray-900" style={{ fontFamily: VANNA_FONT }}>{p.amount}</div>
+                  <div className="text-[12px] leading-[18px] text-vgray-400" style={{ fontFamily: VANNA_FONT }}>{p.usd}</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
