@@ -127,6 +127,11 @@ export const copilotConfig = {
     const v = env("COPILOT_THINKING_LEVEL", "MEDIUM").toUpperCase();
     return v === "LOW" || v === "HIGH" ? v : "MEDIUM";
   },
+  /** Thinking for turns that only turn gathered evidence into a decision (not the first turn, not a correction). */
+  get followupThinking(): "LOW" | "MEDIUM" | "HIGH" {
+    const v = env("COPILOT_FOLLOWUP_THINKING_LEVEL", "LOW").toUpperCase();
+    return v === "MEDIUM" || v === "HIGH" ? v : "LOW";
+  },
   get investigationMaxTurns(): number {
     return Math.min(10, Math.max(2, envNumber("COPILOT_INVESTIGATION_MAX_TURNS", 6)));
   },

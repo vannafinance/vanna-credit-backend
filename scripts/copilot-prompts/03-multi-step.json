@@ -15,7 +15,7 @@
 {"id":"multi-014","prompt":"lever my SOL 5x","kinds":["plan_preview","clarification","blocked"],"why":"5x is unsafe at a 1.15 floor: must be refused or reduced, with the plan keeping the floor"},
 {"id":"multi-015","prompt":"lever my SOL 10x","kinds":["blocked","clarification","plan_preview"],"why":"10x: refuse or reduce"},
 {"id":"multi-016","prompt":"lever my SOL 50x","kinds":["blocked","clarification"],"why":"above the 10x cap: refuse"},
-{"id":"multi-017","prompt":"lever my SOL 1x","kinds":["blocked","clarification"],"why":"1x is not leverage"},
+{"id":"multi-017","prompt":"lever my SOL 1x","kinds":["blocked","clarification","answer"],"match":["not leverage","unleveraged","greater than 1","above 1"],"why":"1x is not leverage: explained, nothing built"},
 {"id":"multi-018","prompt":"lever my SOL -3x","kinds":["blocked","clarification","answer"],"why":"negative leverage"},
 {"id":"multi-019","prompt":"lever my JitoSOL 2x","kinds":["plan_preview","clarification","blocked"],"why":"lever a collateral-only asset"},
 {"id":"multi-020","prompt":"lever my SOL 2x and then supply 1 USDC","kinds":["clarification","blocked","plan_preview"],"why":"lever cannot be chained: ask to split"},

@@ -9,6 +9,7 @@
 
 import { copilotConfig } from "../config";
 import { LEND_BORROW_ASSETS, PRODUCT_ASSETS, normalizeAsset, parseDecimalString, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
+import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts";
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
 import type { LlmFunctionDecl } from "../vertex";
@@ -26,7 +27,8 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
   { name: "get_wallet_balances", description: "The user's wallet token balances (SOL, USDC, USDT, JitoSOL, JupSOL) and Earn shares. Use before planning anything that spends from the wallet." },
   { name: "get_prices", description: "Oracle USD prices the protocol itself uses.", parameters: obj({ assets: assetList(ASSETS, "Assets to price.") }, ["assets"]) },
   { name: "get_pool_rates", description: "Vanna Earn / borrow pool figures per asset: supply APR, borrow APR, utilization, liquidity available to borrow.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools to read.") }, ["assets"]) },
-  { name: "get_earn_positions", description: "The user's Earn pool deposits: redeemable amount and interest earned.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools; empty means all.") }) },
+  { name: "get_earn_positions", description: "The user's Earn pool deposits: shares and the amount redeemable now, per pool. Fast.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools; empty means all.") }) },
+  { name: "get_earn_interest", description: "Interest earned on Earn deposits, reconstructed from the user's on-chain history. Slow: only when the user asks what they earned.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools; empty means all.") }) },
   { name: "get_kamino_markets", description: "Kamino lend markets the farm supplies into: APYs and limits." },
   { name: "get_kamino_positions", description: "The user's Kamino farm receipts (kSOL, kUSDC, ...) and their underlying worth." },
   {
@@ -65,6 +67,9 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
 
 export const READ_TOOL_NAMES = new Set(READ_TOOLS.map((t) => t.name));
 
+/** Reads that scan on-chain history get more time than the default. */
+export const SLOW_READS: Record<string, number> = { get_earn_interest: 30_000, get_history: 25_000 };
+
 const assetsArg = (v: unknown, allowed: readonly string[]): Asset[] =>
   (Array.isArray(v) ? v : []).map((x) => (typeof x === "string" ? normalizeAsset(x) : null)).filter((a): a is Asset => !!a && allowed.includes(a));
 const assetArg = (v: unknown): Asset | null => (typeof v === "string" ? normalizeAsset(v) : null);
@@ -102,6 +107,17 @@ async function leverageCapacity(asset: Asset, amount: string | null, ctx: ReadCt
   };
 }
 
+/** Earn deposits from `deposited_balance` (one read per pool, in parallel): no history scan, so it answers in about a second. */
+async function earnBalances(assets: Asset[], ctx: ReadCtx): Promise<ReadOutput> {
+  const list = assets.length ? assets : [...LEND_BORROW_ASSETS];
+  const settled = await Promise.allSettled(list.map((a) => mcp.earnPosition(ctx.user.wallet, a, ctx)));
+  const pools: Record<string, unknown> = {};
+  settled.forEach((s, i) => {
+    pools[list[i]] = s.status === "fulfilled" ? s.value : { error: "unavailable" };
+  });
+  return { ok: settled.some((s) => s.status === "fulfilled"), result: { pools } };
+}
+
 /** Run one read the model asked for. Unknown tools and bad arguments come back as an error the model can see. */
 export async function executeRead(tool: string, args: Record<string, unknown>, ctx: ReadCtx): Promise<ReadOutput> {
   switch (tool) {
@@ -120,6 +136,8 @@ export async function executeRead(tool: string, args: Record<string, unknown>, c
       return viaRead({ kind: "pool", assets: assets.length ? assets : [...LEND_BORROW_ASSETS] }, ctx);
     }
     case "get_earn_positions":
+      return earnBalances(assetsArg(args.assets, LEND_ASSETS), ctx);
+    case "get_earn_interest":
       return viaRead({ kind: "earn_position", assets: assetsArg(args.assets, LEND_ASSETS) }, ctx);
     case "get_kamino_markets":
       return viaRead({ kind: "farm_markets" }, ctx);

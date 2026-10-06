@@ -392,6 +392,7 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
 async function planSpendProblem(steps: StepSpec[], t: Turn): Promise<string | null> {
   const perAction = copilotConfig.maxActionUsd;
   const daily = copilotConfig.maxDailyUsd;
+  if (!Number.isFinite(perAction) && !Number.isFinite(daily)) return null; // no limit configured: nothing to check
   let total = 0;
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];

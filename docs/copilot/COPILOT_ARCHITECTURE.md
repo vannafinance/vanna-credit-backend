@@ -86,13 +86,14 @@ flowchart LR
 
 ### 3.2 Stage 2: investigate (Gemini)
 
-`investigation/runtime.ts` runs a bounded loop. Each turn is one Gemini call (`vertex.ts`, thinking level `MEDIUM`,
+`investigation/runtime.ts` runs a bounded loop. Each turn is one Gemini call (`vertex.ts`, thinking level `MEDIUM` on the
+first turn and after a rejected decision, `LOW` on turns that turn gathered evidence into a decision;
 function calling required) given:
 
 - the instructions in `investigation/prompt.ts`: the product, the protocol maths (§5), the rules for amounts, and the
   stages, all generated from the same constants the guards enforce;
 - the conversation, the user's message, the evidence gathered so far and any decision that was rejected;
-- the tools: 16 read tools and 6 decision tools.
+- the tools: 17 read tools and 6 decision tools.
 
 **Read tools** (`investigation/catalog.ts`, each backed by the MCP through `mcp-facts.ts` / `mcp-client.ts`):
 
@@ -103,7 +104,8 @@ function calling required) given:
 | `get_wallet_balances` | Wallet tokens and Earn shares |
 | `get_prices` | Oracle prices the protocol uses |
 | `get_pool_rates` | Supply / borrow APR, utilization, liquidity |
-| `get_earn_positions` | Redeemable Earn deposits and interest |
+| `get_earn_positions` | Earn deposits: shares and the amount redeemable now (fast) |
+| `get_earn_interest` | Interest earned, reconstructed from on-chain history (slow; only when asked about earnings) |
 | `get_kamino_markets`, `get_kamino_positions` | Kamino lend markets and the user's receipts |
 | `get_capacity` | Largest safe borrow / withdrawal at the floor, verified by the program's own check |
 | `what_if` | Projected health after a borrow / withdraw / repay, or the amount for a target health |
@@ -196,7 +198,8 @@ borrow, margin swap into SOL, and a health report.
 | Setting | Value | Where |
 |---|---|---|
 | Model | `gemini-3.8-flash` (`VERTEX_MODEL`) | `config.ts` |
-| Thinking | `MEDIUM` for the investigation (`COPILOT_THINKING_LEVEL`) | `config.ts`, `vertex.ts` |
+| Thinking | `MEDIUM` on the first turn and after a rejected decision (`COPILOT_THINKING_LEVEL`); `LOW` on turns that only turn evidence into a decision (`COPILOT_FOLLOWUP_THINKING_LEVEL`) | `config.ts`, `investigation/runtime.ts` |
+| Prefetch | The account health read starts together with the first model call, so it is ready when asked for | `investigation/runtime.ts` |
 | Calling mode | Function calling required: every turn is a read or a decision | `vertex.ts` |
 | Budgets | 6 turns (`COPILOT_INVESTIGATION_MAX_TURNS`), 50 s (`COPILOT_INVESTIGATION_TIMEOUT_MS`), 16 reads, 15 s per read | `config.ts`, `investigation/runtime.ts` |
 | Output | Up to 4,096 tokens per turn (thinking included) | `investigation/runtime.ts` |

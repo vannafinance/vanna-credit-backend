@@ -12,7 +12,7 @@ import { copilotConfig } from "../config";
 import { debugMcp } from "../debug";
 import { getLlm, LlmUnavailable } from "../vertex";
 import type { ReadCtx } from "../mcp-facts";
-import { executeRead, READ_TOOL_NAMES, READ_TOOLS } from "./catalog";
+import { executeRead, READ_TOOL_NAMES, READ_TOOLS, SLOW_READS, type ReadOutput } from "./catalog";
 import { DECISION_NAMES, DECISION_TOOLS, parseDecision } from "./decision";
 import { systemPrompt, turnPrompt } from "./prompt";
 import type { InvestigationLimits, InvestigationResult, InvestigationTrace, Observation, Rejection } from "./types";
@@ -28,7 +28,7 @@ export function investigationLimits(): InvestigationLimits {
 }
 
 /** Test seam. */
-export const investigationDeps = { now: () => Date.now(), executeRead };
+export const investigationDeps = { now: () => Date.now(), executeRead, prefetch: true };
 
 const verbose = () => !copilotConfig.isProduction;
 
@@ -64,6 +64,21 @@ export async function investigate(args: {
   const rejections: Rejection[] = [];
   const trace: InvestigationTrace = { turns: 0, reads: [], rejections, decision: null, tokens: 0, ms: 0 };
   const system = systemPrompt();
+  // Reads already started this turn, by tool + arguments. The account health read is started right away, in parallel
+  // with the first model call: it is the most requested fact, and it is ready by the time the model asks for it.
+  const inflight = new Map<string, Promise<ReadOutput>>();
+  const startRead = (tool: string, a: Record<string, unknown>): Promise<ReadOutput> => {
+    const key = `${tool}:${JSON.stringify(a)}`;
+    let p = inflight.get(key);
+    if (!p) {
+      p = withTimeout(investigationDeps.executeRead(tool, a, args.ctx), SLOW_READS[tool] ?? limits.maxReadDurationMs);
+      p.catch(() => undefined); // a prefetch nobody asks for must not surface as an unhandled rejection
+      inflight.set(key, p);
+    }
+    return p;
+  };
+  if (investigationDeps.prefetch) startRead("get_account_health", {});
+  let rejectedLastTurn = false;
   const done = (outcome: InvestigationResult["outcome"]): InvestigationResult => {
     trace.ms = investigationDeps.now() - started;
     if (verbose()) console.info(`[copilot:investigate] ${outcome.kind}${trace.decision ? ` via ${trace.decision}` : ""} after ${trace.turns} turn(s), ${trace.reads.length} read(s), ${trace.tokens} tokens, ${trace.ms}ms`);
@@ -84,7 +99,9 @@ export async function investigate(args: {
         user: turnPrompt({ message: args.message, history: args.history, evidence, rejections, turn, maxTurns: limits.maxTurns, readsLeft, mustDecide }),
         tools: mustDecide ? DECISION_TOOLS : [...READ_TOOLS, ...DECISION_TOOLS],
         forceTool: true,
-        thinkingLevel: copilotConfig.investigationThinking,
+        // Full reasoning to understand the request and to correct a rejected decision; a turn that only turns gathered
+        // evidence into a decision needs less, and answers faster.
+        thinkingLevel: turn === 1 || rejectedLastTurn ? copilotConfig.investigationThinking : copilotConfig.followupThinking,
         maxOutputTokens: 4096,
         signal: args.signal,
       });
@@ -93,11 +110,13 @@ export async function investigate(args: {
       return done({ kind: "none", reason: err instanceof LlmUnavailable ? "model unavailable" : "model call failed" });
     }
     trace.tokens += res.tokens;
+    rejectedLastTurn = false;
 
     const calls = res.calls ?? [];
     if (verbose()) console.info(`[copilot:investigate] turn ${turn}: ${calls.map((c) => `${c.name}(${compact(c.args, 160)})`).join(", ") || "(no tool call)"}`);
     if (!calls.length) {
       rejections.push({ tool: "(none)", reason: "you must call a tool: a read tool or one decision tool" });
+      rejectedLastTurn = true;
       continue;
     }
 
@@ -109,6 +128,7 @@ export async function investigate(args: {
         return done(parsed.outcome);
       }
       rejections.push({ tool: decision.name, reason: parsed.reason });
+      rejectedLastTurn = true;
       if (verbose()) console.info(`[copilot:investigate] rejected ${decision.name}: ${parsed.reason}`);
       continue;
     }
@@ -133,7 +153,7 @@ export async function investigate(args: {
         const t0 = investigationDeps.now();
         const a = (c.args ?? {}) as Record<string, unknown>;
         try {
-          const out = await withTimeout(investigationDeps.executeRead(c.name, a, args.ctx), limits.maxReadDurationMs);
+          const out = await startRead(c.name, a);
           // Dev-only trace (no-op otherwise): the figures the model saw, including those computed by code.
           debugMcp(`investigate:${c.name}`, a, out.ok, out.result);
           return { tool: c.name, args: a, ok: out.ok, result: compact(out.result, limits.maxObservationChars), ms: investigationDeps.now() - t0 };

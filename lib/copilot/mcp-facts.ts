@@ -154,6 +154,11 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
   if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
   const { collateralUsd: c, debtUsd: d } = h.health;
   const maxUsd = maxBorrowUsd(c, d, floor, true);
+  // The protocol maximum is informational: ask for it alongside the first check instead of after it.
+  const protocolMaxP = mcp
+    .maxBorrow(ctx.user.wallet, asset, ctx)
+    .then((m) => (typeof m.max_amount === "string" ? m.max_amount : null))
+    .catch(() => null);
   let units = Number(usdToUnits(maxUsd * 0.995, price.usd, asset));
   for (let i = 0; i < 8 && units > 0; i++) {
     const amount = floorDecimals(units, tokenDecimals(asset));
@@ -161,13 +166,7 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
     try {
       const can = readCan(await mcp.canBorrow({ authority: ctx.user.wallet, asset, amount }, ctx));
       if (can?.allowed && typeof can.projectedHf === "number" && can.projectedHf >= floor) {
-        let protocolMax: string | null = null;
-        try {
-          const m = await mcp.maxBorrow(ctx.user.wallet, asset, ctx);
-          protocolMax = typeof m.max_amount === "string" ? m.max_amount : null;
-        } catch {
-          /* informational only */
-        }
+        const protocolMax = await protocolMaxP;
         return { ok: true, amount, usd: Number(amount) * price.usd, hfAfter: can.projectedHf, protocolMax };
       }
       if (can && !can.allowed && can.reason && !/breach/i.test(can.reason)) return { ok: false, reason: can.reason };

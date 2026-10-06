@@ -115,7 +115,8 @@ describe("investigate, then decide", () => {
     expect(res.kind).toBe("plan_preview");
     expect(res.plan?.steps.map((s) => [s.op, s.asset, s.amount])).toEqual([["earn_supply", "USDC", "100"], ["earn_supply", "USDT", "100"], ["earn_supply", "SOL", "1"]]);
     expect(llm.requests).toHaveLength(2);
-    expect(llm.requests[0].thinkingLevel).toBe("MEDIUM");
+    expect(llm.requests[0].thinkingLevel).toBe("MEDIUM"); // understanding the request
+    expect(llm.requests[1].thinkingLevel).toBe("LOW"); // turning gathered evidence into the decision
     expect(llm.requests[1].user).toContain("get_wallet_balances");
     expect(llm.requests[1].user).toContain("5000"); // the evidence the model now reasons over
   });
@@ -166,6 +167,7 @@ describe("the boundary between the model and the money", () => {
     setLlmClient(llm);
     const res = await chat("borrow as much usdc as is safe");
     expect(llm.requests[1].user).toMatch(/REJECTED DECISIONS[\s\S]*not a number the user typed/);
+    expect(llm.requests[1].thinkingLevel).toBe("MEDIUM"); // correcting a rejected decision gets full reasoning
     expect(res.kind).toBe("preview");
   });
 
