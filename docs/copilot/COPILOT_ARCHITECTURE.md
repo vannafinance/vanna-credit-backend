@@ -1,294 +1,322 @@
 # Vanna Solana Copilot — Architecture
 
-A chat assistant inside the Vanna Solana app. A user types things like *"what's my health factor?"*,
-*"supply 100 USDC"* or *"lever my SOL 2x"*; the Copilot answers from live on-chain data and, for actions,
-prepares the transactions for the user's own wallet to sign.
+The Copilot is a chat assistant inside the Vanna Solana app (`/copilot`). A user writes what they want in their own
+words, such as *"what's my health factor?"*, *"put 100 USDC and 1 SOL into earn"*, *"deposit 100 USDC in margin and
+borrow SOL 3x against it"* or *"lever my SOL 2x"*. The Copilot works out what they mean, reads their live position,
+answers or prepares the transactions, and their own wallet signs each one.
 
-Editable board: [`docs/solana-copilot-architecture.excalidraw`](docs/solana-copilot-architecture.excalidraw)
-(open in the Excalidraw extension, or import at [excalidraw.com](https://excalidraw.com)).
+Editable board: [`solana-copilot-architecture.excalidraw`](solana-copilot-architecture.excalidraw) (open in the
+Excalidraw extension, or import at [excalidraw.com](https://excalidraw.com)).
 
-Status (2026-10-02): the **MCP server (this repo) is built and verified live** on the Solana fork and
-**deployed to Cloud Run** (`vanna-mcp-solana` in `solana-mcp`, ingress `all` but **IAM required**, WorkOS auth
-on). The Copilot is **built and pushed** in `vanna-credit-backend` (branch `copilot`, not yet merged to `main`)
-and **deployed** to the staging app (`test.solana.vanna.finance`, revision `00012`) with Direct VPC egress and
-Cloud NAT. The app reaches the MCP over its `run.app` URL (verified: the MCP's request log shows the app's
-calls returning 200). Hosting details are in §11. **Still to verify:** the first real signed round trip with a
-wallet.
-
-**What it supports:** reads (health, positions, collateral, debt, wallet, prices, pool APYs, earned interest,
-Kamino markets/positions, borrow/withdraw capacity, liquidation risk, history, swap quotes, protocol info) and
-writes as one-step or multi-step plans (earn supply/redeem, margin open/close/deposit/withdraw/borrow/repay,
-wallet and margin swaps, Kamino deposit/redeem, "lever my X 2x", chains of up to 8 steps). A single action is a
-one-step plan, so it uses the same approval, exactly-once and confirmation path. Also: **unwind** ("close
-everything": Kamino, then repay, then withdraw, then Earn, in an order where health only improves) and
-**exact-output swaps** ("swap SOL to get 100 USDC": the input is sized from live quotes so the minimum received
-covers the target). **Not built:** conditional or standing orders (refused honestly).
+**What it does:** answers about health, positions, collateral, debt, wallet balances, prices, pool rates, earned
+interest, Kamino markets and positions, safe borrow / withdraw capacity, what-if scenarios, leverage capacity,
+liquidation risk, history, swap quotes and protocol settings; and prepares Earn supply / redeem, margin open / close /
+deposit / withdraw / borrow / repay, wallet and margin swaps, Kamino deposit / redeem, leveraged longs, borrows sized to
+a leverage target, exact-output swaps, unwinds ("close everything") and chains of up to 8 steps. It refuses
+conditional or scheduled orders, liquidating anyone, admin actions, perpetuals / options / shorts, other tokens and
+other wallets.
 
 ---
 
-## 1. The idea in one picture
+## 1. Principles
+
+1. **The model reads and proposes; sealed code owns the money.** Gemini understands the request, investigates the
+   account through read tools and proposes an answer or a plan. Code sizes every amount, checks risk and limits,
+   freezes the plan, and runs it. The model never produces an amount, never sees a transaction and never signs.
+2. **The MCP builds, the wallet signs.** Every transaction is built and simulated by the Vanna Solana MCP and handed
+   back unsigned. Only the user's connected wallet (Phantom, Backpack, Solflare) signs. No server holds a key.
+3. **Every figure is traceable.** An answer may only contain figures that came from a tool result; a planned amount is
+   either a number the user typed or one computed by code from live data.
+4. **Nothing is done until the chain confirms it.** A step is complete only when its signature is confirmed.
+
+## 2. System overview
 
 ```mermaid
 flowchart LR
-  U["User in the browser<br/>(chat + wallet)"] -->|question / goal| C["Copilot<br/>(inside the app server)"]
-  C -->|understand language| G["Gemini<br/>(Vertex AI)"]
-  C -->|read data, build transactions| M["Vanna MCP<br/>(this repo)"]
-  C -->|fast reads, broadcast| A["App's own Solana code<br/>(lib/solana)"]
-  M --> F[("Solana fork<br/>Vanna program")]
-  A --> F
-  C -->|unsigned transaction| U
-  U -->|wallet signs| C
-  C -->|send + confirm| F
+  U["User in the browser<br/>(chat + wallet)"] -->|message| R["/api/copilot<br/>(app server)"]
+  R --> F["1 Firewall<br/>session, limits, hard refusals"]
+  F --> I["2 Investigate<br/>Gemini + read tools"]
+  I <-->|reads| M["Vanna Solana MCP"]
+  I --> Z["3 Size<br/>protocol maths on live data"]
+  Z --> V["4 Review<br/>frozen plan + approval"]
+  V -->|approve| E["5 Execute<br/>build, sign, relay"]
+  E <-->|build + simulate| M
+  E -->|unsigned tx| U
+  U -->|wallet signs| E
+  E --> C["6 Complete<br/>confirmed on chain"]
+  M --> CH[("Solana fork<br/>vanna_credit_layer")]
+  E --> CH
+  I -->|language| G["Gemini on Vertex AI"]
 ```
 
-Three rules explain almost everything:
-
-1. **The AI only understands language.** Gemini turns a sentence into an intent ("borrow", "USDC", "50").
-   Plain code decides amounts, checks risk and refuses unsafe or unsupported requests.
-2. **The MCP builds, the wallet signs.** Every transaction is built and simulated by the MCP and handed back
-   *unsigned*. Only the user's connected wallet (Phantom, Backpack, Solflare) signs. No server holds a key.
-3. **Nothing is "done" until the chain confirms it.** The Copilot never claims success from a built or signed
-   transaction, only from a confirmed signature.
-
-## 2. Is it the same as the Stellar Copilot?
-
-**Same design, simpler signing.** It is a port of the Stellar Copilot's structure, not a new invention. Where
-Solana differs, it is simpler:
-
-| | Stellar Copilot | Solana Copilot |
+| Piece | Where | Role |
 |---|---|---|
-| Where it runs | Inside the website's server | Same: inside `vanna-credit-backend`'s server |
-| AI | Gemini on Vertex AI: investigates with read tools, then plans (`investigation/`, `llm-planner.ts`) | Same model since 2026-10-06 (§4.0). Before that, Gemini was only a fallback router behind keyword patterns |
-| Tools | Vanna MCP (14 tools) | Same pattern: Vanna Solana MCP (14 tools) |
-| Two lanes (quick answers vs. multi-step plans) | Yes | Same |
-| Plans stored server-side, approved, run step by step | Yes | Same |
-| Who signs | Wallet, **or** a server-side Sign Service with auto-sign | **Wallet only.** No Sign Service, no auto-sign |
-| Login | Privy, WorkOS, or a Freighter wallet proof | **Sign-In-With-Solana** (wallet signs a login message) |
-| DeFi integrations | Blend, Aquarius, Soroswap | Kamino (lend) and Jupiter (swaps) |
-| Prices on the test network | Live oracle | The app's **price keeper** refreshes prices on the fork |
+| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing |
+| Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel |
+| Copilot brain | `lib/copilot/*` | The six stages below |
+| Gemini | Vertex AI, project `solana-mcp`, model `gemini-3.8-flash`, location `global` | Understands, investigates with tools, decides |
+| Vanna Solana MCP | `Vanna_MCP_Solana` repo, Cloud Run `vanna-mcp-solana` | Reads (positions, prices, pools, capacity, history) and unsigned, simulated transaction builds |
+| Plan, conversation and limit store | Firestore in `solana-mcp` (an encrypted local file in development) | Plans and their state, pending choices, per-user counters |
+| App Solana code | `lib/solana/*` | Price keeper, stale-pool healing, history, the website's own reads |
+| Chain | Surfpool mainnet fork `https://rpc-devnet.solana.vanna.finance`; programs `vanna_credit_layer` `H37YVBG3…`, `vanna_oracle` `FXY5DRfe…`, `vanna_validator` `6fND3vht…` | Where everything happens |
 
-So everything to do with auto-sign, signer binding and the Sign Service is simply **not part of Solana**.
+## 3. A prompt, end to end
 
-## 3. The pieces
-
-| Piece | Where | What it does |
+| Stage | Files | What happens |
 |---|---|---|
-| **Copilot UI** | `vanna-credit-backend/components/copilot`, `/copilot` page | Chat, plan card, approval, step-by-step progress, asks the wallet to sign |
-| **Copilot brain** | `vanna-credit-backend/lib/copilot` (server code) | Classifies the request, refuses off-topic or unsafe things, sizes amounts, keeps plans, calls the MCP |
-| **Gemini** | Google Vertex AI in GCP project `solana-mcp`, model `gemini-3.8-flash` (location `global`) | Understands the request, investigates the account with read tools, and decides (answer, actions, strategy, question, refusal). Never sizes an amount or signs (§4.0) |
-| **Plan and conversation store** | Firestore (a local encrypted file in development) | Keeps each plan and its state, so a step can never run twice |
-| **Vanna MCP** | this repo, a separate service | 14 tools: reads (positions, prices, pools, history) and transaction builders (supply, borrow, swap, farm, ...). Never signs or sends |
-| **App's Solana code** | `vanna-credit-backend/lib/solana` (already exists) | The same reads the app's pages use, plus the wallet send-and-confirm pipeline |
-| **Price keeper** | the app's `POST /api/prices/refresh` (fork only) | Keeps oracle prices fresh on the test fork; the MCP calls it before any risk-checked build |
-| **Chain** | hosted Surfpool mainnet fork, program `H37YVBG3…` | Where everything actually happens |
+| 1 Firewall | `app/api/copilot/route.ts`, `lib/copilot/auth.ts`, `index.ts` (`handleChat`), `limits.ts`, `domain-firewall.ts` | Session from the signed cookie, per-user chat rate, hard refusals before any model call |
+| 2 Investigate | `investigation/runtime.ts`, `prompt.ts`, `catalog.ts`, `decision.ts`, `mcp-facts.ts`, `mcp-client.ts`, `vertex.ts` | Gemini reads the account with tools and ends with one decision; the decision is validated |
+| 3 Size | `index.ts` (`handleWrite`), `workflow/leverage-borrow.ts`, `workflow/strategy.ts`, `workflow/unwind.ts`, `workflow/steps.ts` (`resolvePercent`), `risk.ts` | Sizing words become exact amounts from live data with the protocol's maths; account creation and Kamino top-ups are added when needed |
+| 4 Review | `workflow.ts` (`createWorkflow`), `plan.ts` (`planDigest`), `workflow/funding.ts`, `components/copilot/plan-approval-card.tsx` | The plan is frozen with exact amounts and a digest, funding and the first step are checked, the card shows steps, warnings and simulation |
+| 5 Execute | `app/api/copilot/workflow/[id]/{approve,advance,submit,confirm}`, `workflow.ts`, `workflow/steps.ts` (`preflightStep`, `buildStepTx`), `workflow/swap-heal.ts` | Each step is re-checked against live data, built and simulated by the MCP, signed by the wallet, relayed |
+| 6 Complete | `workflow.ts` (`confirmWorkflow`), `workflow/submit-verify.ts`, `components/copilot/plan-run-card.tsx` | Each signature is confirmed on chain; the plan ends completed, paused or failed |
 
-## 4. How a request flows
+### 3.1 Stage 1: firewall
 
-### 4.0 Stages of a turn (since 2026-10-06, the Stellar Copilot's model)
+1. `app/api/copilot/route.ts` receives `{ message, conversation_id, history, clarify }`. The body never carries a
+   wallet, an amount to execute or a transaction.
+2. `lib/copilot/auth.ts` (`getUser`) reads the signed session cookie created at Sign-In-With-Solana
+   (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user.
+3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
+   (last 12 turns).
+4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
+   settings, the faucet, arbitrary programs or transfers to an address, Kamino multi-asset liquidity, perpetuals /
+   options / shorts, any other wallet address, tokens outside the product, and abuse or prompt-injection attempts.
+   These refusals are final. Whether an ordinary message is on-topic is decided by the model in stage 2.
 
-The model reads and proposes; sealed code owns money movement, sizing, approval and execution.
+### 3.2 Stage 2: investigate (Gemini)
 
-| Stage | Key files (`lib/copilot/`) | What happens |
-|---|---|---|
-| 1 Firewall | `index.ts` `handleChat`, `domain-firewall.ts`, `limits.ts` | Session and rate limit. Hard refusals (liquidating someone, admin, perps/shorts, other addresses, unoffered tokens, abuse) run before any model call. With the investigation on, the model decides what is on-topic (no product-word allowlist). |
-| 2 Investigate | `investigation/runtime.ts`, `catalog.ts`, `prompt.ts`, `decision.ts` | Gemini (thinking `MEDIUM`) is given the conversation, the evidence so far and 16 read tools backed by the MCP (health, positions, wallet, prices, pool rates, Earn and Kamino positions, safe capacity, what-if, leverage capacity, liquidation risk, swap quote, history, protocol, concepts). Each turn it either calls reads (batched) or ends with one decision tool: `answer`, `propose_actions`, `propose_leverage`, `propose_unwind`, `ask_user`, `decline`. Budgets: 6 turns, 16 reads, 50 s, 15 s per read; the last turn may only decide. The wallet is bound from the session, never from model arguments. |
-| 3 Size | `index.ts` `handleWrite`, `workflow/leverage-borrow.ts`, `workflow/strategy.ts`, `workflow/unwind.ts`, `risk.ts`, `mcp-facts.ts` | A decision names amounts only as a number the user typed (`literal`, checked) or a sizing word: `fraction`, `all`, `max_safe`, `previous_leg`, `leverage`, `receive`. Code turns each into an exact amount from live MCP data with the protocol's maths (HF = collateral / debt; safe borrow (C − F·D)/(F − 1); lever borrow (N − 1)·equity at worst-case slippage). |
-| 4 Review | `workflow.ts`, `plan.ts`, `components/copilot/plan-approval-card.tsx` | The plan is frozen with exact amounts and a digest, shown with its warnings and simulation, valid 5 minutes. A model question is shown as a clarification; the answer to it comes back through the conversation. |
-| 5 Execute | `app/api/copilot/workflow/[id]/*`, `workflow/steps.ts` | Each step is re-checked (`preflightStep`), built and simulated by the MCP (`buildStepTx`), signed by the wallet, relayed and confirmed. |
-| 6 Complete | `workflow.ts`, `workflow/submit-verify.ts` | Per-step confirmation and the plan's final state. |
+`investigation/runtime.ts` runs a bounded loop. Each turn is one Gemini call (`vertex.ts`, thinking level `MEDIUM`,
+function calling required) given:
 
-Guards on the model's decision (`investigation/decision.ts`): every op, asset and amount goes through the same
-`intent.ts` guards as before; a literal amount must be a number in the user's messages; an `answer` or question
-whose figures are not in any tool result is rejected and the reason is fed back for one more turn. If the model is
-off (`COPILOT_INVESTIGATION=off`), unreachable or out of budget, the deterministic keyword router (`router.ts`)
-answers instead (degraded mode). Settings: `COPILOT_THINKING_LEVEL` (default `MEDIUM`),
-`COPILOT_INVESTIGATION_MAX_TURNS` (6), `COPILOT_INVESTIGATION_TIMEOUT_MS` (50000). In development the server log
-shows each turn's tool calls (`[copilot:investigate]`), and `x-copilot-debug: 1` returns the trace.
+- the instructions in `investigation/prompt.ts`: the product, the protocol maths (§5), the rules for amounts, and the
+  stages, all generated from the same constants the guards enforce;
+- the conversation, the user's message, the evidence gathered so far and any decision that was rejected;
+- the tools: 16 read tools and 6 decision tools.
 
-Sections 4.1 to 4.3 describe the lanes stage 2 hands to.
+**Read tools** (`investigation/catalog.ts`, each backed by the MCP through `mcp-facts.ts` / `mcp-client.ts`):
 
-### 4.1 A question — *"What's my health factor?"* (quick lane)
-
-1. The Copilot knows the wallet from the login cookie.
-2. It reads the position from the MCP (`vanna_account` `health`), which knows every asset registered on-chain
-   and refuses to answer rather than leave a position out. (The app's `fetchMarginSnapshot` is not used for this
-   yet: it only knows the app's five tokens and silently skips any other asset an account holds — see §8.)
-3. Gemini words the answer from those numbers only. It never invents a number.
-
-### 4.2 One action — *"Supply 100 USDC"* (quick lane)
-
-1. Classifier: a single, fully specified write.
-2. The Copilot calls the MCP tool `vanna_earn_write` `supply`. The MCP builds the transaction, **simulates it on
-   the chain**, and returns it unsigned with the simulation result.
-3. If the simulation failed, the Copilot shows the reason and stops. Otherwise it shows a summary and asks the
-   user to confirm.
-4. The wallet signs; the app sends it and waits for confirmation; then the Copilot reports the result.
-
-### 4.3 A goal — *"Lever my SOL 2x"* (plan lane)
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as User + wallet
-  participant C as Copilot
-  participant M as MCP
-  participant S as Plan store
-  participant F as Chain
-  U->>C: "lever my SOL 2x"
-  C->>M: research reads (position, prices, max borrow)
-  C-->>U: options (e.g. deposit X SOL, borrow Y USDC, swap to SOL)
-  U->>C: pick an option
-  C->>S: save plan with exact amounts (valid 5 min)
-  U->>C: approve
-  loop each step
-    C->>M: fresh checks, then build this step
-    M-->>C: unsigned transaction (simulated)
-    C-->>U: please sign
-    U->>C: signed transaction
-    C->>F: send, wait for confirmation
-    C->>S: step done (recorded once, never repeated)
-  end
-  C-->>U: summary with the final health factor
-```
-
-Rules the plan lane always follows:
-
-- The browser only sends **ids, the approval, and signed transactions** — never amounts or instructions. The
-  server holds the plan.
-- An approval is tied to that exact plan and expires after **5 minutes**.
-- Before each step it re-reads what may have moved (price, debt, pool liquidity, swap quote); if a step would
-  push health below the **1.15** safety floor it pauses.
-- Each step can be claimed only once, even with two servers running. An unclear outcome is marked
-  **uncertain** and never retried automatically.
-- A transaction not confirmed before its blockhash expires is marked **expired** and rebuilt.
-
-## 5. Who does what
-
-| Job | Done by |
+| Tool | Reads |
 |---|---|
-| Understand the sentence | Gemini |
-| Decide amounts, check risk, refuse | Copilot code (deterministic) |
-| Position and health answers | MCP (`vanna_account`, `vanna_margin_status`) |
-| Pool numbers, swap quotes, fresh checks between steps | App's `lib/solana` (same as the pages) or the MCP |
-| Research reads for plans | MCP read tools |
-| Build and simulate every transaction | **MCP** |
-| Refresh fork prices before risky builds | MCP calls the app's price keeper |
-| Sign | **User's wallet** (also pays the fee) |
-| Send and confirm | App server (existing `getConnection`, `confirmSignatureHttp`) |
-| Final receipt | `vanna_sign` `tx_status` + the app's history reader |
+| `get_account_health` | Health factor, collateral, debt, prices, liquidation status |
+| `get_positions` | Margin, Earn and Kamino positions together |
+| `get_wallet_balances` | Wallet tokens and Earn shares |
+| `get_prices` | Oracle prices the protocol uses |
+| `get_pool_rates` | Supply / borrow APR, utilization, liquidity |
+| `get_earn_positions` | Redeemable Earn deposits and interest |
+| `get_kamino_markets`, `get_kamino_positions` | Kamino lend markets and the user's receipts |
+| `get_capacity` | Largest safe borrow / withdrawal at the floor, verified by the program's own check |
+| `what_if` | Projected health after a borrow / withdraw / repay, or the amount for a target health |
+| `get_leverage_capacity` | Highest safe multiple for a leveraged long and worst-case health at common multiples |
+| `get_liquidation_risk` | Liquidation status and distance |
+| `get_swap_quote` | Live Jupiter quote and minimum received |
+| `get_history`, `get_protocol_info`, `explain_concept` | History, on-chain configuration, product explanations |
+
+The wallet for every read is the session's wallet; a read cannot be pointed elsewhere.
+
+**Decision tools** (`investigation/decision.ts`): `answer` (an answer built from the evidence), `propose_actions` (one
+or more actions in order), `propose_leverage` (a leveraged long), `propose_unwind` (exit positions), `ask_user` (one
+question when something essential is missing) and `decline` (outside the product).
+
+Each turn Gemini either calls read tools (several at once when they are independent) or one decision tool. Reads run in
+parallel with 15 s each; their results become evidence for the next turn. The loop allows 6 turns, 16 reads and 50 s;
+the last turn offers only decision tools.
+
+`parseDecision` validates the decision before anything else sees it:
+
+- every op, asset and amount goes through the product guards in `intent.ts` (`validateWrite`, `validateLever`);
+- a `literal` amount must be a number the user typed in this or an earlier message (`router.ts` `amountsAreTyped`);
+- an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`);
+- a rejected decision goes back to Gemini with the reason, and the next turn corrects it.
+
+The result is either a structured answer (returned as is) or an intent for stage 3: a single action, a chain, a
+leverage strategy, an unwind, a question or a refusal.
+
+### 3.3 Stage 3: size
+
+A decision states amounts as a number the user typed or as a sizing word. Code resolves each one from live data:
+
+| Sizing | Meaning | Resolved by |
+|---|---|---|
+| `literal` | The user's exact number | Used as typed (after the typed-number check) |
+| `fraction` | A percentage of the relevant balance | `workflow/steps.ts` `resolvePercent` |
+| `all` | The whole balance or debt | At build time from the live balance |
+| `max_safe` | The largest borrow / withdrawal that keeps the floor | `mcp-facts.ts` `sizeSafeBorrow` / `sizeSafeWithdraw` |
+| `previous_leg` | The amount the previous action produced | `index.ts` `handleWrite` |
+| `leverage` | A borrow sized to an N x target | `workflow/leverage-borrow.ts` `sizeLevBorrow` |
+| `receive` | A swap sized so the minimum received covers a typed amount | `workflow/steps.ts` `sizeExactOut` |
+
+Strategies have their own planners: `workflow/strategy.ts` (`planLever`: deposit if needed, borrow a stable, margin
+swap into the asset, report) and `workflow/unwind.ts` (`planUnwind`: Kamino, then repay, then withdraw, then Earn).
+`handleWrite` also opens a margin account first when the user has none, tops up a Kamino deposit from the wallet when
+the margin balance is short, and enforces the 8-step cap.
+
+### 3.4 Stage 4: review
+
+`workflow/funding.ts` checks the wallet can pay for every step and `preflightStep` checks the first step against live
+health. `workflow.ts` `createWorkflow` stores the plan with exact amounts, the user's wallet, the health floor and a
+sha256 digest over every executable slot (`plan.ts` `planDigest`). The UI shows a single action as a preview card and a
+plan as a plan card with its steps, warnings and simulated health. The plan is valid for 5 minutes. A question from the
+model is shown as a clarification; the user's reply comes back through the conversation.
+
+### 3.5 Stage 5: execute
+
+1. **Approve** (`/workflow/[id]/approve`): the browser sends the digest it was shown; any change to the plan fails it.
+2. **Advance** (`/advance`, `workflow.ts` `advanceWorkflow`): claims the next step exactly once, re-reads what may
+   have moved and re-checks health, limits and spend (`preflightStep`); the MCP builds and simulates the transaction
+   (`buildStepTx`). A swap that fails on a stale cloned pool is healed with the app's `healStaleDexPools` and rebuilt
+   (`workflow/swap-heal.ts`). A step that would breach the 1.15 floor pauses the plan.
+3. **Sign**: the wallet signs the unsigned transaction in the browser.
+4. **Submit** (`/submit`): the server checks the signed bytes are the transaction it built (`workflow/submit-verify.ts`)
+   and relays it.
+
+### 3.6 Stage 6: complete
+
+**Confirm** (`/confirm`, `confirmWorkflow`) waits for the signature on chain and records the step. An unclear outcome is
+marked uncertain and never retried automatically; a transaction whose blockhash expired is rebuilt. The plan ends
+completed, paused or failed, and the UI shows each step's signature.
+
+### 3.7 Examples
+
+**"How much more could I borrow in USDC?"** Firewall passes. Gemini calls `get_capacity {what: borrow, asset: USDC}`
+(and often `get_account_health`), then `answer` with the safe amount and resulting health from that evidence. No plan.
+
+**"Deposit 100 USDC in margin and borrow SOL 3x against that USDC."** Gemini calls `propose_actions` with
+`deposit USDC literal 100` and `borrow SOL leverage 3`. `sizeLevBorrow` takes the 100 USDC deposit as the base:
+borrow value = (3 − 1) × $100 = $200, SOL amount = $200 ÷ SOL oracle price, rounded down to 9 decimals; it checks
+health after the plan stays at or above 1.15. The plan card notes that borrowing SOL and holding it raises leverage
+without adding SOL price exposure.
+
+**"Lever my SOL 2x with USDC."** Gemini calls `propose_leverage {asset: SOL, multiple: 2, borrow_asset: USDC}`.
+`planLever` borrows (2 − 1) × the SOL equity in USDC, sized so health holds even at the swap's worst price, and plans
+borrow, margin swap into SOL, and a health report.
+
+## 4. Gemini in this system
+
+| Setting | Value | Where |
+|---|---|---|
+| Model | `gemini-3.8-flash` (`VERTEX_MODEL`) | `config.ts` |
+| Thinking | `MEDIUM` for the investigation (`COPILOT_THINKING_LEVEL`) | `config.ts`, `vertex.ts` |
+| Calling mode | Function calling required: every turn is a read or a decision | `vertex.ts` |
+| Budgets | 6 turns (`COPILOT_INVESTIGATION_MAX_TURNS`), 50 s (`COPILOT_INVESTIGATION_TIMEOUT_MS`), 16 reads, 15 s per read | `config.ts`, `investigation/runtime.ts` |
+| Output | Up to 4,096 tokens per turn (thinking included) | `investigation/runtime.ts` |
+| Daily tokens | Per-user cap (`COPILOT_DAILY_TOKEN_CAP`) | `limits.ts` |
+| Switch | `COPILOT_INVESTIGATION=off` uses the keyword router alone | `config.ts` |
+
+Answers of the structured read lane are worded by Gemini from figures code has fixed (`vertex.ts` `wordAnswer`); a
+wording with a figure not in the data is discarded.
+
+In development the server log shows every investigation turn (`[copilot:investigate] turn 1: get_wallet_balances(...)`)
+and its outcome; with `COPILOT_DEBUG_FACTS=1` and the header `x-copilot-debug: 1` the chat response also carries the
+trace and the MCP facts the turn used.
+
+**When Gemini is unreachable** or the investigation ends without a valid decision, the deterministic keyword router
+(`router.ts`, `intent.ts`, `conditional.ts`) handles the message with the same guards and lanes, and the product keeps
+working for the requests it recognises.
+
+## 5. Protocol maths
+
+The Copilot uses the program's own definitions. Values are USD at the protocol's oracle prices.
+
+| Quantity | Formula | Source |
+|---|---|---|
+| Position value | token amount × oracle price (debt rounded up, collateral down); no per-asset haircut | `vanna-credit-layer` `programs/vanna_oracle/src/price.rs`, `programs/vanna_credit_layer/src/risk_engine.rs` |
+| Health factor | total collateral value ÷ total debt value; none without debt | `programs/vanna_credit_layer/src/math/health.rs` |
+| Borrow allowed / liquidation | borrow needs HF > 1.10; liquidatable at HF ≤ 1.10 (whole account) | `constants.rs` `BALANCE_TO_BORROW_THRESHOLD_WAD` |
+| Copilot floor | every action that lowers health keeps HF ≥ 1.15 (`MIN_HEALTH_FACTOR`); a user can only raise it | `config.ts`, same as the website's `SAFE_HEALTH_FACTOR` |
+| Projected health | (C + deposit + borrow) ÷ (D + borrow); borrowed tokens count as collateral | `lib/margin/amounts.ts` `projectedHealthFactor`, `lib/copilot/risk.ts` `hfAfter` |
+| Largest safe borrow | (C − F·D) ÷ (F − 1) | `lib/solana/margin.ts` `maxBorrowUsd`, `lib/copilot/risk.ts` `maxBorrowUsd` |
+| Largest safe withdrawal | C − F·D | `lib/copilot/risk.ts` `maxWithdrawUsd` |
+| Leverage | collateral ÷ equity, equity = collateral − debt | portfolio view |
+| Borrow for N x on a deposit | deposit value × (N − 1) | `lib/margin/amounts.ts` `borrowUsdForLeverage`, `workflow/leverage-borrow.ts` |
+| Leveraged long N x | borrow (N − 1) × equity of a stable, swap into the asset; HF checked at the worst allowed price (1% slippage) | `lib/copilot/risk.ts` `sizeLever`, `maxLeverage` |
+| Max leverage on a fresh deposit | F ÷ (F − 1) ≈ 7.66x at 1.15 | `lib/solana/margin.ts` `maxLeverage` |
+| Token amount from USD | USD ÷ oracle price, rounded down to the token's decimals | `lib/copilot/risk.ts` `usdToUnits`, `lib/margin/amounts.ts` `splitBorrowUsd` |
 
 ## 6. What the Copilot may and may not do
 
-- **Assets:** exactly five tokens. SOL, USDC, USDT can be lent and borrowed; JitoSOL and JupSOL are collateral,
-  swap and Kamino farm only; plus the Kamino receipts farming produces. Other assets the program registers
-  on-chain (JupUSD, NVDAx, TSLAx) are not in the product: the MCP hides them and refuses them with
-  `asset_not_offered`, while still counting any existing position in health and allowing its withdrawal.
-- **Refused always:** liquidating someone, admin actions, unknown tokens, arbitrary programs, Kamino multi-asset
-  liquidity, the test faucet.
-- **Liquidation:** read-only — the Copilot can say whether an account is at risk, never execute a liquidation.
-- **Health:** the protocol liquidates at 1.10; the Copilot sizes to stay at or above 1.15 (same as the app's
-  "max" buttons).
-- **The model never sees** transactions or signatures, only summaries.
+- **Assets:** SOL, USDC, USDT (lend, borrow, collateral, swap, farm); JitoSOL and JupSOL (collateral, swap, farm); the
+  Kamino receipts farming produces. Other assets registered on-chain are hidden and refused with `asset_not_offered`,
+  while any existing position in one still counts in health and can be withdrawn.
+- **Refused always:** liquidating someone, admin and protocol settings, the faucet, arbitrary programs, transfers to
+  an address, Kamino multi-asset liquidity, perpetuals / options / shorts, other wallets, conditional or scheduled
+  orders.
+- **Liquidation:** read-only. The Copilot can say whether an account is at risk, never execute a liquidation.
+- **Health:** liquidation at 1.10; the Copilot keeps actions at or above 1.15, the same as the website's max buttons.
+- **Limits:** $5,000 per action, $25,000 per day, 6 transaction builds per minute, 20 chats per minute, a daily token
+  cap, 8 steps per plan.
+- **Never:** price predictions, holding keys, signing, or claiming success before confirmation.
 
 ## 7. How the Copilot talks to the MCP
 
-- **Transport:** Streamable HTTP. `POST /mcp` with `initialize` → keep the `mcp-session-id` → `tools/call`.
-  If the server answers **404** the session was lost (another instance); re-initialize and retry.
-- **Tools:** the server now exposes 17 dispatchers (`vanna_plan`, `vanna_risk`, `vanna_portfolio` were added so MCP clients such as Claude can do what this Copilot does, `DECISIONS.md` D10); **the Copilot uses the original 14 by name and is unaffected**:
-  `vanna_protocol_info`, `vanna_oracle`, `vanna_earn_market`, `vanna_earn_position`,
-  `vanna_earn_write`, `vanna_account`, `vanna_margin_status`, `vanna_margin_trade`, `vanna_wallet`,
-  `vanna_history`, `vanna_farm_overview`, `vanna_farm_kamino`, `vanna_swap`, `vanna_sign` (`tx_status` only).
-  Full list of actions: `TOOLS_CATALOGUE.md` §3.
+- **Transport:** Streamable HTTP. `POST /mcp` with `initialize`, keep the `mcp-session-id`, then `tools/call`. A 404
+  means the session was lost on another instance; the client re-initializes and retries.
+- **Tools used:** `vanna_protocol_info`, `vanna_oracle`, `vanna_earn_market`, `vanna_earn_position`, `vanna_earn_write`,
+  `vanna_account`, `vanna_margin_status`, `vanna_margin_trade`, `vanna_wallet`, `vanna_history`,
+  `vanna_farm_overview`, `vanna_farm_kamino`, `vanna_swap`, `vanna_sign` (`tx_status`). The MCP also exposes
+  `vanna_plan`, `vanna_risk` and `vanna_portfolio` for other MCP clients. Full list: the MCP's `TOOLS_CATALOGUE.md` §3.
 - **Write result (envelope):** `transactions[0].unsignedTransaction` (base64, v0), `requiredSigners`, `blockhash`,
-  `lastValidBlockHeight`, `simulation_success`, `code`/`reason` when rejected, `summary`. **One transaction per
-  action today.** Amounts are decimal strings.
-- **Errors:** always `{"error": "<code>", "message": "..."}` — e.g. `invalid_input`, `asset_not_offered`,
-  `price_unavailable`, `insufficient_scope`, `rate_limited` (HTTP 429 with `Retry-After`).
-- **Auth (hosted):** a **WorkOS** machine-to-machine token for the Copilot app; listing its client id in
-  `FIRST_PARTY_CLIENT_IDS` gives it write access. The MCP's Cloud Run service also **requires IAM**: only the
-  app's runtime service account may invoke it, and the Copilot sends a Google ID token for that in
-  `X-Serverless-Authorization` (see §11). Anonymous callers get 403 from Cloud Run before reaching the MCP.
-  Locally the MCP can run without auth.
-- **Why WorkOS (same as Stellar):** the MCP builds transactions for any wallet, so it must know *which application* is
-  calling before it serves it. It verifies a WorkOS-signed token on every request
-  (issuer, signature via the WorkOS key set, audience) and gives write access only to client ids listed in
-  `FIRST_PARTY_CLIENT_IDS`. A caller without a valid token gets 401; other clients get write access only if their token carries the write scope.
-  The Copilot is a server, so it uses WorkOS **machine-to-machine** (no user login): it posts `client_credentials`
-  (client id + secret) to the WorkOS token URL, caches the returned token, refreshes it a minute before expiry, and
-  sends it as `Authorization: Bearer` on every MCP call. End users never hold a WorkOS token: they prove who they are
-  to the Copilot by signing a login message with their wallet.
-- **Limits:** the Copilot enforces per-user request limits itself (all Copilot traffic reaches the MCP as one
-  client), so no user can drive unlimited calls.
+  `lastValidBlockHeight`, `simulation_success`, `code` / `reason` when rejected, `summary`. Amounts are decimal strings.
+- **Errors:** `{"error": "<code>", "message": "..."}`, e.g. `invalid_input`, `asset_not_offered`, `price_unavailable`,
+  `insufficient_scope`, `rate_limited` (HTTP 429 with `Retry-After`).
+- **Auth (hosted):** the Copilot holds a WorkOS machine-to-machine credential (`client_credentials`), caches the token
+  and sends it as `Authorization: Bearer`; its client id is in the MCP's `FIRST_PARTY_CLIENT_IDS`. Cloud Run also
+  requires IAM: the Copilot sends a Google ID token for the MCP's URL in `X-Serverless-Authorization`, and only the
+  app's runtime service account may invoke. Users never hold a WorkOS token; they sign in with their wallet. Locally
+  the MCP runs without auth.
+- **Limits:** all Copilot traffic reaches the MCP as one client, so the Copilot limits each user itself and backs off
+  on 429.
 
-## 8. Verification — will this work?
+## 8. Testing
 
-Checked on 2026-09-30 against the real code of both repos and the live fork.
+| Suite | Command | Covers |
+|---|---|---|
+| Unit and flow tests | `npx vitest run` | Firewall, router, guards, risk maths, investigation loop with a scripted model (`lib/copilot/tests/investigation.test.ts`), plans, workflow, limits, auth |
+| Type check | `npx tsc --noEmit` | Whole app |
+| Live prompt suite | `npx tsx scripts/copilot-prompt-suite.ts` (`--only <category>`, `--no-exec`) | The running stack over HTTP with real Gemini, the local MCP and fork wallets: about 390 prompts and 15 API attacks, including executed round trips. Reports go to `scripts/copilot-prompts/reports/` |
 
-**Works today (verified):**
+Local stack for the live suite: the MCP (`python scripts/run_local.py` in `Vanna_MCP_Solana`, port 8000), the app
+(`npm run dev` with `.env.local`: `MCP_BASE_URL=http://localhost:8000/mcp`, `MCP_AUTH_MODE=none`,
+`COPILOT_DEBUG_FACTS=1`), and Vertex credentials (`gcloud auth application-default login`, quota project
+`solana-mcp`).
 
-| Claim | Evidence |
-|---|---|
-| MCP reads and builds work on the current program | 211 live tests pass on the fork |
-| The MCP works as a deployed service, as a client would call it | Docker image built and run; end-to-end HTTP test (initialize, session id, tools, errors, 404, 429) passes against it |
-| App's `lib/solana` matches the current program | Backend commit `813fad3` moved it to the new oracle model (IDL with `OracleConfig`, oracle accounts in health checks); its own end-to-end script (`scripts/e2e-fork.ts`: Earn supply/redeem, margin create/deposit/borrow/repay/withdraw, history) passes on the fork, run 2026-09-30 |
-| App's send-and-confirm and wallet pieces exist | `getActiveSigner`/`TxSigner`, `getConnection`, `confirmSignatureHttp`, `healStaleDexPools` in `lib/solana` |
-| The checks a plan needs before each step exist in the app | `fetchMarginSnapshot`, `fetchPoolStates`, `fetchJupiterQuote`, `readReserveRate`, `maxBorrowUsd`, `projectHealthFactor` |
-| Error text from the MCP fits the ported client | errors are short JSON the client can parse |
+## 9. Comparison with the Stellar Copilot
 
-**Gaps to handle while building (none blocks starting):**
-
-| Gap | Handling |
-|---|---|
-| The MCP's `preview` (before/after health factor) is not filled | The approval card gets the numbers from `vanna_margin_status` `can_borrow` / `can_withdraw` (or the MCP fills `preview` later) |
-| The chain also registers JupUSD, NVDAx, TSLAx, which are not in the product | Out of scope by decision; the MCP hides and refuses them. A position in one can only exist if created outside the app; the app's `fetchMarginSnapshot` would silently skip it, so the Copilot takes position answers from the MCP, which counts it |
-| All Copilot users share one MCP rate-limit bucket | Decided: the Copilot limits each user itself and backs off on 429 |
-| Very large transactions (long swap routes) | The MCP returns `transaction_too_large`; the Copilot retries with a smaller amount. Lookup-table setup rounds are not built (not needed so far) |
-| The fork's clock drifts and prices can go stale | The MCP refreshes (keeper + its own guarded supplement); a still-stale price makes the build fail safely |
-
-**Decided (2026-09-30, hosting filled in 2026-10-01):** Gemini `gemini-3.8-flash` on Vertex in `solana-mcp`;
-WorkOS for the Copilot-to-MCP token; MCP in `solana-mcp`. Limits in the Copilot; product = the five tokens.
-**Changed 2026-10-02:** the MCP was first deployed with `--ingress=internal`, planning to reach it over
-peered VPCs. That does not work across projects: Cloud Run internal ingress accepts only same-project (or
-VPC Service Controls) callers, and a call from the app's project got a 404 from Cloud Run before reaching the
-MCP. The MCP now uses `--ingress=all` with Cloud Run IAM **required** (only the app's runtime SA is an
-invoker, anonymous calls get 403) plus WorkOS token verification in the MCP. **Deployed (staging):** the MCP
-and the app are live as described in §11; what remains is the first signed round trip with a wallet.
-
-**Verdict:** the architecture works with what exists. The only new code is the Copilot itself in the app.
-
-## 9. Build order
-
-1. **Read-only Copilot:** MCP client, wallet login (Sign-In-With-Solana), quick-lane answers, `/copilot` page.
-2. **Single actions:** approval card, the wallet signs, the app sends and confirms. The first real signed round
-   trip is the last open check before the Copilot is "ready".
-3. **Plans:** plan store, research, step-by-step execution with fresh checks.
-4. **Kamino and Jupiter strategies**, page assistant, then hosted deployment.
+| | Stellar Copilot | Solana Copilot |
+|---|---|---|
+| Where it runs | Inside the website's server | Inside `vanna-credit-backend`'s server |
+| Stages | Firewall, investigate, size, review, execute, complete | Same |
+| AI | Gemini investigates with read tools and plans | Same (§3.2, §4) |
+| Tools | Vanna MCP | Vanna Solana MCP |
+| Plans | Stored server-side, approved by digest, run step by step | Same |
+| Who signs | Wallet, or a server-side Sign Service with auto-sign | Wallet only; no Sign Service, no auto-sign |
+| Login | Privy, WorkOS, or a Freighter wallet proof | Sign-In-With-Solana |
+| DeFi integrations | Blend, Aquarius, Soroswap | Kamino lend, Jupiter swaps |
+| Prices on the test network | Live oracle | The app's price keeper refreshes the fork's oracle feeds |
 
 ## 10. Decisions in force
 
 | Topic | Decision |
 |---|---|
-| Network | Hosted Surfpool mainnet fork `https://rpc-devnet.solana.vanna.finance`, program `H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC` (vanna-credit-layer `ecdb9b6`) |
+| Network | Hosted Surfpool mainnet fork `https://rpc-devnet.solana.vanna.finance`; `vanna_credit_layer` `H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC` with its oracle and validator agents (vanna-credit-layer `465f21a`) |
+| Understanding | Gemini investigates and decides; code owns amounts, risk, limits, approval and execution |
 | Who builds transactions | The MCP (unsigned, simulated) |
 | Who signs | The user's wallet; no Sign Service, no auto-sign |
-| Prices on the fork | The app's price keeper (Jupiter prices); no Hermes this release |
-| Lend/borrow | SOL, USDC, USDT only |
-| Liquidation, admin, faucet | Not offered by the Copilot |
-| Swaps and Kamino | Supported (Jupiter swaps; Kamino single-asset supply from the margin balance) |
-| Product assets | SOL, USDC, USDT, JitoSOL, JupSOL (+ Kamino receipts). JupUSD / xStocks skipped for now |
-| AI | Vertex Gemini `gemini-3.8-flash` in project `solana-mcp`; service account `vanna-copilot` (`roles/aiplatform.user`); no service-account keys (org policy), so hosted uses the attached account and local uses a developer's own login |
-| Copilot -> MCP auth | WorkOS machine-to-machine token (see section 7). MCP: Cloud Run in project `solana-mcp`, ingress `all` with IAM required (invoker = the app runtime SA) and the WorkOS token checked in the MCP. The app calls its `run.app` URL, sending the Google ID token in `X-Serverless-Authorization` and the WorkOS bearer in `Authorization` (see §11). The M2M client secret lives only in Secret Manager. |
-| Limits | Per-user limits in the Copilot; no unlimited use |
-| Mainnet | Not in scope now; everything targets the fork |
+| Prices on the fork | The app's price keeper |
+| Lend / borrow | SOL, USDC, USDT |
+| Product assets | SOL, USDC, USDT, JitoSOL, JupSOL and Kamino receipts |
+| Liquidation, admin, faucet, perps | Not offered by the Copilot |
+| AI | Vertex Gemini `gemini-3.8-flash` in `solana-mcp`; service account `vanna-copilot` (`roles/aiplatform.user`); no service-account keys (organization policy), so hosted uses the attached account and local uses a developer's login |
+| Copilot → MCP auth | WorkOS machine-to-machine token plus Cloud Run IAM (§7); the M2M secret lives only in Secret Manager |
+| Limits | Per-user limits in the Copilot |
+| Mainnet | Not in scope; everything targets the fork |
 
-## 11. Hosting inventory (2026-10-01)
+## 11. Hosting
 
-Checked with `anubhav@vanna.finance` as Owner on both GCP projects. Default VPCs in the two
-projects both use `10.128.0.0/20` in `us-central1`, so they cannot be peered. Custom networks
-were created instead. Direct VPC egress (`all-traffic`) is attached to the app, with Cloud NAT
-`vanna-internal-nat` (router `vanna-internal-router`) on the app subnet so Jupiter and the fork RPC
-keep working. **Order matters:** the NAT must exist before the egress is attached. On 2026-10-02
-the egress was attached first and `/api/prices` returned 502 until the NAT existed and propagated.
+The two GCP projects' default VPCs both use `10.128.0.0/20` in `us-central1`, so custom networks are used. The app has
+Direct VPC egress (`all-traffic`) with Cloud NAT `vanna-internal-nat` (router `vanna-internal-router`) on its subnet,
+so Jupiter and the fork RPC stay reachable. The NAT must exist before the egress is attached; otherwise `/api/prices`
+returns 502 until the NAT propagates.
 
 ### App — `vanna-credit-solana-test`
 
@@ -299,33 +327,28 @@ the egress was attached first and `/api/prices` returned 502 until the NAT exist
 | Run URL | `https://vanna-credit-solana-test-o3dmfat4aq-uc.a.run.app` |
 | Runtime SA | `vanna-credit-runtime@vanna-credit-solana-test.iam.gserviceaccount.com` |
 | Builder SA | `vanna-credit-builder@vanna-credit-solana-test.iam.gserviceaccount.com` |
-| Current image | `us-central1-docker.pkg.dev/vanna-credit-solana-test/vanna-credit/app:e4c5971` (branch `copilot`, merged with `main`'s `vanna_credit_layer` library), revision `vanna-credit-solana-test-00016-6fs`, deployed 2026-10-05 (previous: `…:134d926`, `00012-d86`) (changes only the image; env, secrets, VPC and NAT are kept). Revision `00005-dt6` (app `main`, no Copilot) is the rollback target |
+| Current image | `us-central1-docker.pkg.dev/vanna-credit-solana-test/vanna-credit/app:e4c5971`, revision `vanna-credit-solana-test-00016-6fs`. Revision `00005-dt6` (app without the Copilot) is the rollback target |
 | Secrets | Secret Manager: `workos-m2m-client-secret`, `copilot-session-secret`, `copilot-store-secret`, readable by the runtime SA, mounted as env |
 | NAT | `vanna-internal-nat` on router `vanna-internal-router` (subnet `vanna-internal-usc1`) |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.50.0.0/24` (Private Google Access on) |
-| Peering | `app-to-solana-mcp` → `solana-mcp/vanna-internal` (ACTIVE, but **not on the MCP call path**: calls go over the `run.app` URL) |
+| Peering | `app-to-solana-mcp` → `solana-mcp/vanna-internal` (active, not on the MCP call path: calls go over the `run.app` URL) |
 
-### MCP + Copilot data — `solana-mcp`
+### MCP and Copilot data — `solana-mcp`
 
 | Item | Value |
 |---|---|
-| Firestore | Native `(default)` in `us-central1` (created 2026-10-01; none existed before) |
+| Firestore | Native `(default)` in `us-central1` |
 | Vertex | `gemini-3.8-flash`, location `global`; SA `vanna-copilot@solana-mcp.iam.gserviceaccount.com` |
-| Cloud Run | `vanna-mcp-solana`, image `mcp-solana:c751774`, revision `00005-jhg`, deployed 2026-10-05 for the `vanna_credit_layer` program (`PROTOCOL_LOOKUP_TABLES=Df9ZBRDkqd2ReYWP4HjRdn4V9u9PiQp1AgyWGVEH7H66`, rebuilt for the new oracle/validator accounts; previous `ac4cca1`, `00004`, table `3VEqRdeC…`), `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1` (public front end), Direct VPC `vanna-internal` with `private-ranges-only` egress (it needs the public internet for the fork RPC and Jupiter and has no NAT). URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. **Not `internal`:** internal ingress rejects a caller from another project with a 404 |
-| Builder SA | `vanna-mcp-builder@solana-mcp.iam.gserviceaccount.com`: `storage.objectViewer`, `artifactregistry.writer`, `logging.logWriter` only. Build with a build-only config (`logging: CLOUD_LOGGING_ONLY`); `cloudbuild.mcp.yaml`'s deploy step would use default ingress |
+| Cloud Run | `vanna-mcp-solana`, image `mcp-solana:c751774`, revision `00005-jhg`, `PROTOCOL_LOOKUP_TABLES=Df9ZBRDkqd2ReYWP4HjRdn4V9u9PiQp1AgyWGVEH7H66`, `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1`, Direct VPC `vanna-internal` with `private-ranges-only` egress. URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. Internal ingress is not used because it rejects callers from another project |
+| Builder SA | `vanna-mcp-builder@solana-mcp.iam.gserviceaccount.com`: `storage.objectViewer`, `artifactregistry.writer`, `logging.logWriter`. Build with a build-only config (`logging: CLOUD_LOGGING_ONLY`) |
 | Artifact Registry | `us-central1-docker.pkg.dev/solana-mcp/vanna-credit` |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.40.0.0/24` (Private Google Access on) |
-| Peering | `solana-mcp-to-app` → `vanna-credit-solana-test/vanna-internal` (ACTIVE, not on the MCP call path) |
+| Peering | `solana-mcp-to-app` → `vanna-credit-solana-test/vanna-internal` (active, not on the MCP call path) |
 
-Cross-project IAM on `solana-mcp` for the app runtime SA: `roles/datastore.user`,
-`roles/aiplatform.user`, `roles/serviceusage.serviceUsageConsumer`. It also has
-`roles/run.invoker` on `vanna-mcp-solana`.
+Cross-project IAM on `solana-mcp` for the app runtime SA: `roles/datastore.user`, `roles/aiplatform.user`,
+`roles/serviceusage.serviceUsageConsumer`, and `roles/run.invoker` on `vanna-mcp-solana`.
 
 ### Copilot env on the app (no secrets in git)
-
-Cloud Run IAM wants a Google ID token in `Authorization`, and the MCP wants the WorkOS token in the
-same header. The Copilot therefore sends the Google ID token (audience `MCP_IAM_AUDIENCE`) in
-`X-Serverless-Authorization` and keeps `Authorization` for WorkOS.
 
 ```
 MCP_BASE_URL=https://vanna-mcp-solana-398807408840.us-central1.run.app/mcp
@@ -343,13 +366,14 @@ COPILOT_PUBLIC_ORIGIN=https://test.solana.vanna.finance
 COPILOT_AUTH_DOMAIN=test.solana.vanna.finance
 ```
 
+Optional: `COPILOT_THINKING_LEVEL`, `COPILOT_INVESTIGATION_MAX_TURNS`, `COPILOT_INVESTIGATION_TIMEOUT_MS`,
+`COPILOT_INVESTIGATION` (§4).
+
 ### WorkOS (staging)
 
-An **M2M application** "Vanna Solana Copilot" (`connect_app_01M3XFWY6CP3PD4FTNY8V1JNXX`) exists in the
-staging environment, organization `Test Organization`, created through the WorkOS Connect API
-(`POST /connect/applications`, `application_type: m2m`); the dashboard's create dialog does not offer
-M2M. It is the same flow Stellar uses (`client_credentials` against the AuthKit `/oauth2/token`).
-The MCP is configured with:
+An M2M application "Vanna Solana Copilot" (`connect_app_01M3XFWY6CP3PD4FTNY8V1JNXX`) in the staging environment,
+organization `Test Organization`, created through the WorkOS Connect API (`POST /connect/applications`,
+`application_type: m2m`); the dashboard's create dialog does not offer M2M. The MCP is configured with:
 
 ```
 OAUTH_ISSUER=https://sensitive-silk-47-staging.authkit.app
@@ -358,89 +382,41 @@ OAUTH_AUDIENCE=client_01KX5H81JH2HWD2DHKYFYFXNS2     # the token's `aud` is the 
 FIRST_PARTY_CLIENT_IDS=client_01M3XFWY6BCVAN1XPS0RZW6Y0F
 ```
 
-The client secret exists only in Secret Manager. A production launch repeats this in the production
-WorkOS environment.
+The client secret exists only in Secret Manager. A production launch repeats this in the production WorkOS
+environment.
 
-### Two URLs, two branches
+### URLs and deploys
 
-- `test.solana.vanna.finance` is a custom-domain mapping to the **same** Cloud Run service as the built-in
-  `…run.app` URL. Use the custom domain for users.
-- The live app is an **image built by hand from the `copilot` branch** (`544400a`, which is `main` plus the
-  Copilot commits), deployed with `gcloud run deploy`. Nothing in GitHub triggers it, so pushing or merging does
-  not change the site. Merging `copilot` into `main` matters only so a future deploy from `main` does
-  not drop the Copilot. Rollback target: revision `vanna-credit-solana-test-00005-dt6` (app `main`).
+- `test.solana.vanna.finance` is a custom-domain mapping to the same Cloud Run service as the `…run.app` URL.
+- The app is deployed by hand: build an image from `main`, then `gcloud run deploy`. Nothing in GitHub triggers a
+  deploy, so the site shows whatever was deployed last.
+- **Build:** a build-only config (`logging: CLOUD_LOGGING_ONLY`, builder SA), then
+  `gcloud run deploy vanna-credit-solana-test --image …:<tag>` without env, secret or network flags, so the Copilot
+  configuration on the service is kept.
+- **Test locally before deploying:** run the local stack (§8), test, then deploy once.
+- **MCP smoke test:** the MCP cannot be called anonymously. Check the `solana-mcp` request logs for the app's calls,
+  or sign in at `/copilot` and ask for a price.
 
-### Deploy notes (learned 2026-10-02)
+### Fork behaviours handled in `lib/copilot`
 
-- **Order:** Cloud NAT first, then Direct VPC egress `all-traffic`; the reverse broke `/api/prices` with 502
-  until the NAT propagated.
-- **MCP image:** build with a build-only config; `cloudbuild.mcp.yaml`'s deploy step is for pipeline use and
-  now states ingress and auth explicitly.
-- **Test locally before deploying (team rule, 2026-10-02):** batch fixes, run the stack locally, test, then
-  deploy once. Local stack: in this repo
-  `MCP_TRANSPORT=streamable-http PORT=8000 AUTH_ENABLED=false PROTOCOL_LOOKUP_TABLES=<table> .venv\Scripts\python -m mcp_server.main`;
-  in `vanna-credit-backend` `npm run dev` with `.env.local` pointing `MCP_BASE_URL` at `http://localhost:8000/mcp`,
-  `MCP_AUTH_MODE=none`, `COPILOT_DEBUG_FACTS=1`; Vertex needs `gcloud auth application-default login`.
-  Then `npx tsx scripts/copilot-prompt-suite.ts` (379 prompts + 15 API attacks; `--only <category>`).
-- **Redeploying only the app:** build with a build-only config (`logging: CLOUD_LOGGING_ONLY`, builder SA),
-  then `gcloud run deploy vanna-credit-solana-test --image …:<tag>`; do not pass env, secret or network flags,
-  so the Copilot configuration is kept.
-- **Fork behaviours the Copilot now handles (all in `lib/copilot`; core Solana code is not edited):**
-  - *Stale DEX pools on swaps.* The fork's cloned concentrated-liquidity pool state drifts, so a swap that
-    quoted fine can fail simulation (Anchor 3005, Jupiter 6001). When the MCP cannot build a swap for that
-    reason, the Copilot re-clones the pools the failed envelope touched with the app's own
-    `healStaleDexPools` and asks the MCP to build again (up to 2 times), as the app's own swap does.
-  - *Stale-flagged oracle price.* The MCP's price read stays "stale" on the fork until one of its own write
-    builds restamps the feeds, so a pre-check that refused on the flag could never clear it. The Copilot now
-    refreshes once through the app's price keeper (throttled 15 s) and then lets the build decide; the MCP
-    refreshes, simulates and fails closed on a genuinely stale price. An *unavailable* price is still refused.
-  - *Margin swaps into JupSOL / JitoSOL were too large (fixed in the MCP).* A `margin_swap` that bought
-    either liquid-staking token exceeded Solana's 1232-byte limit at any amount: the Jupiter route plus ~26
-    margin accounts written out in full. The MCP now (a) checks the compiled size and re-quotes with a
-    tighter Jupiter `maxAccounts` until it fits and (b) loads the protocol-wide accounts from a frozen
-    **protocol lookup table** named by `PROTOCOL_LOOKUP_TABLES` (staging fork:
-    `3VEqRdeCsA1Xx5GDEwBQoAaBn4mPzEYuqmVUPfbJwsVG`, created with `scripts/create_protocol_lookup_table.py`).
-    JupSOL's 3-hop route went from 1,359 to 988 bytes. Only margin swaps use the table, because accounts
-    loaded from a table are not indexed by the fork's `getSignaturesForAddress`, which Earn history needs.
-    The Copilot's `MARGIN_SWAP_BLOCKED_TARGETS` (in `lib/copilot/plan.ts`) is now empty, kept as a safety
-    valve. **The MCP service must get `PROTOCOL_LOOKUP_TABLES` at the next deploy.** A fork reset deletes
-    the table; builds then skip it (no failure) until it is re-created.
-  - *Unwind.* "Close everything" / "unwind my positions" / "exit my kamino positions" plans, from live
-    reads, in an order where health only improves: redeem Kamino, repay each debt (from margin, else the
-    wallet, else swap other collateral into the debt asset first), withdraw collateral, redeem Earn, and
-    close the account only if the user names it. Amounts are "all", resolved when each step is built. The
-    8-step cap is respected without separating a swap from the repay it funds (`lib/copilot/workflow/unwind.ts`).
-  - *Exact-output swaps.* "Swap SOL to get 100 USDC" / "buy 100 USDC with SOL" size the input from live
-    quotes so the quoted minimum received covers the target (`sizeExactOut` in `workflow/steps.ts`).
-  - *"Deposit X and borrow Y with Nx leverage"* in one sentence is rewritten to the lever request it means
-    (`lever X ASSET Nx borrowing Y`); a message that mixes leverage with other real steps is still refused as
-    its own request.
-  - *Understanding, not phrase matching (2026-10-05).* The keyword router is free and trusted when it resolves a request or
-    refuses it. When it only asks a question it could not avoid because its patterns could not read the sentence
-    (several amounts, a borrow with no amount), or reads an imperative sentence full of amounts as an information
-    request ("put 100 USDC plus 100 USDT into the pool"), the language model reads the sentence into the same guarded
-    intent. The model supplies no number: every amount it returns must be one the user typed (this message or an
-    earlier user message), and a model answer never overrides a refusal. A plain list ("deposit 100 USDC, 100 USDT and
-    1 SOL in the lending pool") is also split deterministically into one step per asset (`expandAmountList`).
-  - *Leverage target on a borrow.* "Deposit 100 USDC in margin and borrow SOL 3x against it": the multiple is not an
-    amount. The server sizes the borrow from live prices so collateral is N times equity, on the deposits in the same
-    request (or the account's equity when there is none), checks the health floor first, and says what it did
-    (`workflow/leverage-borrow.ts`). It also says that borrowing an asset and holding it adds leverage but no price
-    exposure to that asset; a long position is a lever (deposit it, borrow a stable).
-  - *Slow fork-RPC reads* (about 22 s once in ten) were cut off by a 20 s timeout and the body-read timeout
-    escaped unretried. The timeout is now 30 s and a body-read timeout is wrapped and retried once.
-  - *First call on a new instance* can fail ("fetch failed") while VPC egress and NAT come up; the WorkOS
-    token request is retried up to 3 times.
-  - Raw runtime errors (`InstructionError … Custom(3005)`) are shown as plain sentences, and the Kamino
-    redeem card names kSOL receipt tokens (with their underlying worth) instead of printing them as SOL.
-- **MCP smoke test:** the MCP can't be called anonymously. Check `solana-mcp` request logs for the app's
-  calls, or sign in at `/copilot` and ask for a price.
+- **Stale DEX pools on swaps.** Cloned concentrated-liquidity pool state drifts, so a swap that quoted fine can fail
+  simulation (Anchor 3005, Jupiter 6001, Whirlpool 6023). The Copilot re-clones the pools the failed build touched
+  with the app's `healStaleDexPools` and asks the MCP to build again, up to 2 times.
+- **Stale-flagged oracle price.** The Copilot refreshes once through the app's price keeper (throttled 15 s) and lets
+  the build decide; the MCP refreshes, simulates and fails closed on a genuinely stale price. An unavailable price is
+  refused.
+- **Transaction size.** Margin swaps load protocol-wide accounts from the frozen protocol lookup table named by the
+  MCP's `PROTOCOL_LOOKUP_TABLES` and cap Jupiter's route size so they fit Solana's 1232-byte limit. A fork reset deletes
+  the table; recreate it with the MCP's `scripts/create_protocol_lookup_table.py`.
+- **Slow fork RPC reads** get a 30 s timeout, with a body-read timeout retried once.
+- **First call on a new instance** can fail while VPC egress and NAT come up; the WorkOS token request is retried up
+  to 3 times.
+- Raw runtime errors (`InstructionError … Custom(3005)`) are shown as plain sentences, and Kamino receipts are named
+  with their underlying worth.
 
 ### Open
 
-1. The first real signed round trip with a wallet.
-2. Merge the `copilot` branch into `main` (PR).
-3. Rotate the WorkOS `sk_test` API key (and the M2M secret if wanted); both were held in plain files
-   briefly during setup.
-4. Production: repeat WorkOS and hosting in the production environment; decide whether to tighten the
-   MCP (VPC Service Controls or hosting it in the app's project) instead of `ingress=all`.
+1. Rotate the WorkOS `sk_test` API key (and the M2M secret if wanted); both were held in plain files during setup.
+2. Production: repeat WorkOS and hosting in the production environment; decide whether to tighten the MCP (VPC
+   Service Controls or hosting it in the app's project) instead of `ingress=all`.
+3. Deploys from `main` by a trigger or a single agreed procedure, so the live site always matches `main`.
