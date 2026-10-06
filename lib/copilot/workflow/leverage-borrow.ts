@@ -63,7 +63,7 @@ export async function sizeLevBorrow(w: WriteIntent, earlier: StepSpec[], ctx: Re
     if (held + depositing + 1e-9 < want) {
       return {
         ok: false,
-        message: `The leverage is taken on ${fmtAmount(named.value, named.asset)}, but your margin account holds ${fmtAmount(held, named.asset)} of ${named.asset}${depositing > 0 ? ` and this plan deposits ${fmtAmount(depositing, named.asset)}` : ""}. Deposit it first, or use a smaller amount.`,
+        message: `The leverage is taken on ${fmtAmount(named.value, named.asset)}, but your margin account holds ${fmtAmount(held, named.asset)}${depositing > 0 ? ` and this plan deposits ${fmtAmount(depositing, named.asset)}` : ""}. Say "deposit ${fmtAmount(named.value, named.asset)} and borrow" to do both, or use a smaller amount.`,
       };
     }
     const p = await loadFreshPrice(named.asset, ctx);

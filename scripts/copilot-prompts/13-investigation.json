@@ -135,14 +135,14 @@
       "prompt": "take a loan of sol using 10 jitosol as collateral in margin account and use leverage of 5x",
       "kinds": [
         "plan_preview",
-        "preview",
         "clarification",
         "blocked"
       ],
       "forbid": [
-        "Swap \\d"
+        "Swap \\d",
+        "holds 0 JitoSOL"
       ],
-      "why": "deposit + leverage borrow, nothing swapped"
+      "why": "deposit 10 JitoSOL (not yet in the margin account) + leverage borrow, nothing swapped"
     },
     {
       "id": "inv-013",
