@@ -70,7 +70,15 @@ export type AmountSpec =
    * borrow only: "borrow SOL to reach 3x". The amount is NOT typed by the user or the model; the server sizes it from
    * live prices so that the account's collateral is `multiple` times its equity (see index.ts `levBorrowAmount`).
    */
-  | { kind: "lev"; multiple: number }
+  | {
+      kind: "lev";
+      multiple: number;
+      /**
+       * What the multiple is taken on, when the user named it ("using 0.5 SOL", "against my 10 JitoSOL"): an asset and an
+       * amount the user typed. Without it the base is the deposits in the same request, else the account's equity.
+       */
+      base?: { asset: Asset; value: string };
+    }
   /** "swap the borrowed USDC": the exact amount the previous step of the same plan was sized to. */
   | { kind: "prev" };
 
@@ -294,6 +302,10 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
       if (w.op !== "borrow") return fail("Only a borrow can be sized to a leverage target.");
       if (!Number.isFinite(w.amount.multiple) || w.amount.multiple <= 1) return fail("Leverage has to be above 1x.");
       if (w.amount.multiple > 10) return fail("I won't size above 10x; at this protocol's health rules it could never hold the 1.15 floor.");
+      if (w.amount.base) {
+        if (!(PRODUCT_ASSETS as readonly string[]).includes(w.amount.base.asset)) return fail(unofferedMessage(String(w.amount.base.asset)));
+        if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the leverage is taken on is not valid.");
+      }
     }
     if (w.amount.kind === "out") {
       if (w.op !== "swap") return fail("Only a swap can be sized by the amount you want to receive.");

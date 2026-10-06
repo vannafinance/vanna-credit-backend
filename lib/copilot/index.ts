@@ -377,6 +377,7 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
   };
   const lines = [
     `${planSummary}`,
+    ...extras,
     ...pre.prepared.notes,
     ...pre.prepared.risk.reasons,
     "The MCP simulated this transaction and it passed. Approve to continue; your wallet will then ask you to sign it. Nothing is sent until you do.",

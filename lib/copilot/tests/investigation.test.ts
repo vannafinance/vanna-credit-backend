@@ -105,9 +105,9 @@ describe("investigate, then decide", () => {
     const llm = scripted([
       [{ name: "get_wallet_balances", args: {} }],
       [{ name: "propose_actions", args: { actions: [
-        { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" } },
-        { op: "earn_supply", asset: "USDT", sizing: { kind: "literal", amount: "100" } },
-        { op: "earn_supply", asset: "SOL", sizing: { kind: "literal", amount: "1" } },
+        { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "100 USDC" },
+        { op: "earn_supply", asset: "USDT", sizing: { kind: "literal", amount: "100" }, source_quote: "100 USDT" },
+        { op: "earn_supply", asset: "SOL", sizing: { kind: "literal", amount: "1" }, source_quote: "1 SOL in earn" },
       ] } }],
     ]);
     setLlmClient(llm);
@@ -130,8 +130,8 @@ describe("investigate, then decide", () => {
 
   it("sizes a borrow from a leverage target with the protocol maths, never the model", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
-      { op: "deposit", asset: "USDC", sizing: { kind: "literal", amount: "100" } },
-      { op: "borrow", asset: "SOL", sizing: { kind: "leverage", multiple: 3 } },
+      { op: "deposit", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "deposit 100 USDC in margin account" },
+      { op: "borrow", asset: "SOL", sizing: { kind: "leverage", multiple: 3 }, source_quote: "borrow SOL 3x against that USDC" },
     ] } }]]));
     const res = await chat("can you deposit 100 USDC in margin account and borrow SOL 3x against that USDC");
     expect(res.kind).toBe("plan_preview");
@@ -141,8 +141,8 @@ describe("investigate, then decide", () => {
 
   it("carries the previous step's amount into the next one", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
-      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "100" } },
-      { op: "swap", asset: "USDC", to_asset: "SOL", source: "margin", sizing: { kind: "previous_leg" } },
+      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "borrow 100 USDC" },
+      { op: "swap", asset: "USDC", to_asset: "SOL", source: "margin", sizing: { kind: "previous_leg" }, source_quote: "swap it to SOL inside my margin account" },
     ] } }]]));
     const res = await chat("borrow 100 USDC and swap it to SOL inside my margin account");
     expect(res.kind).toBe("plan_preview");
@@ -150,7 +150,7 @@ describe("investigate, then decide", () => {
   });
 
   it("hands a leveraged long to the lever planner, which sizes it at the floor", async () => {
-    setLlmClient(scripted([[{ name: "propose_leverage", args: { asset: "SOL", multiple: 2, borrow_asset: "USDC" } }]]));
+    setLlmClient(scripted([[{ name: "propose_leverage", args: { asset: "SOL", multiple: 2, borrow_asset: "USDC", source_quote: "2x long exposure on my sol" } }]]));
     const res = await chat("i want 2x long exposure on my sol, fund it with usdc");
     expect(res.kind).toBe("plan_preview");
     expect(res.plan?.steps.map((s) => s.op)).toEqual(["borrow", "swap", "report"]);
@@ -161,8 +161,8 @@ describe("investigate, then decide", () => {
 describe("the boundary between the model and the money", () => {
   it("rejects an amount the user never typed, tells the model why, and accepts the corrected decision", async () => {
     const llm = scripted([
-      [{ name: "propose_actions", args: { actions: [{ op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "250" } }] } }],
-      [{ name: "propose_actions", args: { actions: [{ op: "borrow", asset: "USDC", sizing: { kind: "max_safe" } }] } }],
+      [{ name: "propose_actions", args: { actions: [{ op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "250" }, source_quote: "borrow as much usdc" }] } }],
+      [{ name: "propose_actions", args: { actions: [{ op: "borrow", asset: "USDC", sizing: { kind: "max_safe" }, source_quote: "borrow as much usdc as is safe" }] } }],
     ]);
     setLlmClient(llm);
     const res = await chat("borrow as much usdc as is safe");
@@ -311,8 +311,8 @@ describe("spending limits are checked before a plan is offered", () => {
 
   it("refuses a leverage borrow over the per-action limit up front, with the largest multiple that fits", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
-      { op: "deposit", asset: "JitoSOL", sizing: { kind: "literal", amount: "10" } },
-      { op: "borrow", asset: "SOL", sizing: { kind: "leverage", multiple: 5 } },
+      { op: "deposit", asset: "JitoSOL", sizing: { kind: "literal", amount: "10" }, source_quote: "10 jitosol as collateral in margin account" },
+      { op: "borrow", asset: "SOL", sizing: { kind: "leverage", multiple: 5 }, source_quote: "take a loan of sol" },
     ] } }]]));
     const res = await chat("take a loan of sol using 10 jitosol as collateral in margin account and use leverage of 5x");
     // 10 JitoSOL x $140 = $1,400; (5 - 1) x $1,400 = $5,600 > $5,000; most = 1 + 5,000 / 1,400 = 4.57x
@@ -325,8 +325,8 @@ describe("spending limits are checked before a plan is offered", () => {
 
   it("does not offer a plan with any step over the per-action limit", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
-      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" } },
-      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" } },
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" }, source_quote: "deposit 1 SOL" },
+      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" }, source_quote: "borrow 6000 USDC" },
     ] } }]]));
     const res = await chat("deposit 1 SOL and borrow 6000 USDC");
     expect(res.kind).toBe("blocked");
@@ -338,11 +338,53 @@ describe("spending limits are checked before a plan is offered", () => {
 describe("no spending limit by default", () => {
   it("offers a plan above $5,000 when no limit is set", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
-      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" } },
-      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" } },
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" }, source_quote: "deposit 1 SOL" },
+      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" }, source_quote: "borrow 6000 USDC" },
     ] } }]]));
     const res = await chat("deposit 1 SOL and borrow 6000 USDC");
     expect(res.kind).toBe("plan_preview");
     expect(res.plan?.steps.map((s) => s.amount)).toEqual(["1", "6000"]);
+  });
+});
+
+describe("only what the user asked for", () => {
+  const loan = "take a loan of usdc using 0.5 sol in margin accout with 2x leveraage, use my existing collateral sol";
+
+  it("a loan at 2x on named collateral is one borrow, sized on that collateral, with no swap", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "borrow", asset: "USDC", sizing: { kind: "leverage", multiple: 2, base_asset: "SOL", base_amount: "0.5" }, source_quote: "take a loan of usdc using 0.5 sol in margin accout with 2x leveraage" },
+    ] } }]]));
+    const res = await chat(loan);
+    // base 0.5 SOL x $120 = $60; borrow = $60 x (2 - 1) = 60 USDC; nothing swapped
+    expect(res.kind).toBe("preview");
+    expect(res.preview?.slots.op).toBe("borrow");
+    expect(res.preview?.slots.amount).toBe("60");
+    expect(res.message).toMatch(/0\.5 SOL of your collateral/);
+  });
+
+  it("rejects a step the user never asked for and takes the corrected plan without it", async () => {
+    const llm = scripted([
+      [{ name: "propose_actions", args: { actions: [
+        { op: "borrow", asset: "USDC", sizing: { kind: "leverage", multiple: 2, base_asset: "SOL", base_amount: "0.5" }, source_quote: "take a loan of usdc using 0.5 sol" },
+        { op: "swap", asset: "USDC", to_asset: "SOL", source: "margin", sizing: { kind: "previous_leg" }, source_quote: "then swap the borrowed usdc into sol" },
+      ] } }],
+      [{ name: "propose_actions", args: { actions: [
+        { op: "borrow", asset: "USDC", sizing: { kind: "leverage", multiple: 2, base_asset: "SOL", base_amount: "0.5" }, source_quote: "take a loan of usdc using 0.5 sol" },
+      ] } }],
+    ]);
+    setLlmClient(llm);
+    const res = await chat(loan);
+    expect(llm.requests[1].user).toMatch(/action 2 \(swap\) does not quote the user's own words/);
+    expect(res.kind).toBe("preview");
+    expect(res.preview?.slots.op).toBe("borrow");
+  });
+
+  it("will not take leverage on collateral the user does not hold", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "borrow", asset: "USDC", sizing: { kind: "leverage", multiple: 2, base_asset: "SOL", base_amount: "50" }, source_quote: "borrow usdc using 50 sol at 2x" },
+    ] } }]]));
+    const res = await chat("borrow usdc using 50 sol at 2x");
+    expect(res.kind).toBe("clarification");
+    expect(res.message).toMatch(/holds 5 SOL/);
   });
 });

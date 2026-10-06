@@ -51,11 +51,32 @@ export async function sizeLevBorrow(w: WriteIntent, earlier: StepSpec[], ctx: Re
   }
 
   const equityNow = collateralUsd - debtUsd;
-  const baseUsd = depositUsd > 0 ? depositUsd : equityNow;
+  let baseUsd: number;
+  let basis: string;
+  const named = w.amount.base;
+  if (named) {
+    // The user named the base ("using 0.5 SOL", "against my 10 JitoSOL"): it must be collateral they hold, or are
+    // depositing earlier in this same plan.
+    const held = healthR.kind === "ok" ? (healthR.health.collateral.find((r) => r.symbol === named.asset)?.units ?? 0) : 0;
+    const depositing = readable.filter((d) => d.asset === named.asset).reduce((sum, d) => sum + Number(d.amount), 0);
+    const want = Number(named.value);
+    if (held + depositing + 1e-9 < want) {
+      return {
+        ok: false,
+        message: `The leverage is taken on ${fmtAmount(named.value, named.asset)}, but your margin account holds ${fmtAmount(held, named.asset)} of ${named.asset}${depositing > 0 ? ` and this plan deposits ${fmtAmount(depositing, named.asset)}` : ""}. Deposit it first, or use a smaller amount.`,
+      };
+    }
+    const p = await loadFreshPrice(named.asset, ctx);
+    if (!p) return { ok: false, message: `The ${named.asset} price is unavailable right now, so I can't size this safely. Try again in a minute.` };
+    baseUsd = want * p.usd;
+    basis = `${fmtAmount(named.value, named.asset)} of your collateral (${fmtUsd(baseUsd)})`;
+  } else {
+    baseUsd = depositUsd > 0 ? depositUsd : equityNow;
+    basis = depositUsd > 0 ? `your ${depositNames.join(" + ")} deposit (${fmtUsd(baseUsd)})` : `your account equity (${fmtUsd(baseUsd)})`;
+  }
   if (!(baseUsd > 0)) {
     return { ok: false, message: "There is no collateral to take a leverage multiple of. Deposit something first, or tell me exactly how much to borrow." };
   }
-  const basis = depositUsd > 0 ? `your ${depositNames.join(" + ")} deposit (${fmtUsd(baseUsd)})` : `your account equity (${fmtUsd(baseUsd)})`;
 
   const price = await loadFreshPrice(asset, ctx);
   if (!price) return { ok: false, message: `The ${asset} price is unavailable right now, so I can't size this safely. Try again in a minute.` };

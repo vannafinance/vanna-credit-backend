@@ -127,7 +127,11 @@ the last turn offers only decision tools.
 `parseDecision` validates the decision before anything else sees it:
 
 - every op, asset and amount goes through the product guards in `intent.ts` (`validateWrite`, `validateLever`);
-- a `literal` amount must be a number the user typed in this or an earlier message (`router.ts` `amountsAreTyped`);
+- every proposed action quotes the user's own words asking for it (`source_quote`, at least 80% of its words found in the
+  user's messages, `quotesUser`); an action that cannot be quoted was not asked for, so an invented step (a swap, a deposit
+  nobody mentioned) is rejected and the model is told to leave it out;
+- a `literal` amount, and the base amount of a leverage borrow, must be a number the user typed in this or an earlier
+  message (`router.ts` `amountsAreTyped`);
 - an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`);
 - a rejected decision goes back to Gemini with the reason, and the next turn corrects it.
 
@@ -145,7 +149,7 @@ A decision states amounts as a number the user typed or as a sizing word. Code r
 | `all` | The whole balance or debt | At build time from the live balance |
 | `max_safe` | The largest borrow / withdrawal that keeps the floor | `mcp-facts.ts` `sizeSafeBorrow` / `sizeSafeWithdraw` |
 | `previous_leg` | The amount the previous action produced | `index.ts` `handleWrite` |
-| `leverage` | A borrow sized to an N x target | `workflow/leverage-borrow.ts` `sizeLevBorrow` |
+| `leverage` | A borrow at N x leverage, as on the website's Margin page: borrow value = base value × (N − 1), nothing swapped. The base is the collateral the user names (`base_asset`, `base_amount`, which they must hold or deposit in the same plan), else the deposits in the request, else the account's equity | `workflow/leverage-borrow.ts` `sizeLevBorrow` |
 | `receive` | A swap sized so the minimum received covers a typed amount | `workflow/steps.ts` `sizeExactOut` |
 
 Strategies have their own planners: `workflow/strategy.ts` (`planLever`: deposit if needed, borrow a stable, margin
@@ -189,7 +193,13 @@ borrow value = (3 − 1) × $100 = $200, SOL amount = $200 ÷ SOL oracle price, 
 health after the plan stays at or above 1.15. The plan card notes that borrowing SOL and holding it raises leverage
 without adding SOL price exposure.
 
-**"Lever my SOL 2x with USDC."** Gemini calls `propose_leverage {asset: SOL, multiple: 2, borrow_asset: USDC}`.
+**"Take a loan of USDC using 0.5 SOL with 2x leverage, use my existing SOL collateral."** Gemini calls `propose_actions`
+with one action, `borrow USDC leverage 2, base SOL 0.5`, quoting the user's words. `sizeLevBorrow` checks the margin
+account holds 0.5 SOL, then borrows 0.5 SOL × price × (2 − 1) of USDC. Nothing is swapped: a loan at a leverage multiple is a
+borrow.
+
+**"Go long SOL 2x with USDC" / "lever my SOL 2x".** The user wants more exposure to SOL, so Gemini calls
+`propose_leverage {asset: SOL, multiple: 2, borrow_asset: USDC}`.
 `planLever` borrows (2 − 1) × the SOL equity in USDC, sized so health holds even at the swap's worst price, and plans
 borrow, margin swap into SOL, and a health report.
 
@@ -231,7 +241,7 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
 | Largest safe borrow | (C − F·D) ÷ (F − 1) | `lib/solana/margin.ts` `maxBorrowUsd`, `lib/copilot/risk.ts` `maxBorrowUsd` |
 | Largest safe withdrawal | C − F·D | `lib/copilot/risk.ts` `maxWithdrawUsd` |
 | Leverage | collateral ÷ equity, equity = collateral − debt | portfolio view |
-| Borrow for N x on a deposit | deposit value × (N − 1) | `lib/margin/amounts.ts` `borrowUsdForLeverage`, `workflow/leverage-borrow.ts` |
+| Borrow at N x leverage on a base | base value × (N − 1), the borrowed asset kept as collateral (the website's leverage) | `lib/margin/amounts.ts` `borrowUsdForLeverage`, `workflow/leverage-borrow.ts` |
 | Leveraged long N x | borrow (N − 1) × equity of a stable, swap into the asset; HF checked at the worst allowed price (1% slippage) | `lib/copilot/risk.ts` `sizeLever`, `maxLeverage` |
 | Max leverage on a fresh deposit | F ÷ (F − 1) ≈ 7.66x at 1.15 | `lib/solana/margin.ts` `maxLeverage` |
 | Token amount from USD | USD ÷ oracle price, rounded down to the token's decimals | `lib/copilot/risk.ts` `usdToUnits`, `lib/margin/amounts.ts` `splitBorrowUsd` |

@@ -46,16 +46,22 @@ const leg = {
       type: "OBJECT",
       description: "How much. Never compute a number yourself.",
       properties: {
-        kind: { type: "STRING", enum: [...SIZING_KINDS], description: "literal = a number the user typed. fraction = a percentage of the relevant balance. all = the whole balance / whole debt. max_safe = the largest amount that keeps the health floor (borrow, withdraw). previous_leg = the amount the previous action produced. leverage = borrow sized to a leverage multiple (borrow only). receive = swap sized to receive a typed amount of to_asset." },
+        kind: { type: "STRING", enum: [...SIZING_KINDS], description: "literal = a number the user typed. fraction = a percentage of the relevant balance. all = the whole balance / whole debt. max_safe = the largest amount that keeps the health floor (borrow, withdraw). previous_leg = the amount the previous action produced. leverage = a borrow sized to N x leverage on a base: borrow value = base value x (N - 1), nothing swapped (borrow only). receive = swap sized to receive a typed amount of to_asset." },
         amount: { type: "STRING", description: "literal / receive: the user's exact decimal, copied." },
         percent: { type: "NUMBER", description: "fraction: 0-100." },
         multiple: { type: "NUMBER", description: "leverage: the multiple, e.g. 3." },
+        base_asset: { type: "STRING", enum: ASSETS, description: "leverage: the asset the user named as the base (\"using 0.5 SOL\" -> SOL). Omit when the base is a deposit in this request or the whole account." },
+        base_amount: { type: "STRING", description: "leverage: the base amount the user typed (\"using 0.5 SOL\" -> \"0.5\")." },
       },
       required: ["kind"],
     },
+    source_quote: { type: "STRING", description: "The user's own words, copied from their message (or an earlier message of theirs), that ask for THIS action. An action you cannot quote was not asked for: leave it out." },
   },
-  required: ["op", "sizing"],
+  required: ["op", "sizing", "source_quote"],
 };
+
+/** The same leg inside a question's options: the options are alternatives the user picks, so they quote nothing. */
+const optionLeg = { ...leg, properties: Object.fromEntries(Object.entries(leg.properties).filter(([k]) => k !== "source_quote")), required: ["op", "sizing"] };
 
 export const DECISION_TOOLS: LlmFunctionDecl[] = [
   {
@@ -74,7 +80,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "propose_actions",
-    description: `Finish: one or more on-chain actions, in order, for the user's wallet to approve and sign (at most ${MAX_PLAN_STEPS}). Use for any direct instruction or multi-step request. Do not add a step the user did not ask for unless it is required for the request (the server adds account creation itself).`,
+    description: `Finish: the transactions the user asked for, in their order, for their wallet to approve and sign (at most ${MAX_PLAN_STEPS}). Use for any direct instruction, one or many, including a loan or borrow at N x leverage (borrow with leverage sizing, nothing swapped). Every action quotes the user's words that ask for it; never add one they did not ask for (the server adds account creation itself).`,
     parameters: {
       type: "OBJECT",
       properties: {
@@ -86,7 +92,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "propose_leverage",
-    description: "Finish: a leveraged LONG on one asset. The server deposits the asset if needed, borrows a stable (USDC or USDT), swaps it into the asset inside the margin account, and sizes it so the health floor holds at the swap's worst price.",
+    description: "Finish: a leveraged LONG, only when the user wants MORE EXPOSURE to an asset (to hold more of it with borrowed funds): the server deposits the asset if needed, borrows a stable, SWAPS it into the asset inside the margin account, and sizes it so the health floor holds at the swap's worst price. Not for a loan or borrow at N x leverage: that is propose_actions with leverage sizing, with no swap.",
     parameters: {
       type: "OBJECT",
       properties: {
@@ -95,8 +101,9 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
         borrow_asset: { type: "STRING", enum: ["USDC", "USDT"], description: "Only if the user named it; otherwise omit and the user is asked." },
         amount: { type: "STRING", description: "Units of the asset to lever, only a number the user typed. Omit to lever what is already in the margin account." },
         min_hf: { type: "NUMBER", description: "Only a health-factor floor the user stated; it can only raise the default." },
+        source_quote: { type: "STRING", description: "The user's own words that ask for more exposure to the asset." },
       },
-      required: ["asset", "multiple"],
+      required: ["asset", "multiple", "source_quote"],
     },
   },
   {
@@ -123,7 +130,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
           description: "2 to 4 concrete alternatives, each a complete set of actions (same shape as propose_actions).",
           items: {
             type: "OBJECT",
-            properties: { label: { type: "STRING", description: "Short button text." }, description: { type: "STRING" }, actions: { type: "ARRAY", items: leg } },
+            properties: { label: { type: "STRING", description: "Short button text." }, description: { type: "STRING" }, actions: { type: "ARRAY", items: optionLeg } },
             required: ["label", "actions"],
           },
         },
@@ -193,7 +200,11 @@ function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amo
     case "leverage": {
       const m = typeof o.multiple === "number" ? o.multiple : Number(o.multiple);
       if (op !== "borrow") return { ok: false, reason: `action ${index + 1}: leverage sizing is only for a borrow; use propose_leverage for a leveraged long` };
-      return Number.isFinite(m) ? { ok: true, amount: { kind: "lev", multiple: m } } : { ok: false, reason: `action ${index + 1}: leverage sizing needs a multiple` };
+      if (!Number.isFinite(m)) return { ok: false, reason: `action ${index + 1}: leverage sizing needs a multiple` };
+      const baseAsset = typeof o.base_asset === "string" ? normalizeAsset(o.base_asset) : null;
+      const baseValue = typeof o.base_amount === "string" ? parseDecimalString(o.base_amount.trim()) : typeof o.base_amount === "number" ? parseDecimalString(String(o.base_amount)) : null;
+      if ((baseAsset === null) !== (baseValue === null)) return { ok: false, reason: `action ${index + 1}: a leverage base needs both base_asset and base_amount, or neither` };
+      return { ok: true, amount: { kind: "lev", multiple: m, ...(baseAsset && baseValue ? { base: { asset: baseAsset, value: baseValue } } : {}) } };
     }
     default:
       return { ok: false, reason: `action ${index + 1}: unknown sizing kind ${String(o.kind)}` };
@@ -204,8 +215,24 @@ const STANDARD_DECLINE = "I can't help with that here. I only help with Vanna on
 
 type ActionsResult = { ok: true; intent: Intent } | { ok: false; reason: string };
 
+const words = (s: string) => s.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}.]+/gu, " ").split(" ").map((w) => w.replace(/^\.+|\.+$/g, "")).filter(Boolean);
+
+/**
+ * True when `quote` is the user's own words: at least 80% of its words appear in their messages. An action the model
+ * cannot quote is one the user did not ask for, which is how an invented step (an extra swap, a deposit nobody
+ * mentioned) is caught without any rule about particular phrasings.
+ */
+export function quotesUser(quote: unknown, ctx: DecisionContext): boolean {
+  if (typeof quote !== "string") return false;
+  const q = words(quote);
+  if (!q.length) return false;
+  const said = new Set(words([ctx.message, ...ctx.history.filter((h) => h.role === "user").map((h) => h.text)].join(" ")));
+  const found = q.filter((w) => said.has(w)).length;
+  return found / q.length >= 0.8;
+}
+
 /** A list of action legs (propose_actions, or one choice of ask_user) -> a guarded write or chain intent. */
-function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionContext): ActionsResult {
+function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionContext, requireQuotes = true): ActionsResult {
   const rows = Array.isArray(raw) ? raw : [];
   if (!rows.length) return { ok: false, reason: "at least one action is needed" };
   if (rows.length > MAX_PLAN_STEPS) return { ok: true, intent: { lane: "refuse", reason: "guard", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.` } };
@@ -214,6 +241,9 @@ function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionConte
     const r = rows[i] as Record<string, unknown>;
     if (!r || typeof r !== "object" || !WRITE_OPS.includes(r.op as WriteOp)) return { ok: false, reason: `action ${i + 1} has an unknown op` };
     const op = r.op as WriteOp;
+    if (requireQuotes && !quotesUser(r.source_quote, ctx)) {
+      return { ok: false, reason: `action ${i + 1} (${op}) does not quote the user's own words asking for it. Quote them exactly, or leave the action out if the user did not ask for it` };
+    }
     for (const k of ["asset", "to_asset"]) {
       const v = r[k];
       if (typeof v === "string" && v.trim() && !normalizeAsset(v)) return { ok: true, intent: { lane: "refuse", reason: "guard", message: unofferedMessage(v) } };
@@ -268,7 +298,7 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
         const opt = o as Record<string, unknown>;
         const label = str(opt.label, 80);
         if (!label || !numbersGrounded(label, sources)) return [];
-        const r = actionsToIntent(opt.actions, false, ctx);
+        const r = actionsToIntent(opt.actions, false, ctx, false);
         if (!r.ok || (r.intent.lane !== "write" && r.intent.lane !== "chain")) return [];
         const description = str(opt.description, 160);
         return [{ label: plain(label), ...(description && numbersGrounded(description, sources) ? { description: plain(description) } : {}), apply: r.intent }];
@@ -289,6 +319,9 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "unwind", unwind: { scope, close_account: args.close_account === true } } } };
     }
     case "propose_leverage": {
+      if (!quotesUser(args.source_quote, ctx)) {
+        return no("propose_leverage needs the user's own words asking for more exposure to the asset (source_quote). If they asked for a loan or borrow at a leverage multiple instead, use propose_actions with leverage sizing and no swap");
+      }
       const asset = typeof args.asset === "string" ? normalizeAsset(args.asset) : null;
       if (!asset) return no(typeof args.asset === "string" ? unofferedMessage(args.asset) : "propose_leverage needs an asset");
       const multiple = typeof args.multiple === "number" ? args.multiple : Number(args.multiple);

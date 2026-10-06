@@ -573,7 +573,12 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
     const n = Number(v);
     return typed.some((t) => Math.abs(t - n) <= 1e-9 * Math.max(1, Math.abs(n)));
   };
-  const amountOk = (a: WriteIntent["amount"] | undefined) => !a || !(a.kind === "exact" || a.kind === "out") || typedAs(a.value);
+  const amountOk = (a: WriteIntent["amount"] | undefined) => {
+    if (!a) return true;
+    if (a.kind === "exact" || a.kind === "out") return typedAs(a.value);
+    if (a.kind === "lev" && a.base) return typedAs(a.base.value);
+    return true;
+  };
   switch (intent.lane) {
     case "write":
       return amountOk(intent.write.amount);
