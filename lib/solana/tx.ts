@@ -10,6 +10,7 @@ import {
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { getConnection } from "./connection";
+import { VANNA_PROGRAM_ID } from "./config";
 import { confirmSignatureHttp } from "./confirmation";
 import { decodeProgramError, VannaTxError } from "./errors";
 import { healStaleDexPools } from "./fork-heal";
@@ -60,8 +61,19 @@ function isTooLarge(error: unknown): boolean {
   return /transaction too large|EncodingOverrun|versioned.?transaction too large|encoding overruns|RangeError/i.test(text);
 }
 
+/**
+ * Heap frame requested for every transaction that calls the Vanna core. The core's allocator
+ * (vanna-credit-layer `src/heap.rs`) grows upward and can use a frame up to 256 KiB; the default
+ * 32 KiB runs out on a `margin_execute` into a long Jupiter route (e.g. one xStock into another)
+ * next to many position groups. Costs a few dozen compute units.
+ */
+const VANNA_HEAP_FRAME_BYTES = 256 * 1024;
+
 function withComputeBudget(instructions: TransactionInstruction[], units?: number): TransactionInstruction[] {
-  return units ? [ComputeBudgetProgram.setComputeUnitLimit({ units }), ...instructions] : instructions;
+  const budget: TransactionInstruction[] = [];
+  if (units) budget.push(ComputeBudgetProgram.setComputeUnitLimit({ units }));
+  if (instructions.some((ix) => ix.programId.equals(VANNA_PROGRAM_ID))) budget.push(ComputeBudgetProgram.requestHeapFrame({ bytes: VANNA_HEAP_FRAME_BYTES }));
+  return [...budget, ...instructions];
 }
 
 /**

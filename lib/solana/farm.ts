@@ -86,6 +86,18 @@ export async function fetchFarmPositions(owner: string): Promise<FarmPosition[]>
   return snapshot.exists ? farmPositionsFromSnapshot(snapshot) : [];
 }
 
+/**
+ * Underlyings no longer offered as new Farm vaults (hidden from the Farm vault list). They stay in
+ * the catalogue so a margin that already holds their cToken still sees the position and can
+ * withdraw it from the vault page.
+ */
+export const FARM_DELISTED_UNDERLYINGS: ReadonlySet<string> = new Set(["JitoSOL", "JupSOL"]);
+
+/** True when a Farm vault for this underlying is listed for new supply. */
+export function isFarmListed(symbol: string): boolean {
+  return !FARM_DELISTED_UNDERLYINGS.has(symbol);
+}
+
 /** Static catalogue (used before metrics load, and by the server route). */
 export const FARM_CATALOGUE: readonly Pick<FarmPool, "id" | "symbol" | "receiptSymbol" | "protocol" | "reserve">[] = KAMINO_RECEIPTS.filter(
   (r) => Boolean(getToken(r.underlying)),

@@ -25,7 +25,7 @@ import { useWithdrawLiquidity, usePoolData, useUserPositions } from "@/hooks/use
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { validateAmountChange } from "@/lib/utils/sanitize-amount";
 import { useSelectedPoolStore } from "@/store/selected-pool-store";
-import { TOKENS, tokenIcon } from "@/lib/solana/tokens";
+import { LENDING_TOKENS, TOKENS, tokenIcon } from "@/lib/solana/tokens";
 import { fromRaw, toRaw } from "@/lib/solana/math";
 import { resolveToken, shortAddress } from "./earn-utils";
 
@@ -227,7 +227,7 @@ export const WithdrawLiquidity = memo(function WithdrawLiquidity() {
                   }`}
                   role="listbox"
                 >
-                  {TOKENS.map(({ symbol: opt }) => (
+                  {LENDING_TOKENS.map(({ symbol: opt }) => (
                     <button
                       key={opt}
                       type="button"

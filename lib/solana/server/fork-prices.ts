@@ -37,6 +37,7 @@ const REFERENCE_PRICE_USD: Record<string, number> = {
   USDT: 1,
   JitoSOL: 240,
   JupSOL: 215,
+  JupUSD: 1,
 };
 
 function hexToBytes(hex: string): Buffer {
