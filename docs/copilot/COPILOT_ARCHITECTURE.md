@@ -13,8 +13,8 @@ interest, Kamino markets and positions, safe borrow / withdraw capacity, what-if
 liquidation risk, history, swap quotes and protocol settings; and prepares Earn supply / redeem, margin open / close /
 deposit / withdraw / borrow / repay, wallet and margin swaps, Kamino deposit / redeem, leveraged longs, borrows sized to
 a leverage target, exact-output swaps, unwinds ("close everything") and chains of up to 8 steps. It refuses
-conditional or scheduled orders, liquidating anyone, admin actions, perpetuals / options / shorts, other tokens and
-other wallets.
+conditional or scheduled orders (the rest of the request still goes ahead), liquidating anyone, admin actions,
+perpetuals / options / shorts, other tokens and other wallets.
 
 ---
 
@@ -80,9 +80,12 @@ flowchart LR
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
    (last 12 turns).
 4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
-   settings, the faucet, arbitrary programs or transfers to an address, Kamino multi-asset liquidity, perpetuals /
-   options / shorts, any other wallet address, tokens outside the product, and abuse or prompt-injection attempts.
-   These refusals are final. Whether an ordinary message is on-topic is decided by the model in stage 2.
+   settings, the faucet, arbitrary programs or transfers to an address, any other wallet address, tokens outside the
+   product, and abuse or prompt-injection attempts. These refusals are final. Whether an ordinary message is on-topic,
+   which parts are conditional, scheduled or recurring orders, and which ask for something the product does not offer
+   (perpetuals / options / shorts, Kamino multi-asset liquidity) is read by the model in stage 2 (see "Timing and
+   parts that are not done"). Only when the model is unavailable are conditional orders and those products refused
+   whole here, in the product's words (`router.ts` `conditionalRefusal`, `domain-firewall.ts` `productRefusal`).
 
 ### 3.2 Stage 2: investigate (Gemini)
 
@@ -121,21 +124,32 @@ The wallet for every read is the session's wallet; a read cannot be pointed else
 or more actions in order, with report legs), `propose_leverage` (a leveraged long), `propose_unwind` (exit positions),
 `ask_user` (one question when something essential is missing) and `decline` (outside the product).
 
-**One refused part never blocks the rest.** `propose_actions` carries `not_done`: the parts of a request that can't
-be done, each with the reason (grounded, no internal names). They lead the plan's notes; the rest goes ahead. Gemini
-is told to check its tools first (`simulate`, `calculate`, the reads) and to decline only when nothing can be done.
-Product refusals are also applied clause by clause (`index.ts` `heldBackParts`, `conditional.ts` `policyClauses`): in
-"sell 1 SOL when it hits 200 and supply 100 USDC" the conditional order is held back and the supply is planned. Gemini
-is told which clauses are held back; code rejects any action whose quoted words come only from a held-back clause, so
-a conditional order can never become an immediate one; and the reason for each held-back clause is always shown with
-the plan or answer. A clause that is only a condition stays with the action it governs ("when SOL drops below 100,
-sell 1 SOL" is one clause and is refused whole). Attacks, liquidating others, admin actions, other programs and the
-faucet still refuse the whole message, and without the model a message with a held-back part is refused whole.
+**Timing and parts that are not done.** Gemini reads the whole message, in any wording or language, and
+`propose_actions` says how it read it:
 
-A health-factor target is sizing, not a condition: the firewall's conditional-order check (`conditional.ts`
-`withoutHealthTargets`) takes "until / so that / up to / down to my health factor is N" out before it looks for
-triggers, so "borrow USDC until my health factor is 1.5" is planned now, while "when my HF drops below 1.3, repay" is
-still refused.
+- `not_done`: each part that will not be done, as the user's own words (`part`, checked with `quotesUser`), a reason
+  (grounded, no internal names) and a `kind`: `waits_for_condition_or_time` (a conditional, scheduled, recurring or
+  standing order: the product only acts now), `not_offered` (a short, a multi-asset LP, ...) or `other`. They lead the
+  plan's notes ("Not done: ..."); the rest of the plan goes ahead. A message that is only such an order is declined.
+- `requested_count`: how many transactions the user asked for, repeats included.
+- `no_condition`: set only when nothing in the message is a condition, although some words may look like one.
+
+Code keeps the model consistent, without word lists of its own:
+
+- an action whose quoted words come from a part listed in `not_done` is rejected (a part is done now or not at all), so
+  "sell 1 SOL when it hits 200" held back can never become "sell 1 SOL" now;
+- the server's conditional-wording check (`conditional.ts` `detectConditional`) is a cross-check: when it flags the
+  message, the decision must explain the timing (a `waits_for_condition_or_time` part, a `health_target` sizing, a
+  `simulate` report for a what-if) or set `no_condition`; otherwise it goes back to Gemini with the reason. The same
+  applies to `propose_leverage` and `propose_unwind`;
+- fewer transactions than `requested_count` with no `not_done` for the rest goes back to Gemini; when the 8-step cap
+  is what left them out, code adds the note ("A plan holds at most 8 transactions, so the last one is not in this
+  plan; ask for it after this plan completes").
+
+So "borrow USDC until my health factor is 1.5" is planned now (health_target), "what happens if SOL drops 10%" is a
+simulate, "sell 1 SOL when it hits 200 and supply 100 USDC" plans the supply and reports the sale as not done, and
+"when SOL drops below 100, sell 1 SOL" is declined. Gemini is told to check its tools before calling anything
+impossible (`simulate`, `calculate`, the reads) and to decline only when nothing in the request can be done.
 
 **Report legs** (things to see inside a plan). A request can ask to see something before, between or after its
 transactions ("deposit 100 USDC, 100 USDT and 1 SOL into the lending pool, then show my total supplied balance and APY";
@@ -161,8 +175,8 @@ the last turn offers only decision tools.
   user's messages, `quotesUser`); an action that cannot be quoted was not asked for, so an invented step (a swap, a deposit
   nobody mentioned) is rejected and the model is told to leave it out;
 - a `literal`, `usd` or `receive` amount, a `health_target`, and the base amount of a leverage borrow must be a number
-  the user typed in this or an earlier message, in digits or in English words ("a hundred", "two and a half")
-  (`router.ts` `amountsAreTyped`, `intent.ts` `typedNumbers` / `wordNumbers`);
+  the user gave in this or an earlier message: typed in digits (`router.ts` `amountsAreTyped`), or written in words in
+  any language, which Gemini reads and copies into `as_written`; the copy must appear in the user's message;
 - an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`).
   Gemini never computes a figure itself: for a total, a difference, a USD value or a percentage no tool reports, it
   calls `calculate` (`investigation/calculate.ts`) with figures copied from the evidence; the code checks every operand

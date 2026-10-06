@@ -166,7 +166,7 @@ describe("the boundary between the model and the money", () => {
     ]);
     setLlmClient(llm);
     const res = await chat("borrow as much usdc as is safe");
-    expect(llm.requests[1].user).toMatch(/REJECTED DECISIONS[\s\S]*not a number the user typed/);
+    expect(llm.requests[1].user).toMatch(/REJECTED DECISIONS[\s\S]*not a number the user (?:typed|gave)/);
     expect(llm.requests[1].thinkingLevel).toBe("MEDIUM"); // correcting a rejected decision gets full reasoning
     expect(res.kind).toBe("preview");
   });
@@ -259,14 +259,23 @@ describe("attacks and policy stay deterministic", () => {
     expect(llm.requests).toHaveLength(0);
   });
 
-  it("refuses conditional and scheduled orders in the product's words, and lets questions about conditions through", async () => {
+  it("cross-checks a conditional order: proposing it as an action now goes back to the model, which declines it", async () => {
+    const llm = scripted([
+      [{ name: "propose_actions", args: { actions: [{ op: "deposit", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "deposit 100 USDC" }], requested_count: 1 } }],
+      [{ name: "decline", args: { reason: "I only act on what you ask right now, so I can't top up your collateral later when your health factor drops." } }],
+    ]);
+    setLlmClient(llm);
+    const order = await chat("liquidation protection: deposit 100 USDC if HF < 1.2");
+    expect(llm.requests[1].user).toMatch(/reads as a condition, a time or a repeat/);
+    expect(order.kind).toBe("blocked");
+    expect(order.plan).toBeUndefined();
+  });
+
+  it("lets a question about a condition through to the model", async () => {
     const llm = scripted([[{ name: "answer", args: { headline: "Nothing to report." } }]]);
     setLlmClient(llm);
-    const order = await chat("liquidation protection: top up collateral if HF < 1.2");
-    expect(order.kind).toBe("blocked");
-    expect(order.message).toMatch(/can't watch prices or act later/);
-    expect(llm.requests).toHaveLength(0);
-    await chat("what happens to my health factor if SOL drops 20%?");
+    const res = await chat("what happens to my health factor if SOL drops 20%?");
+    expect(res.kind).toBe("answer");
     expect(llm.requests).toHaveLength(1);
   });
 
@@ -499,14 +508,28 @@ describe("sizing words: dollars, number words, health-factor targets, a share of
     const llm = scripted([propose([{ op: "deposit", asset: "SOL", sizing: { kind: "usd", amount: "500" }, source_quote: "deposit some SOL" }]), [{ name: "ask_user", args: { question: "How much SOL?" } }]]);
     setLlmClient(llm);
     await chat("deposit some SOL as collateral");
-    expect(llm.requests[1].user).toMatch(/not a number the user typed/);
+    expect(llm.requests[1].user).toMatch(/not a number the user (?:typed|gave)/);
   });
 
   it("accepts an amount the user wrote in words", async () => {
-    setLlmClient(scripted([propose([{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "250" }, source_quote: "supply two hundred and fifty USDC" }])]));
+    setLlmClient(scripted([propose([{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "250", as_written: "two hundred and fifty" }, source_quote: "supply two hundred and fifty USDC" }])]));
     const res = await chat("supply two hundred and fifty USDC");
     expect(res.kind).toBe("preview");
     expect(res.plan?.steps[0].amount).toBe("250");
+  });
+
+  it("accepts an amount written in words in another language, and refuses words that are not in the message", async () => {
+    setLlmClient(scripted([propose([{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100", as_written: "cien" }, source_quote: "deposita cien USDC" }])]));
+    const res = await chat("deposita cien USDC en earn");
+    expect(res.kind).toBe("preview");
+    expect(res.plan?.steps[0].amount).toBe("100");
+    const llm = scripted([
+      propose([{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "500", as_written: "five hundred" }, source_quote: "supply some USDC" }]),
+      [{ name: "ask_user", args: { question: "How much USDC?" } }],
+    ]);
+    setLlmClient(llm);
+    await chat("supply some USDC");
+    expect(llm.requests[1].user).toMatch(/as_written "five hundred" is not in the user's message/);
   });
 
   it("takes a share of the previous step's amount", async () => {
@@ -557,18 +580,32 @@ describe("calculate: exact arithmetic on figures in the evidence", () => {
   });
 });
 
-describe("a health-factor target is sizing, not a standing order", () => {
-  it.each([
-    ["borrow USDC until my health factor is 1.5", false],
-    ["repay enough USDC to get my HF up to 2", false],
-    ["withdraw SOL down to a health factor of 1.6", false],
-    ["deposit SOL so that my health factor is 2", false],
-    ["borrow 10 USDC until SOL hits 100", true],
-    ["if my HF goes under 1.3 repay", true],
-    ["borrow 50 USDC until tomorrow", true],
-  ])("%s -> refused: %s", async (message, refused) => {
+describe("timing is the model's reading, cross-checked by code", () => {
+  const borrowToTarget = { op: "borrow", asset: "USDC", sizing: { kind: "health_target", target_hf: 1.5 }, source_quote: "borrow USDC until my health factor is 1.5" };
+
+  it("accepts a health-factor target although its wording looks like a condition", async () => {
+    const llm = scripted([[{ name: "propose_actions", args: { actions: [borrowToTarget], requested_count: 1 } }]]);
+    setLlmClient(llm);
+    const res = await chat("borrow USDC until my health factor is 1.5");
+    expect(res.kind).toBe("preview");
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it("lets the model state that a message holds no condition", async () => {
+    const supply = { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" };
+    const llm = scripted([[{ name: "propose_actions", args: { actions: [supply], requested_count: 1, no_condition: true } }]]);
+    setLlmClient(llm);
+    const res = await chat("supply 100 USDC until further notice");
+    expect(res.kind).toBe("preview");
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it("refuses conditional and scheduled orders deterministically when the model is not available", async () => {
     const { conditionalRefusal } = await import("../router");
-    expect(conditionalRefusal(message) !== null).toBe(refused);
+    expect(conditionalRefusal("liquidation protection: top up collateral if HF < 1.2")).toMatch(/can't watch prices or act later/);
+    expect(conditionalRefusal("supply 50 USDC every week")).toMatch(/can't watch prices or act later/);
+    expect(conditionalRefusal("when SOL drops below 100, sell 1 SOL")).toMatch(/tell me: "sell 1 SOL"/);
+    expect(conditionalRefusal("what happens to my health factor if SOL drops 20%?")).toBeNull();
   });
 });
 
@@ -604,73 +641,93 @@ describe("simulate: any scenario on the protocol's health maths", () => {
 });
 
 describe("partial plans: one impossible part never blocks the rest", () => {
+  const supply = { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" };
+
   it("proposes what can be done and shows what can't, with the reason", async () => {
     setLlmClient(scripted([[{ name: "propose_actions", args: {
-      actions: [{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" }],
-      not_done: ["I can't set a reminder to check your balance next week; I only act on what you ask right now."],
+      actions: [supply],
+      requested_count: 1,
+      not_done: [{ part: "remind me next week to check it", reason: "I can't set reminders; I only act on what you ask right now.", kind: "waits_for_condition_or_time" }],
     } }]]));
     const res = await chat("supply 100 USDC and remind me next week to check it");
     expect(res.kind).toBe("preview");
-    expect(res.message).toMatch(/can't set a reminder|Not done: "remind me next week to check it"/);
+    expect(res.message).toMatch(/Not done: "remind me next week to check it"\. I can't set reminders/);
   });
 
-  it("refuses a not_done note that invents a figure", async () => {
+  it("refuses a not_done reason that invents a figure, or a part that is not the user's words", async () => {
     const llm = scripted([
-      [{ name: "propose_actions", args: { actions: [{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" }], not_done: ["Your APY would be 12.34%."] } }],
-      [{ name: "propose_actions", args: { actions: [{ op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" }] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 1, not_done: [{ part: "tell me my APY", reason: "Your APY would be 12.34%.", kind: "other" }] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 1, not_done: [{ part: "buy a yacht", reason: "Not offered.", kind: "not_offered" }] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 1 } }],
     ]);
     setLlmClient(llm);
-    await chat("supply 100 USDC");
-    expect(llm.requests[1].user).toMatch(/not_done note contains a figure/);
+    await chat("supply 100 USDC and tell me my APY");
+    expect(llm.requests[1].user).toMatch(/not_done reason contains a figure/);
+    expect(llm.requests[2].user).toMatch(/not_done part "buy a yacht" is not the user's own words/);
+  });
+
+  it("refuses a decision that drops a transaction without saying so", async () => {
+    const llm = scripted([
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 2 } }],
+      [{ name: "ask_user", args: { question: "Which asset for the second one?" } }],
+    ]);
+    setLlmClient(llm);
+    await chat("supply 100 USDC and supply 1 SOL");
+    expect(llm.requests[1].user).toMatch(/asked for 2 transactions and you proposed 1/);
   });
 });
 
-describe("held-back parts: a refused clause never blocks, or becomes, the rest", () => {
+describe("held-back parts: a refused part never blocks, or becomes, the rest", () => {
   const supply = { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" };
+  const sell = { op: "swap", asset: "SOL", to_asset: "USDC", sizing: { kind: "literal", amount: "1" }, source_quote: "sell 1 SOL" };
+  const heldSell = { part: "sell 1 SOL when it hits 200", reason: "I only act on what you ask right now, so I can't wait for a price.", kind: "waits_for_condition_or_time" };
 
   it("plans the rest of the message and says what was held back, and why", async () => {
-    const llm = scripted([[{ name: "propose_actions", args: { actions: [supply] } }]]);
-    setLlmClient(llm);
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [supply], requested_count: 2, not_done: [heldSell] } }]]));
     const res = await chat("sell 1 SOL when it hits 200 and supply 100 USDC");
     expect(res.kind).toBe("preview");
     expect(res.plan?.steps.map((s) => s.op)).toEqual(["earn_supply"]);
     expect(res.message).toMatch(/Not done: "sell 1 SOL when it hits 200"/);
-    expect(llm.requests[0].user).toMatch(/PARTS OF THIS MESSAGE THE PRODUCT DOES NOT DO/);
   });
 
-  it("rejects an action taken from the held-back clause", async () => {
+  it("rejects an action taken from a part the model held back", async () => {
     const llm = scripted([
-      [{ name: "propose_actions", args: { actions: [{ op: "swap", asset: "SOL", to_asset: "USDC", sizing: { kind: "literal", amount: "1" }, source_quote: "sell 1 SOL" }, supply] } }],
-      [{ name: "propose_actions", args: { actions: [supply] } }],
+      [{ name: "propose_actions", args: { actions: [sell, supply], requested_count: 2, not_done: [heldSell] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 2, not_done: [heldSell] } }],
     ]);
     setLlmClient(llm);
     const res = await chat("sell 1 SOL when it hits 200 and supply 100 USDC");
-    expect(llm.requests[1].user).toMatch(/comes from "sell 1 SOL when it hits 200"/);
+    expect(llm.requests[1].user).toMatch(/comes from "sell 1 SOL when it hits 200", which you listed in not_done/);
     expect(res.plan?.steps.map((s) => s.op)).toEqual(["earn_supply"]);
   });
 
-  it("holds back a short and keeps the deposit", async () => {
-    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [{ op: "deposit", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "deposit 100 USDC as collateral" }] } }]]));
-    const res = await chat("deposit 100 USDC as collateral and short SOL");
-    expect(res.kind).toBe("preview");
-    expect(res.message).toMatch(/short positions are not offered/i);
+  it("rejects a conditional order proposed as an action now", async () => {
+    const llm = scripted([
+      [{ name: "propose_actions", args: { actions: [sell, supply], requested_count: 2 } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 2, not_done: [heldSell] } }],
+    ]);
+    setLlmClient(llm);
+    const res = await chat("sell 1 SOL when it hits 200 and supply 100 USDC");
+    expect(llm.requests[1].user).toMatch(/reads as a condition, a time or a repeat/);
+    expect(res.plan?.steps.map((s) => s.op)).toEqual(["earn_supply"]);
   });
 
-  it("still refuses a message that is only a conditional order, condition and action together", async () => {
-    const llm = scripted([[{ name: "answer", args: { headline: "x" } }]]);
-    setLlmClient(llm);
-    for (const m of ["when SOL drops below 100, sell 1 SOL", "supply 50 USDC every week"]) {
-      const res = await chat(m);
-      expect(res.kind).toBe("blocked");
-    }
-    expect(llm.requests).toHaveLength(0);
+  it("lets the model hold back a short and keep the deposit", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: {
+      actions: [{ op: "deposit", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "deposit 100 USDC as collateral" }],
+      requested_count: 2,
+      not_done: [{ part: "short SOL", reason: "Short positions are not offered.", kind: "not_offered" }],
+    } }]]));
+    const res = await chat("deposit 100 USDC as collateral and short SOL");
+    expect(res.kind).toBe("preview");
+    expect(res.message).toMatch(/Not done: "short SOL"\. Short positions are not offered/);
   });
 });
 
 describe("the step cap is never applied silently", () => {
   it("says how many transactions did not fit when a full plan cuts the request short", async () => {
     const one = { op: "earn_supply", asset: "SOL", sizing: { kind: "literal", amount: "1" }, source_quote: "supply 1 SOL" };
-    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: Array(8).fill(one) } }]]));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: Array(8).fill(one), requested_count: 9 } }]]));
     const res = await chat(Array(9).fill("supply 1 SOL").join(", "));
     expect(res.kind).toBe("plan_preview");
     expect(res.plan?.steps).toHaveLength(8);
@@ -682,11 +739,11 @@ describe("not_done notes never talk about internals", () => {
   it("sends a note that mentions tools or the model back for rewording", async () => {
     const supply = { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" };
     const llm = scripted([
-      [{ name: "propose_actions", args: { actions: [supply], not_done: ["My tools can't place limit orders."] } }],
-      [{ name: "propose_actions", args: { actions: [supply] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 1, not_done: [{ part: "place a limit order", reason: "My tools can't place limit orders.", kind: "not_offered" }] } }],
+      [{ name: "propose_actions", args: { actions: [supply], requested_count: 1 } }],
     ]);
     setLlmClient(llm);
-    await chat("supply 100 USDC");
+    await chat("supply 100 USDC and place a limit order");
     expect(llm.requests[1].user).toMatch(/must not mention how you work inside/);
   });
 });

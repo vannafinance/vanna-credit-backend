@@ -31,22 +31,7 @@ import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } fro
 import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
 import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
-import { policyClauses } from "./conditional";
 import { productRefusal } from "./domain-firewall";
-
-/**
- * Clauses of a message the product refuses, each with the product's reason, when other clauses ask for something it
- * does. Empty when nothing is refused, or when everything is (then the whole message is refused as before).
- */
-function heldBackParts(message: string): Array<{ text: string; reason: string }> {
-  const clauses = policyClauses(message);
-  if (clauses.length < 2) return [];
-  const held = clauses.flatMap((c) => {
-    const reason = conditionalRefusal(c) ?? productRefusal(c);
-    return reason ? [{ text: c, reason: reason.replace(/\s*If you want it now, tell me:.*$/, "") }] : [];
-  });
-  return held.length && held.length < clauses.length ? held : [];
-}
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -113,43 +98,31 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
       source = "clarify";
     } else {
       const modelDecides = copilotConfig.investigationEnabled && llmConfigured();
-      // Parts the product refuses (a conditional or scheduled order, a short, multi-asset liquidity) are held back clause
-      // by clause when the rest of the message asks for something else, so one refused part never blocks the rest.
-      const held = modelDecides ? heldBackParts(message) : [];
-      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides, heldBack: held.length > 0 });
+      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides });
       if (!fw.allow) return { kind: fw.kind === "empty" ? "clarification" : "blocked", message: fw.message, ...base };
       let decided: Intent | null = null;
       if (modelDecides) {
-        // Conditional, scheduled and standing orders are product policy: refused in the product's words, before Gemini,
-        // unless only part of the message asks for one (held back above).
-        if (!held.length) {
-          const conditional = conditionalRefusal(message);
-          if (conditional) return { kind: "blocked", message: conditional, ...base };
-        }
-        // Stage 2: Gemini investigates with read tools and decides. Its decision is already guarded (decision.ts).
-        const inv = await investigate({ message, history, ctx, signal, heldBack: held });
+        // Stage 2: Gemini reads the whole message, including which parts wait for a condition, a time or a repeat, or
+        // ask for something the product does not offer, and decides. Its decision is guarded (decision.ts): a part it
+        // holds back can never become an action, and a message that reads as a conditional order must say how it read it.
+        const inv = await investigate({ message, history, ctx, signal });
         tokens += inv.trace.tokens;
         debugNote("investigation", inv.trace);
-        const heldNotes = held.map((h) => `Not done: "${h.text}". ${h.reason}`);
         if (inv.outcome.kind === "answer") {
-          const answer = heldNotes.length ? { ...inv.outcome.answer, note: [inv.outcome.answer.note, ...heldNotes].filter(Boolean).join(" ") } : inv.outcome.answer;
-          return { kind: "answer", message: answerToText(answer), answer, ...base };
+          return { kind: "answer", message: answerToText(inv.outcome.answer), answer: inv.outcome.answer, ...base };
         }
         if (inv.outcome.kind === "intent") {
           decided = inv.outcome.intent;
-          // What was held back is always said next to the plan, whatever the model wrote.
-          if (heldNotes.length && (decided.lane === "write" || decided.lane === "chain")) decided = { ...decided, notes: [...heldNotes, ...(decided.notes ?? [])] };
-          else if (heldNotes.length && decided.lane === "ask") decided = { ...decided, question: `${decided.question} (${heldNotes.join(" ")})` };
           source = "model";
-        }
-        if (!decided && held.length) {
-          // Without the model the message can't be split safely: refuse it whole, as before.
-          return { kind: "blocked", message: held[0].reason, ...base };
         }
       }
       if (decided) {
         intent = decided;
       } else {
+        // Without the model, conditional and scheduled orders and unoffered products are refused whole, in the
+        // product's words, before the keyword router (which cannot tell a condition from an instruction).
+        const refused = conditionalRefusal(message) ?? productRefusal(message);
+        if (refused) return { kind: "blocked", message: refused, ...base };
         // The model is off, unreachable, or ran out of budget: the deterministic router answers instead.
         const routed = await routeMessage(message, history, signal);
         intent = routed.intent;

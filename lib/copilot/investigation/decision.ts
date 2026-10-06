@@ -10,10 +10,10 @@
 
 import type { AnswerFact, AnswerVenue, StructuredAnswer } from "../answer-schema";
 import { copilotConfig } from "../config";
+import { detectConditional } from "../conditional";
 import {
   LEND_BORROW_ASSETS,
   PRODUCT_ASSETS,
-  splitClauses,
   isLendBorrow,
   normalizeAsset,
   parseDecimalString,
@@ -59,6 +59,7 @@ const leg = {
         amount: { type: "STRING", description: "literal / receive: the user's exact token amount, as a decimal. usd: the user's dollar amount, as a decimal (no $ sign)." },
         percent: { type: "NUMBER", description: "fraction, previous_leg: 0-100." },
         target_hf: { type: "NUMBER", description: "health_target: the health factor the user asked to end at, e.g. 1.5." },
+        as_written: { type: "STRING", description: "literal / usd / receive / health_target, only when the user wrote that number in words, in any language (\"two and a half\", \"a hundred\", \"cien\"): those words exactly as they appear in the message. Give amount (or target_hf) as digits too. Omit when they typed digits." },
         multiple: { type: "NUMBER", description: "leverage: the multiple, e.g. 3." },
         base_asset: { type: "STRING", enum: ASSETS, description: "leverage: the asset the user named as the base (\"using 0.5 SOL\" -> SOL). Omit when the base is a deposit in this request or the whole account." },
         base_amount: { type: "STRING", description: "leverage: the base amount the user typed (\"using 0.5 SOL\" -> \"0.5\")." },
@@ -110,11 +111,21 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
         actions: { type: "ARRAY", items: leg },
         not_done: {
           type: "ARRAY",
-          items: { type: "STRING" },
-          description: "Parts of the request that cannot be done, each in one plain sentence with the reason. They are shown with the plan; the actions above still go ahead. Leave empty when everything is covered.",
+          items: {
+            type: "OBJECT",
+            properties: {
+              part: { type: "STRING", description: "The user's own words for that part, copied from their message." },
+              reason: { type: "STRING", description: "Why it is not done, in one plain sentence (no figures that are not in the evidence)." },
+              kind: { type: "STRING", enum: ["waits_for_condition_or_time", "not_offered", "other"], description: "waits_for_condition_or_time: it should happen only when something becomes true, at a later time, or repeatedly (a conditional, scheduled, recurring or standing order). The product only acts now." },
+            },
+            required: ["part", "reason", "kind"],
+          },
+          description: "Parts of the request that will not be done, each with the reason. They are shown with the plan; the actions above still go ahead. Never also propose an action for a part listed here. Empty when everything is covered.",
         },
+        requested_count: { type: "NUMBER", description: "How many transactions the user asked for in total, counting every one they listed (repeats count separately), including ones in not_done. Reports are not transactions." },
+        no_condition: { type: "BOOLEAN", description: "true only when the message contains no condition, time or repetition at all for any transaction, even though some words may look like one. Leave unset otherwise." },
       },
-      required: ["actions"],
+      required: ["actions", "requested_count"],
     },
   },
   {
@@ -129,6 +140,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
         amount: { type: "STRING", description: "Units of the asset to lever, only a number the user typed. Omit to lever what is already in the margin account." },
         min_hf: { type: "NUMBER", description: "Only a health-factor floor the user stated; it can only raise the default." },
         source_quote: { type: "STRING", description: "The user's own words that ask for more exposure to the asset." },
+        no_condition: { type: "BOOLEAN", description: "true only when the message contains no condition, time or repetition at all, even though some words may look like one." },
       },
       required: ["asset", "multiple", "source_quote"],
     },
@@ -141,6 +153,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
       properties: {
         scope: { type: "STRING", enum: ["all", "margin", "earn", "farm"] },
         close_account: { type: "BOOLEAN", description: "Also close the emptied margin account, only if the user asked to close the account." },
+        no_condition: { type: "BOOLEAN", description: "true only when the message contains no condition, time or repetition at all, even though some words may look like one." },
       },
       required: ["scope"],
     },
@@ -180,8 +193,6 @@ export interface DecisionContext {
   message: string;
   history: Array<{ role: "user" | "assistant"; text: string }>;
   evidence: Observation[];
-  /** Clauses the product refuses (see `index.ts` `heldBackParts`): no action may come from one. */
-  heldBack?: Array<{ text: string; reason: string }>;
 }
 
 /** Share of the quote's words found in `text`. */
@@ -193,17 +204,22 @@ function coverage(quote: string, text: string): number {
 }
 
 /**
- * The held-back clause an action's quote comes from, if any: its words are in that clause and in no clause that was
- * not held back. "sell 1 SOL" quoted from "sell 1 SOL when it hits 200" is that conditional order, not a new request.
+ * The not-done part an action's quote comes from, if any: its words are in that part and not elsewhere in the
+ * message. "sell 1 SOL" quoted from a part held back as "sell 1 SOL when it hits 200" is that conditional order, never
+ * a new request to act now.
  */
-function heldBackSource(quote: unknown, ctx: DecisionContext): { text: string; reason: string } | null {
-  if (typeof quote !== "string" || !ctx.heldBack?.length) return null;
-  const held = ctx.heldBack.find((h) => coverage(quote, h.text) >= 0.8);
+function heldPartOf(quote: unknown, parts: string[], message: string): string | null {
+  if (typeof quote !== "string" || !parts.length) return null;
+  const held = parts.find((p) => coverage(quote, p) >= 0.8);
   if (!held) return null;
-  let rest = ctx.message;
-  for (const h of ctx.heldBack) rest = rest.split(h.text).join(" ");
+  let rest = message;
+  for (const p of parts) rest = rest.split(p).join(" ");
   return coverage(quote, rest) >= 0.8 ? null : held;
 }
+
+/** The user's words, normalised, for checking that a phrase the model copied is really in them. */
+const userText = (ctx: DecisionContext) =>
+  [ctx.message, ...ctx.history.filter((h) => h.role === "user").map((h) => h.text)].join(" \n ").toLowerCase().replace(/\s+/g, " ");
 
 const no = (reason: string): ParsedDecision => ({ ok: false, reason });
 const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
@@ -330,6 +346,9 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
   if (rows.length - writeCount > MAX_PLAN_READS) return { ok: false, reason: `at most ${MAX_PLAN_READS} report legs; combine the reads the user asked for at the same point into one report` };
   if (!writeCount) return { ok: false, reason: "propose_actions needs at least one transaction. When the user only asks to see something, read it now and use answer" };
   const steps: ChainStep[] = [];
+  // Amounts the user wrote in words: the model read them; they count as typed when its copy of the words is in the message.
+  const wordAmounts: number[] = [];
+  const said = userText(ctx);
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] as Record<string, unknown>;
     if (isReport(r)) {
@@ -349,16 +368,22 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
     if (requireQuotes && !quotesUser(r.source_quote, ctx)) {
       return { ok: false, reason: `action ${i + 1} (${op}) does not quote the user's own words asking for it. Quote them exactly, or leave the action out if the user did not ask for it` };
     }
-    const heldFrom = heldBackSource(r.source_quote, ctx);
-    if (heldFrom) {
-      return { ok: false, reason: `action ${i + 1} (${op}) comes from "${heldFrom.text}", which the product does not do (${heldFrom.reason}). Leave it out; it is reported to the user automatically` };
-    }
     for (const k of ["asset", "to_asset"]) {
       const v = r[k];
       if (typeof v === "string" && v.trim() && !normalizeAsset(v)) return { ok: true, intent: { lane: "refuse", reason: "guard", message: unofferedMessage(v) } };
     }
     const sized = sizingToAmount(r.sizing, op, i);
     if (!sized.ok) return { ok: false, reason: sized.reason };
+    const sz = (r.sizing ?? {}) as Record<string, unknown>;
+    const written = typeof sz.as_written === "string" ? sz.as_written.trim().toLowerCase().replace(/\s+/g, " ") : "";
+    if (written) {
+      if (!/\p{L}/u.test(written) || !said.includes(written)) {
+        return { ok: false, reason: `action ${i + 1} (${op}): as_written "${sz.as_written}" is not in the user's message; copy their words exactly, or omit it when they typed digits` };
+      }
+      const a = sized.amount;
+      if (a && (a.kind === "exact" || a.kind === "usd" || a.kind === "out")) wordAmounts.push(Number(a.value));
+      if (a && a.kind === "hf") wordAmounts.push(a.target);
+    }
     const w: WriteIntent = {
       op,
       asset: typeof r.asset === "string" ? normalizeAsset(r.asset) : null,
@@ -372,8 +397,8 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
     steps.push({ write: v.value });
   }
   const intent: Intent = steps.length === 1 && "write" in steps[0] ? { lane: "write", write: steps[0].write } : { lane: "chain", steps };
-  if (!amountsAreTyped(intent, ctx.message, ctx.history)) {
-    return { ok: false, reason: "a literal, usd or receive amount, or a health_target, is not a number the user typed. Use them only for numbers in the user's messages (digits or number words); otherwise use a sizing word, or ask_user for the amount" };
+  if (!amountsAreTyped(intent, ctx.message, ctx.history, wordAmounts)) {
+    return { ok: false, reason: "a literal, usd or receive amount, or a health_target, is not a number the user gave. Use them only for numbers in the user's messages (digits, or words copied into as_written); otherwise use a sizing word, or ask_user for the amount" };
   }
   return { ok: true, intent };
 }
@@ -422,11 +447,15 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "refuse", reason: "model_decline", message } } };
     }
     case "propose_unwind": {
+      const cond = detectConditional(ctx.message);
+      if (cond && args.no_condition !== true) return no(`this message reads as a condition, a time or a repeat ("${cond.phrase}"). The product only acts now: decline that, or ask_user; if nothing in it is a condition, set no_condition`);
       const scope = ["all", "margin", "earn", "farm"].includes(String(args.scope)) ? (args.scope as "all" | "margin" | "earn" | "farm") : null;
       if (!scope) return no("propose_unwind needs a scope");
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "unwind", unwind: { scope, close_account: args.close_account === true } } } };
     }
     case "propose_leverage": {
+      const cond = detectConditional(ctx.message);
+      if (cond && args.no_condition !== true) return no(`this message reads as a condition, a time or a repeat ("${cond.phrase}"). The product only acts now: decline that, or ask_user; if nothing in it is a condition, set no_condition`);
       if (!quotesUser(args.source_quote, ctx)) {
         return no("propose_leverage needs the user's own words asking for more exposure to the asset (source_quote). If they asked for a loan or borrow at a leverage multiple instead, use propose_actions with leverage sizing and no swap");
       }
@@ -446,21 +475,49 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
     case "propose_actions": {
       const r = actionsToIntent(args.actions, ctx);
       if (!r.ok) return no(r.reason);
-      // What could not be done is said, in plain words, next to what will be done.
-      const notes = (Array.isArray(args.not_done) ? args.not_done : [])
-        .slice(0, 3)
-        .map((n) => str(n, 240))
-        .filter((n): n is string => !!n);
-      for (const n of notes) {
-        if (!numbersGrounded(n, sources)) return no("a not_done note contains a figure that is not in any tool result");
-        if (/\b(?:tools?|function\s+calls?|system\s+prompt|instructions?|gemini|model)\b/i.test(n)) return no("not_done notes must not mention how you work inside (tools, instructions, the model); say what the user can't do and why");
+      // What will not be done is said, in plain words, next to what will be done.
+      const notDone: Array<{ part: string; reason: string; kind: string }> = [];
+      for (const raw of (Array.isArray(args.not_done) ? args.not_done : []).slice(0, 5)) {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        const part = str(o.part, 240);
+        const reason = str(o.reason, 240);
+        if (!part || !reason) return no("each not_done entry needs the user's words for the part (part) and the reason");
+        if (!quotesUser(part, ctx)) return no(`not_done part "${part}" is not the user's own words; copy them from the message`);
+        if (!numbersGrounded(reason, sources)) return no("a not_done reason contains a figure that is not in any tool result");
+        if (/\b(?:tools?|function\s+calls?|system\s+prompt|instructions?|gemini|model)\b/i.test(reason)) return no("not_done reasons must not mention how you work inside (tools, instructions, the model); say what the user can't do and why");
+        notDone.push({ part, reason, kind: typeof o.kind === "string" ? o.kind : "other" });
       }
-      // The step cap is code's rule, so code says when it cut a request short: a full plan for a message that asks for
-      // more transactions than fit ("supply 1 SOL" nine times) names how many are left for after it.
+      // A part the model holds back can never also be an action.
+      const parts = notDone.map((n) => n.part);
+      for (const [i, a] of (Array.isArray(args.actions) ? args.actions : []).entries()) {
+        const held = heldPartOf((a as Record<string, unknown>)?.source_quote, parts, ctx.message);
+        if (held) return no(`action ${i + 1} comes from "${held}", which you listed in not_done. A part is either done now or not done; never both`);
+      }
+      // The server's own check for conditional, scheduled or recurring wording is a cross-check on the model's reading:
+      // a message that reads as one must say how it was read (a part held back, a health-factor target, a what-if), or
+      // state that it holds no condition at all.
+      const cond = detectConditional(ctx.message);
+      if (cond && args.no_condition !== true) {
+        const raw = Array.isArray(args.actions) ? (args.actions as Array<Record<string, unknown>>) : [];
+        const explained =
+          notDone.some((n) => n.kind === "waits_for_condition_or_time") ||
+          raw.some((a) => (a?.sizing as Record<string, unknown> | undefined)?.kind === "health_target") ||
+          raw.some((a) => a?.op === "report" && Array.isArray(a.reads) && (a.reads as Array<Record<string, unknown>>).some((x) => x?.tool === "simulate"));
+        if (!explained) {
+          return no(
+            `this message reads as a condition, a time or a repeat ("${cond.phrase}"). The product only acts now. If part of it should wait for a condition or a time, or repeat, put that part in not_done (kind waits_for_condition_or_time) and keep the rest; if it is a health-factor target for an action now, size that action with health_target; if it is a what-if, show it with a simulate report; if nothing in it is a condition, set no_condition`,
+          );
+        }
+      }
+      // The step cap is code's rule: when a full plan leaves out transactions the user asked for, code says how many.
       const writes = r.intent.lane === "chain" ? r.intent.steps.filter((s) => "write" in s).length : r.intent.lane === "write" ? 1 : 0;
-      const asked = splitClauses(ctx.message).filter((c) => /\b(?:supply|lend|deposit|withdraw|borrow|repay|swap|redeem|farm|unfarm|convert|sell|buy)\b/i.test(c)).length;
-      if (writes >= MAX_PLAN_STEPS && asked > writes) {
-        const left = asked - writes;
+      const asked = typeof args.requested_count === "number" && Number.isFinite(args.requested_count) ? Math.round(args.requested_count) : writes;
+      const notes = notDone.map((n) => `Not done: "${plain(n.part)}". ${n.reason}`);
+      if (asked > writes + notDone.length) {
+        if (writes < MAX_PLAN_STEPS) {
+          return no(`the user asked for ${asked} transactions and you proposed ${writes}, with ${notDone.length} in not_done. Propose every one, or list the ones that will not be done in not_done`);
+        }
+        const left = asked - writes - notDone.length;
         notes.push(`A plan holds at most ${MAX_PLAN_STEPS} transactions, so ${left === 1 ? "the last one is" : `the last ${left} are`} not in this plan; ask for ${left === 1 ? "it" : "them"} after this plan completes.`);
       }
       const intent = notes.length && (r.intent.lane === "write" || r.intent.lane === "chain") ? { ...r.intent, notes: notes.map(plain) } : r.intent;

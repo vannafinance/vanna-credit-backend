@@ -31,7 +31,7 @@ import {
   type ConceptTopic,
   type ParsedClause,
 } from "./intent";
-import { CONDITIONAL_BASE_MESSAGE, detectConditional, immediateRemainder, withoutHealthTargets } from "./conditional";
+import { CONDITIONAL_BASE_MESSAGE, detectConditional, immediateRemainder } from "./conditional";
 import { LlmUnavailable, llmConfigured, routeWithModel } from "./vertex";
 
 /** "when" opens a question only as "when is / will / does ..."; "when SOL drops below 100, sell" is an order. */
@@ -158,8 +158,7 @@ function deferredRefusal(nowVersion: string): Intent {
  * about a condition ("what happens if SOL drops 20%?") is not an order and passes.
  */
 export function conditionalRefusal(message: string): string | null {
-  // "borrow until my health factor is 1.5" sizes an action done now; it is not a condition to wait for.
-  const raw = withoutHealthTargets(message.trim());
+  const raw = message.trim();
   const lower = raw.toLowerCase().replace(/[’`]/g, "'");
   if (!lower) return null;
   const questionish = QUESTION_OPENER.test(lower) || lower.endsWith("?") || HYPOTHETICAL.test(lower);
@@ -570,8 +569,9 @@ export interface RouteResult {
  * The model understands the sentence; it never supplies a number. A "leverage" multiple on a borrow is not an
  * amount (the server sizes it), so it is not checked here.
  */
-export function amountsAreTyped(intent: Intent, message: string, history: Array<{ role: "user" | "assistant"; text: string }> = []): boolean {
-  const typed = [message, ...history.filter((h) => h.role === "user").map((h) => h.text)].flatMap(typedNumbers);
+export function amountsAreTyped(intent: Intent, message: string, history: Array<{ role: "user" | "assistant"; text: string }> = [], alsoTyped: number[] = []): boolean {
+  // `alsoTyped`: amounts the user wrote in words, which the model read and which appear verbatim in their message.
+  const typed = [...[message, ...history.filter((h) => h.role === "user").map((h) => h.text)].flatMap(typedNumbers), ...alsoTyped];
   const typedAs = (v: string) => {
     const n = Number(v);
     return typed.some((t) => Math.abs(t - n) <= 1e-9 * Math.max(1, Math.abs(n)));

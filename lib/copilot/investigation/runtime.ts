@@ -58,8 +58,6 @@ export async function investigate(args: {
   ctx: ReadCtx;
   signal?: AbortSignal;
   limits?: Partial<InvestigationLimits>;
-  /** Clauses of the message the product refuses: never acted on; the rest of the message is handled. */
-  heldBack?: Array<{ text: string; reason: string }>;
 }): Promise<InvestigationResult> {
   const limits = { ...investigationLimits(), ...(args.limits ?? {}) };
   const started = investigationDeps.now();
@@ -99,7 +97,7 @@ export async function investigate(args: {
     try {
       res = await getLlm().generate({
         system,
-        user: turnPrompt({ message: args.message, history: args.history, evidence, rejections, turn, maxTurns: limits.maxTurns, readsLeft, mustDecide, heldBack: args.heldBack }),
+        user: turnPrompt({ message: args.message, history: args.history, evidence, rejections, turn, maxTurns: limits.maxTurns, readsLeft, mustDecide }),
         tools: mustDecide ? DECISION_TOOLS : [...READ_TOOLS, CALCULATE_TOOL, ...DECISION_TOOLS],
         forceTool: true,
         // Full reasoning to understand the request and to correct a rejected decision; a turn that only turns gathered
@@ -125,7 +123,7 @@ export async function investigate(args: {
 
     const decision = calls.find((c) => DECISION_NAMES.has(c.name));
     if (decision) {
-      const parsed = parseDecision(decision.name, decision.args ?? {}, { message: args.message, history: args.history, evidence, heldBack: args.heldBack });
+      const parsed = parseDecision(decision.name, decision.args ?? {}, { message: args.message, history: args.history, evidence });
       if (parsed.ok) {
         trace.decision = decision.name;
         return done(parsed.outcome);

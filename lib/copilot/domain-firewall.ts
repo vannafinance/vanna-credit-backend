@@ -74,15 +74,16 @@ const REFUSALS: Array<{ id: string; re: RegExp; message: string }> = [
 ];
 
 /**
- * Refusals about what the product offers (not attacks): a clause asking for one can be held back while the rest of the
- * message goes ahead (see `index.ts`). Liquidating others, admin actions, other programs and the faucet still refuse
- * the whole message.
+ * Refusals about what the product offers (not attacks). When Gemini decides, a message asking for one of these is not
+ * refused whole: Gemini plans the rest and reports the refused part (`not_done`), and no transaction can express a
+ * short or a multi-asset LP anyway. Liquidating others, admin actions, other programs and the faucet always refuse the
+ * whole message. Without the model (`productRefusal`), the whole message is refused as before.
  */
 const PARTIAL_REFUSALS = new Set(["perps_short", "other_liquidity"]);
 
-/** The product's refusal for this clause when it asks for something the product does not offer, else null. */
-export function productRefusal(clause: string): string | null {
-  for (const r of REFUSALS) if (PARTIAL_REFUSALS.has(r.id) && r.re.test(clause)) return r.message;
+/** The product's refusal when the message asks for something the product does not offer, else null. */
+export function productRefusal(message: string): string | null {
+  for (const r of REFUSALS) if (PARTIAL_REFUSALS.has(r.id) && r.re.test(message)) return r.message;
   return null;
 }
 
@@ -176,7 +177,7 @@ export function hasMisspelledDomainWord(message: string): boolean {
  * `modelDecides`: the investigation stage (Gemini) is available and decides what is on-domain, so the product-word
  * allowlist below is skipped. The hard refusals, the abuse tripwire, other addresses and unoffered tokens still run.
  */
-export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boolean; modelDecides?: boolean; heldBack?: boolean } = {}): FirewallResult {
+export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boolean; modelDecides?: boolean } = {}): FirewallResult {
   const m = (message ?? "").trim();
   if (!m) return { allow: false, reason: "empty", kind: "empty", message: "Type a question about your Vanna positions or an action you want to take." };
   if (m.length > MAX_MESSAGE_CHARS) {
@@ -197,8 +198,8 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
   }
 
   for (const r of REFUSALS) {
-    // Product refusals already held back clause by clause (opts.heldBack) are reported with the plan instead.
-    if (opts.heldBack && PARTIAL_REFUSALS.has(r.id)) continue;
+    // Product refusals are placed by the model when it decides (see PARTIAL_REFUSALS).
+    if (opts.modelDecides && PARTIAL_REFUSALS.has(r.id)) continue;
     if (r.re.test(m)) return { allow: false, reason: `refuse:${r.id}`, kind: "refused", message: r.message };
   }
 
