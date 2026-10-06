@@ -13,6 +13,7 @@ import { copilotConfig } from "../config";
 import {
   LEND_BORROW_ASSETS,
   PRODUCT_ASSETS,
+  splitClauses,
   isLendBorrow,
   normalizeAsset,
   parseDecimalString,
@@ -453,6 +454,14 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       for (const n of notes) {
         if (!numbersGrounded(n, sources)) return no("a not_done note contains a figure that is not in any tool result");
         if (/\b(?:tools?|function\s+calls?|system\s+prompt|instructions?|gemini|model)\b/i.test(n)) return no("not_done notes must not mention how you work inside (tools, instructions, the model); say what the user can't do and why");
+      }
+      // The step cap is code's rule, so code says when it cut a request short: a full plan for a message that asks for
+      // more transactions than fit ("supply 1 SOL" nine times) names how many are left for after it.
+      const writes = r.intent.lane === "chain" ? r.intent.steps.filter((s) => "write" in s).length : r.intent.lane === "write" ? 1 : 0;
+      const asked = splitClauses(ctx.message).filter((c) => /\b(?:supply|lend|deposit|withdraw|borrow|repay|swap|redeem|farm|unfarm|convert|sell|buy)\b/i.test(c)).length;
+      if (writes >= MAX_PLAN_STEPS && asked > writes) {
+        const left = asked - writes;
+        notes.push(`A plan holds at most ${MAX_PLAN_STEPS} transactions, so ${left === 1 ? "the last one is" : `the last ${left} are`} not in this plan; ask for ${left === 1 ? "it" : "them"} after this plan completes.`);
       }
       const intent = notes.length && (r.intent.lane === "write" || r.intent.lane === "chain") ? { ...r.intent, notes: notes.map(plain) } : r.intent;
       return { ok: true, name, outcome: { kind: "intent", intent } };

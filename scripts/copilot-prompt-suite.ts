@@ -440,6 +440,8 @@ function textsOf(res: any): string[] {
   const out: string[] = [];
   const push = (s: unknown) => typeof s === "string" && s && out.push(s);
   push(res.message);
+  // The plan card shows these (what was not done, account opening, ...), so they count as text the user sees.
+  for (const w of res.plan?.warnings ?? []) push(w);
   const a = res.answer;
   if (a) {
     push(a.headline);

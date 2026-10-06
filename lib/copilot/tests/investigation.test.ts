@@ -666,3 +666,27 @@ describe("held-back parts: a refused clause never blocks, or becomes, the rest",
     expect(llm.requests).toHaveLength(0);
   });
 });
+
+describe("the step cap is never applied silently", () => {
+  it("says how many transactions did not fit when a full plan cuts the request short", async () => {
+    const one = { op: "earn_supply", asset: "SOL", sizing: { kind: "literal", amount: "1" }, source_quote: "supply 1 SOL" };
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: Array(8).fill(one) } }]]));
+    const res = await chat(Array(9).fill("supply 1 SOL").join(", "));
+    expect(res.kind).toBe("plan_preview");
+    expect(res.plan?.steps).toHaveLength(8);
+    expect(res.plan?.warnings.join(" ")).toMatch(/at most 8 transactions, so the last one is not in this plan/);
+  });
+});
+
+describe("not_done notes never talk about internals", () => {
+  it("sends a note that mentions tools or the model back for rewording", async () => {
+    const supply = { op: "earn_supply", asset: "USDC", sizing: { kind: "literal", amount: "100" }, source_quote: "supply 100 USDC" };
+    const llm = scripted([
+      [{ name: "propose_actions", args: { actions: [supply], not_done: ["My tools can't place limit orders."] } }],
+      [{ name: "propose_actions", args: { actions: [supply] } }],
+    ]);
+    setLlmClient(llm);
+    await chat("supply 100 USDC");
+    expect(llm.requests[1].user).toMatch(/must not mention how you work inside/);
+  });
+});
