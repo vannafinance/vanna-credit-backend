@@ -12,7 +12,7 @@
 
 import { copilotConfig } from "../config";
 import { fmtAmount, fmtHf, humanizeMcpError } from "../explain";
-import type { Asset, AskOption, Intent, LeverIntent } from "../intent";
+import { LEND_BORROW_ASSETS, type Asset, type AskOption, type Intent, type LeverIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
 import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, planWarnings, reportStep, type StepSpec } from "../plan";
@@ -47,13 +47,14 @@ export async function planLever(intent: LeverIntent, ctx: ReadCtx): Promise<Stra
   }
 
   if (!intent.borrow_asset) {
-    const pick = (b: "USDC" | "USDT"): AskOption => ({
+    const pick = (b: Asset): AskOption => ({
       label: `Borrow ${b}`,
       description: `Fund the extra exposure by borrowing ${b}, then swap it into ${asset}.`,
       apply: { lane: "lever", lever: { ...intent, borrow_asset: b } },
     });
-    const options = (["USDC", "USDT"] as const).filter((b) => b !== (asset as string)).map(pick);
-    return no(`To lever ${asset} ${intent.leverage}x I borrow a stable and swap it into ${asset}. Which one should I borrow?`, options);
+    // Any asset with a lending pool, other than the one being levered (the app's registry decides which).
+    const options = LEND_BORROW_ASSETS.filter((b) => b !== asset).map(pick);
+    return no(`To lever ${asset} ${intent.leverage}x I borrow another asset and swap it into ${asset}. Which one should I borrow?`, options);
   }
   const borrowAsset = intent.borrow_asset;
 

@@ -11,7 +11,9 @@
 import type { AnswerFact, AnswerVenue, StructuredAnswer } from "../answer-schema";
 import { copilotConfig } from "../config";
 import {
+  LEND_BORROW_ASSETS,
   PRODUCT_ASSETS,
+  isLendBorrow,
   normalizeAsset,
   parseDecimalString,
   unofferedMessage,
@@ -19,26 +21,32 @@ import {
   validateWrite,
   type AmountSpec,
   type AskOption,
+  type ChainStep,
   type Intent,
+  type ReadCall,
   type WriteIntent,
   type WriteOp,
 } from "../intent";
-import { MAX_PLAN_STEPS } from "../plan";
+import { MAX_LEG_READS, MAX_PLAN_READS, MAX_PLAN_STEPS } from "../plan";
 import { amountsAreTyped } from "../router";
 import type { LlmFunctionDecl } from "../vertex";
 import { numbersGrounded } from "../vertex";
+import { READ_TOOLS, readArgsProblem } from "./catalog";
 import type { InvestigationOutcome, Observation } from "./types";
 
 const ASSETS = [...PRODUCT_ASSETS] as string[];
 const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem"];
-export const SIZING_KINDS = ["literal", "fraction", "all", "max_safe", "previous_leg", "leverage", "receive"] as const;
+export const SIZING_KINDS = ["literal", "usd", "fraction", "all", "max_safe", "health_target", "previous_leg", "leverage", "receive"] as const;
 type SizingKind = (typeof SIZING_KINDS)[number];
 const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "none"];
+
+/** A leg that is not a transaction: something the user asked to see at that point of the plan. */
+const REPORT_OP = "report";
 
 const leg = {
   type: "OBJECT",
   properties: {
-    op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter. farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself." },
+    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter. farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
     asset: { type: "STRING", enum: ASSETS, description: "Asset acted on. swap: the asset sold. farm ops: the underlying (SOL, not kSOL)." },
     to_asset: { type: "STRING", enum: ASSETS, description: "swap only: the asset bought." },
     source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays (default wallet). swap: margin = swap collateral inside the margin account." },
@@ -46,22 +54,36 @@ const leg = {
       type: "OBJECT",
       description: "How much. Never compute a number yourself.",
       properties: {
-        kind: { type: "STRING", enum: [...SIZING_KINDS], description: "literal = a number the user typed. fraction = a percentage of the relevant balance. all = the whole balance / whole debt. max_safe = the largest amount that keeps the health floor (borrow, withdraw). previous_leg = the amount the previous action produced. leverage = a borrow sized to N x leverage on a base: borrow value = base value x (N - 1), nothing swapped (borrow only). receive = swap sized to receive a typed amount of to_asset." },
-        amount: { type: "STRING", description: "literal / receive: the user's exact decimal, copied." },
-        percent: { type: "NUMBER", description: "fraction: 0-100." },
+        kind: { type: "STRING", enum: [...SIZING_KINDS], description: "literal = a number of tokens the user typed (digits, or number words written as digits). usd = a dollar value the user typed (\"$100 worth of SOL\", \"100 dollars of USDC\"): converted to tokens at the oracle price. fraction = a percentage of the relevant balance (\"half my USDC\" = 50). all = the whole balance / whole debt. max_safe = the largest amount that keeps the health floor (borrow, withdraw). health_target = sized so the account's health factor ends at a number the user gave (borrow, withdraw: down to it; repay, deposit: up to it). previous_leg = the amount the previous action produced, or a percentage of it (\"swap half of it\": percent 50). leverage = a borrow sized to N x leverage on a base: borrow value = base value x (N - 1), nothing swapped (borrow only). receive = swap sized to receive a typed amount of to_asset." },
+        amount: { type: "STRING", description: "literal / receive: the user's exact token amount, as a decimal. usd: the user's dollar amount, as a decimal (no $ sign)." },
+        percent: { type: "NUMBER", description: "fraction, previous_leg: 0-100." },
+        target_hf: { type: "NUMBER", description: "health_target: the health factor the user asked to end at, e.g. 1.5." },
         multiple: { type: "NUMBER", description: "leverage: the multiple, e.g. 3." },
         base_asset: { type: "STRING", enum: ASSETS, description: "leverage: the asset the user named as the base (\"using 0.5 SOL\" -> SOL). Omit when the base is a deposit in this request or the whole account." },
         base_amount: { type: "STRING", description: "leverage: the base amount the user typed (\"using 0.5 SOL\" -> \"0.5\")." },
       },
       required: ["kind"],
     },
-    source_quote: { type: "STRING", description: "The user's own words, copied from their message (or an earlier message of theirs), that ask for THIS action. An action you cannot quote was not asked for: leave it out." },
+    reads: {
+      type: "ARRAY",
+      description: `report only: the read tools that answer what the user asked to see (1 to ${MAX_LEG_READS}). They run when the plan reaches this leg, on live data, so they show the account after every earlier action.`,
+      items: {
+        type: "OBJECT",
+        properties: {
+          tool: { type: "STRING", enum: READ_TOOLS.map((t) => t.name), description: "A read tool (the same ones you can call now)." },
+          args_json: { type: "STRING", description: 'The tool\'s arguments as a JSON object, exactly as you would call it now, e.g. {"assets":["USDC","SOL"]}. "{}" when it takes none.' },
+        },
+        required: ["tool"],
+      },
+    },
+    label: { type: "STRING", description: 'report only: a short title for this step on the plan card, e.g. "Show your Earn balances and pool APY". No figures.' },
+    source_quote: { type: "STRING", description: "The user's own words, copied from their message (or an earlier message of theirs), that ask for THIS action or report. One you cannot quote was not asked for: leave it out." },
   },
-  required: ["op", "sizing", "source_quote"],
+  required: ["op", "source_quote"],
 };
 
 /** The same leg inside a question's options: the options are alternatives the user picks, so they quote nothing. */
-const optionLeg = { ...leg, properties: Object.fromEntries(Object.entries(leg.properties).filter(([k]) => k !== "source_quote")), required: ["op", "sizing"] };
+const optionLeg = { ...leg, properties: Object.fromEntries(Object.entries(leg.properties).filter(([k]) => k !== "source_quote")), required: ["op"] };
 
 export const DECISION_TOOLS: LlmFunctionDecl[] = [
   {
@@ -80,12 +102,16 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "propose_actions",
-    description: `Finish: the transactions the user asked for, in their order, for their wallet to approve and sign (at most ${MAX_PLAN_STEPS}). Use for any direct instruction, one or many, including a loan or borrow at N x leverage (borrow with leverage sizing, nothing swapped). Every action quotes the user's words that ask for it; never add one they did not ask for (the server adds account creation itself).`,
+    description: `Finish: the transactions the user asked for, in their order, for their wallet to approve and sign (at most ${MAX_PLAN_STEPS}), plus a report leg for each thing they asked to SEE before, between or after them (at most ${MAX_PLAN_READS}), placed exactly where they asked for it. Use for any direct instruction, one or many, including a loan or borrow at N x leverage (borrow with leverage sizing, nothing swapped). Every action and report quotes the user's words that ask for it; never add one they did not ask for (the server adds account creation itself).`,
     parameters: {
       type: "OBJECT",
       properties: {
         actions: { type: "ARRAY", items: leg },
-        report_health: { type: "BOOLEAN", description: "true when the user also asked to see the health factor afterwards." },
+        not_done: {
+          type: "ARRAY",
+          items: { type: "STRING" },
+          description: "Parts of the request that cannot be done, each in one plain sentence with the reason. They are shown with the plan; the actions above still go ahead. Leave empty when everything is covered.",
+        },
       },
       required: ["actions"],
     },
@@ -98,7 +124,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
       properties: {
         asset: { type: "STRING", enum: ASSETS },
         multiple: { type: "NUMBER", description: "Exposure as a multiple of equity, above 1 and at most 10." },
-        borrow_asset: { type: "STRING", enum: ["USDC", "USDT"], description: "Only if the user named it; otherwise omit and the user is asked." },
+        borrow_asset: { type: "STRING", enum: [...LEND_BORROW_ASSETS], description: "The asset borrowed to fund the exposure (not the asset being levered). Only if the user named it; otherwise omit and the user is asked." },
         amount: { type: "STRING", description: "Units of the asset to lever, only a number the user typed. Omit to lever what is already in the margin account." },
         min_hf: { type: "NUMBER", description: "Only a health-factor floor the user stated; it can only raise the default." },
         source_quote: { type: "STRING", description: "The user's own words that ask for more exposure to the asset." },
@@ -153,6 +179,29 @@ export interface DecisionContext {
   message: string;
   history: Array<{ role: "user" | "assistant"; text: string }>;
   evidence: Observation[];
+  /** Clauses the product refuses (see `index.ts` `heldBackParts`): no action may come from one. */
+  heldBack?: Array<{ text: string; reason: string }>;
+}
+
+/** Share of the quote's words found in `text`. */
+function coverage(quote: string, text: string): number {
+  const q = words(quote);
+  if (!q.length) return 0;
+  const t = new Set(words(text));
+  return q.filter((w) => t.has(w)).length / q.length;
+}
+
+/**
+ * The held-back clause an action's quote comes from, if any: its words are in that clause and in no clause that was
+ * not held back. "sell 1 SOL" quoted from "sell 1 SOL when it hits 200" is that conditional order, not a new request.
+ */
+function heldBackSource(quote: unknown, ctx: DecisionContext): { text: string; reason: string } | null {
+  if (typeof quote !== "string" || !ctx.heldBack?.length) return null;
+  const held = ctx.heldBack.find((h) => coverage(quote, h.text) >= 0.8);
+  if (!held) return null;
+  let rest = ctx.message;
+  for (const h of ctx.heldBack) rest = rest.split(h.text).join(" ");
+  return coverage(quote, rest) >= 0.8 ? null : held;
 }
 
 const no = (reason: string): ParsedDecision => ({ ok: false, reason });
@@ -194,9 +243,22 @@ function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amo
     case "max_safe":
       if (op !== "borrow" && op !== "withdraw") return { ok: false, reason: `action ${index + 1}: max_safe only applies to borrow or withdraw; use all for ${op}` };
       return { ok: true, amount: { kind: "all" } };
-    case "previous_leg":
+    case "previous_leg": {
       if (index === 0) return { ok: false, reason: "previous_leg cannot be used on the first action" };
-      return { ok: true, amount: { kind: "prev" } };
+      if (o.percent === undefined || o.percent === null) return { ok: true, amount: { kind: "prev" } };
+      const p = typeof o.percent === "number" ? o.percent : Number(o.percent);
+      if (!Number.isFinite(p) || p <= 0 || p > 100) return { ok: false, reason: `action ${index + 1}: previous_leg percent must be between 0 and 100` };
+      return { ok: true, amount: p >= 100 ? { kind: "prev" } : { kind: "prev", pct: p } };
+    }
+    case "usd": {
+      const v = typeof o.amount === "number" ? parseDecimalString(String(o.amount)) : typeof o.amount === "string" ? parseDecimalString(o.amount.trim().replace(/^\$/, "")) : null;
+      return v ? { ok: true, amount: { kind: "usd", value: v } } : { ok: false, reason: `action ${index + 1}: usd sizing needs the user's dollar amount in amount` };
+    }
+    case "health_target": {
+      const t = typeof o.target_hf === "number" ? o.target_hf : Number(o.target_hf);
+      if (!Number.isFinite(t)) return { ok: false, reason: `action ${index + 1}: health_target needs target_hf, the health factor the user gave` };
+      return { ok: true, amount: { kind: "hf", target: t } };
+    }
     case "leverage": {
       const m = typeof o.multiple === "number" ? o.multiple : Number(o.multiple);
       if (op !== "borrow") return { ok: false, reason: `action ${index + 1}: leverage sizing is only for a borrow; use propose_leverage for a leveraged long` };
@@ -232,17 +294,63 @@ export function quotesUser(quote: unknown, ctx: DecisionContext): boolean {
 }
 
 /** A list of action legs (propose_actions, or one choice of ask_user) -> a guarded write or chain intent. */
-function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionContext, requireQuotes = true): ActionsResult {
+/** A report leg -> the read calls it makes, checked now (it runs later, when nobody can correct it). */
+function readLegCalls(r: Record<string, unknown>, index: number): { ok: true; reads: ReadCall[] } | { ok: false; reason: string } {
+  const raw = Array.isArray(r.reads) ? r.reads : [];
+  if (!raw.length) return { ok: false, reason: `report ${index + 1} names no read tool: give the read tools that answer what the user asked to see` };
+  if (raw.length > MAX_LEG_READS) return { ok: false, reason: `report ${index + 1} has more than ${MAX_LEG_READS} reads` };
+  const reads: ReadCall[] = [];
+  for (const x of raw) {
+    const o = (x ?? {}) as Record<string, unknown>;
+    const tool = typeof o.tool === "string" ? o.tool : "";
+    let args: Record<string, unknown> = {};
+    if (typeof o.args_json === "string" && o.args_json.trim()) {
+      try {
+        const parsed = JSON.parse(o.args_json);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: `report ${index + 1}: args_json of ${tool} must be a JSON object` };
+        args = parsed as Record<string, unknown>;
+      } catch {
+        return { ok: false, reason: `report ${index + 1}: args_json of ${tool} is not valid JSON` };
+      }
+    }
+    const problem = readArgsProblem(tool, args);
+    if (problem) return { ok: false, reason: `report ${index + 1}: ${problem}` };
+    reads.push({ tool, args });
+  }
+  return { ok: true, reads };
+}
+
+function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = true): ActionsResult {
   const rows = Array.isArray(raw) ? raw : [];
   if (!rows.length) return { ok: false, reason: "at least one action is needed" };
-  if (rows.length > MAX_PLAN_STEPS) return { ok: true, intent: { lane: "refuse", reason: "guard", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.` } };
-  const steps: Array<{ write: WriteIntent } | { report: true }> = [];
+  const isReport = (r: unknown) => !!r && typeof r === "object" && (r as Record<string, unknown>).op === REPORT_OP;
+  const writeCount = rows.filter((r) => !isReport(r)).length;
+  if (writeCount > MAX_PLAN_STEPS) return { ok: true, intent: { lane: "refuse", reason: "guard", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.` } };
+  if (rows.length - writeCount > MAX_PLAN_READS) return { ok: false, reason: `at most ${MAX_PLAN_READS} report legs; combine the reads the user asked for at the same point into one report` };
+  if (!writeCount) return { ok: false, reason: "propose_actions needs at least one transaction. When the user only asks to see something, read it now and use answer" };
+  const steps: ChainStep[] = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] as Record<string, unknown>;
+    if (isReport(r)) {
+      if (requireQuotes && !quotesUser(r.source_quote, ctx)) {
+        return { ok: false, reason: `report ${i + 1} does not quote the user's own words asking to see it. Quote them exactly, or leave it out if the user did not ask for it` };
+      }
+      const calls = readLegCalls(r, i);
+      if (!calls.ok) return { ok: false, reason: calls.reason };
+      const label = str(r.label, 80);
+      const quote = str(r.source_quote, 300);
+      if (label && !numbersGrounded(label, groundingSources(ctx))) return { ok: false, reason: `report ${i + 1}: the label must not state figures` };
+      steps.push({ read: { question: quote ?? label ?? "", label: label ? plain(label) : "Show what you asked for", reads: calls.reads } });
+      continue;
+    }
     if (!r || typeof r !== "object" || !WRITE_OPS.includes(r.op as WriteOp)) return { ok: false, reason: `action ${i + 1} has an unknown op` };
     const op = r.op as WriteOp;
     if (requireQuotes && !quotesUser(r.source_quote, ctx)) {
       return { ok: false, reason: `action ${i + 1} (${op}) does not quote the user's own words asking for it. Quote them exactly, or leave the action out if the user did not ask for it` };
+    }
+    const heldFrom = heldBackSource(r.source_quote, ctx);
+    if (heldFrom) {
+      return { ok: false, reason: `action ${i + 1} (${op}) comes from "${heldFrom.text}", which the product does not do (${heldFrom.reason}). Leave it out; it is reported to the user automatically` };
     }
     for (const k of ["asset", "to_asset"]) {
       const v = r[k];
@@ -262,10 +370,9 @@ function actionsToIntent(raw: unknown, reportHealth: boolean, ctx: DecisionConte
     if (!v.ok) return { ok: false, reason: `action ${i + 1} (${op}): ${v.message}. If that is what the user asked, tell them with ask_user or decline` };
     steps.push({ write: v.value });
   }
-  if (reportHealth) steps.push({ report: true });
   const intent: Intent = steps.length === 1 && "write" in steps[0] ? { lane: "write", write: steps[0].write } : { lane: "chain", steps };
   if (!amountsAreTyped(intent, ctx.message, ctx.history)) {
-    return { ok: false, reason: "a literal amount is not a number the user typed. Use literal only for numbers in the user's messages; otherwise use a sizing word, or ask_user for the amount" };
+    return { ok: false, reason: "a literal, usd or receive amount, or a health_target, is not a number the user typed. Use them only for numbers in the user's messages (digits or number words); otherwise use a sizing word, or ask_user for the amount" };
   }
   return { ok: true, intent };
 }
@@ -298,7 +405,7 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
         const opt = o as Record<string, unknown>;
         const label = str(opt.label, 80);
         if (!label || !numbersGrounded(label, sources)) return [];
-        const r = actionsToIntent(opt.actions, false, ctx, false);
+        const r = actionsToIntent(opt.actions, ctx, false);
         if (!r.ok || (r.intent.lane !== "write" && r.intent.lane !== "chain")) return [];
         const description = str(opt.description, 160);
         return [{ label: plain(label), ...(description && numbersGrounded(description, sources) ? { description: plain(description) } : {}), apply: r.intent }];
@@ -326,7 +433,8 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       if (!asset) return no(typeof args.asset === "string" ? unofferedMessage(args.asset) : "propose_leverage needs an asset");
       const multiple = typeof args.multiple === "number" ? args.multiple : Number(args.multiple);
       const amount = typeof args.amount === "string" ? parseDecimalString(args.amount.trim()) : typeof args.amount === "number" ? parseDecimalString(String(args.amount)) : null;
-      const borrow = args.borrow_asset === "USDC" || args.borrow_asset === "USDT" ? args.borrow_asset : null;
+      const named = typeof args.borrow_asset === "string" ? normalizeAsset(args.borrow_asset) : null;
+      const borrow = named && isLendBorrow(named) ? named : null;
       const minHf = typeof args.min_hf === "number" && args.min_hf > copilotConfig.minHealthFactor ? args.min_hf : null;
       const intent: Intent = { lane: "lever", lever: { asset, leverage: multiple, borrow_asset: borrow, amount, min_hf: minHf } };
       if (!amountsAreTyped(intent, ctx.message, ctx.history)) return no(`the lever amount ${amount} is not a number the user typed; omit amount to lever the existing balance, or ask`);
@@ -335,8 +443,19 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
       return { ok: true, name, outcome: { kind: "intent", intent: { lane: "lever", lever: v.value } } };
     }
     case "propose_actions": {
-      const r = actionsToIntent(args.actions, args.report_health === true, ctx);
-      return r.ok ? { ok: true, name, outcome: { kind: "intent", intent: r.intent } } : no(r.reason);
+      const r = actionsToIntent(args.actions, ctx);
+      if (!r.ok) return no(r.reason);
+      // What could not be done is said, in plain words, next to what will be done.
+      const notes = (Array.isArray(args.not_done) ? args.not_done : [])
+        .slice(0, 3)
+        .map((n) => str(n, 240))
+        .filter((n): n is string => !!n);
+      for (const n of notes) {
+        if (!numbersGrounded(n, sources)) return no("a not_done note contains a figure that is not in any tool result");
+        if (/\b(?:tools?|function\s+calls?|system\s+prompt|instructions?|gemini|model)\b/i.test(n)) return no("not_done notes must not mention how you work inside (tools, instructions, the model); say what the user can't do and why");
+      }
+      const intent = notes.length && (r.intent.lane === "write" || r.intent.lane === "chain") ? { ...r.intent, notes: notes.map(plain) } : r.intent;
+      return { ok: true, name, outcome: { kind: "intent", intent } };
     }
     default:
       return no(`unknown decision ${name}`);

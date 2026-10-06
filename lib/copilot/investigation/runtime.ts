@@ -12,6 +12,7 @@ import { copilotConfig } from "../config";
 import { debugMcp } from "../debug";
 import { getLlm, LlmUnavailable } from "../vertex";
 import type { ReadCtx } from "../mcp-facts";
+import { calculate, CALCULATE_TOOL } from "./calculate";
 import { executeRead, READ_TOOL_NAMES, READ_TOOLS, SLOW_READS, type ReadOutput } from "./catalog";
 import { DECISION_NAMES, DECISION_TOOLS, parseDecision } from "./decision";
 import { systemPrompt, turnPrompt } from "./prompt";
@@ -57,6 +58,8 @@ export async function investigate(args: {
   ctx: ReadCtx;
   signal?: AbortSignal;
   limits?: Partial<InvestigationLimits>;
+  /** Clauses of the message the product refuses: never acted on; the rest of the message is handled. */
+  heldBack?: Array<{ text: string; reason: string }>;
 }): Promise<InvestigationResult> {
   const limits = { ...investigationLimits(), ...(args.limits ?? {}) };
   const started = investigationDeps.now();
@@ -96,8 +99,8 @@ export async function investigate(args: {
     try {
       res = await getLlm().generate({
         system,
-        user: turnPrompt({ message: args.message, history: args.history, evidence, rejections, turn, maxTurns: limits.maxTurns, readsLeft, mustDecide }),
-        tools: mustDecide ? DECISION_TOOLS : [...READ_TOOLS, ...DECISION_TOOLS],
+        user: turnPrompt({ message: args.message, history: args.history, evidence, rejections, turn, maxTurns: limits.maxTurns, readsLeft, mustDecide, heldBack: args.heldBack }),
+        tools: mustDecide ? DECISION_TOOLS : [...READ_TOOLS, CALCULATE_TOOL, ...DECISION_TOOLS],
         forceTool: true,
         // Full reasoning to understand the request and to correct a rejected decision; a turn that only turns gathered
         // evidence into a decision needs less, and answers faster.
@@ -122,7 +125,7 @@ export async function investigate(args: {
 
     const decision = calls.find((c) => DECISION_NAMES.has(c.name));
     if (decision) {
-      const parsed = parseDecision(decision.name, decision.args ?? {}, { message: args.message, history: args.history, evidence });
+      const parsed = parseDecision(decision.name, decision.args ?? {}, { message: args.message, history: args.history, evidence, heldBack: args.heldBack });
       if (parsed.ok) {
         trace.decision = decision.name;
         return done(parsed.outcome);
@@ -131,6 +134,17 @@ export async function investigate(args: {
       rejectedLastTurn = true;
       if (verbose()) console.info(`[copilot:investigate] rejected ${decision.name}: ${parsed.reason}`);
       continue;
+    }
+
+    // Arithmetic on figures already gathered: exact, done here, and added to the evidence like a read.
+    const calcs = calls.filter((c) => c.name === CALCULATE_TOOL.name).slice(0, 6);
+    for (const c of calcs) {
+      const a = (c.args ?? {}) as Record<string, unknown>;
+      const sources = [args.message, ...args.history.filter((h) => h.role === "user").map((h) => h.text), ...evidence.filter((o) => o.ok).map((o) => o.result)];
+      const out = calculate(a, sources);
+      debugMcp("investigate:calculate", a, out.ok, out.result);
+      evidence.push({ tool: CALCULATE_TOOL.name, args: a, ok: out.ok, result: compact(out.result, 1_000), ms: 0 });
+      trace.reads.push({ tool: CALCULATE_TOOL.name, args: a, ok: out.ok, ms: 0 });
     }
 
     // A read that failed (timed out, MCP hiccup) may be asked for again; one that succeeded may not.
@@ -145,7 +159,7 @@ export async function investigate(args: {
       })
       .slice(0, Math.max(0, readsLeft));
     if (!reads.length) {
-      rejections.push({ tool: calls[0].name, reason: "that read is already in the evidence or is not a known tool; decide, or read something new" });
+      if (!calcs.length) rejections.push({ tool: calls[0].name, reason: "that read is already in the evidence or is not a known tool; decide, or read something new" });
       continue;
     }
     const observed = await Promise.all(

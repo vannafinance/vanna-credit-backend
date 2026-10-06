@@ -4,7 +4,7 @@
  * claimed or sent twice even with several server instances.
  */
 
-import type { PlanView, Simulation, StepStatus, Venue } from "../types";
+import type { PlanView, Simulation, StepStatus, StructuredAnswer, Venue } from "../types";
 import type { Slots, StepSpec } from "../plan";
 
 export interface StoredTx {
@@ -34,6 +34,8 @@ export interface StoredStep extends StepSpec {
   resolved: string | null;
   /** Build attempts (a rebuilt step after an expired blockhash counts again). Never incremented by a send. */
   builds: number;
+  /** A read leg's answer, once it ran. */
+  answer?: StructuredAnswer | null;
 }
 
 export type WorkflowState = PlanView["state"];

@@ -12,8 +12,9 @@ import { humanizeFailure, humanizeMcpError } from "../explain";
 import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
-import { loadFreshPrice, loadHealth, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, type ReadCtx, type ReadOutcome } from "../mcp-facts";
-import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, RISK_INCREASING } from "../plan";
+import { loadFreshPrice, loadHealth, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, sizeToHealth, type ReadCtx, type ReadOutcome } from "../mcp-facts";
+import { hfTarget, MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, readLegOf, RISK_INCREASING } from "../plan";
+import { answerReadLeg } from "../investigation/plan-reads";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
 import { healFromEnvelope, isSwapBuild, MAX_SWAP_HEALS, STALE_FORK_SWAP, swapHealDeps } from "./swap-heal";
@@ -163,6 +164,16 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   if (healthR && healthR.kind === "no_account") return fail("no_account", "You don't have a margin account yet. Open one first.");
   if (healthR && healthR.kind !== "ok") return fail("unavailable", "I couldn't read your margin account just now, so I'm not building this.");
   const health = healthR && healthR.kind === "ok" ? healthR.health : null;
+
+  // "borrow down to a health factor of 1.5", "repay up to 2": sized now, from the account after every earlier step.
+  const hfGoal = hfTarget(amount);
+  if (hfGoal !== null) {
+    const sized = await sizeToHealth(op, asset as Asset, hfGoal, ctx, { hint: healthR ?? undefined, fromMargin: step.slots.source === "margin" });
+    if (!sized.ok) return fail("risk", sized.reason);
+    if ("skip" in sized) return { ok: true, skip: sized.skip };
+    amount = sized.amount;
+    notes.push(`Sized to leave your health factor at about ${hfGoal.toFixed(2)}: ${sized.amount} ${asset}.`);
+  }
 
   let usd = 0;
   let call: McpCall;
@@ -425,9 +436,13 @@ export async function buildStepTx(prepared: Prepared, ctx: ReadCtx): Promise<Bui
   }
 }
 
-/** Read legs ("report"): run inline once every write before them has settled. */
-export async function runReadStep(_step: StoredStep, ctx: ReadCtx): Promise<ReadOutcome> {
-  // The only read leg the planner emits is the closing health report.
+/**
+ * Read legs: run inline once every write before them has settled. A leg Gemini planned runs its own reads and is
+ * answered from them (`investigation/plan-reads.ts`); the health report runs the health read.
+ */
+export async function runReadStep(step: StoredStep, ctx: ReadCtx): Promise<ReadOutcome> {
+  const leg = readLegOf(step);
+  if (leg) return answerReadLeg(leg, ctx);
   return runRead({ kind: "health" }, ctx);
 }
 

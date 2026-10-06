@@ -57,7 +57,8 @@ const table: Array<[string, Expect]> = [
   ["swap 1 SOL to USDC", { lane: "write", op: "swap", asset: "SOL", to: "USDC", amount: exact("1"), source: "wallet" }],
   ["swap 10 USDC for JitoSOL in my margin account", { lane: "write", op: "swap", asset: "USDC", to: "JitoSOL", amount: exact("10"), source: "margin" }],
   ["farm 100 USDC on kamino", { lane: "write", op: "farm_deposit", asset: "USDC", amount: exact("100") }],
-  ["deposit 1 JitoSOL into kamino", { lane: "write", op: "farm_deposit", asset: "JitoSOL", amount: exact("1") }],
+  ["deposit 1 SOL into kamino", { lane: "write", op: "farm_deposit", asset: "SOL", amount: exact("1") }],
+  ["deposit 1 JitoSOL into kamino", { lane: "refuse" }],
   ["redeem my kUSDC", { lane: "write", op: "farm_redeem", asset: "USDC", amount: { kind: "all" } }],
   ["withdraw 5 USDC from kamino", { lane: "write", op: "farm_redeem", asset: "USDC", amount: exact("5") }],
   ["open a margin account", { lane: "write", op: "create_account" }],
@@ -168,7 +169,27 @@ describe("guards apply to every intent", () => {
     expect(validateWrite({ op: "earn_supply", asset: "JupSOL", amount: { kind: "all" } }).ok).toBe(false);
     expect(validateWrite({ op: "swap", asset: "SOL", to_asset: "SOL", amount: { kind: "all" } }).ok).toBe(false);
     expect(validateWrite({ op: "deposit", asset: "JitoSOL", amount: { kind: "all" } }).ok).toBe(true);
-    expect(validateWrite({ op: "deposit", asset: "NVDAx" as never, amount: { kind: "all" } }).ok).toBe(false);
+    expect(validateWrite({ op: "deposit", asset: "SPYx", amount: { kind: "all" } }).ok).toBe(false);
+  });
+
+  it("follows the app's token registry: new collateral tokens, USDT not depositable, delisted farms", () => {
+    const exact = (value: string) => ({ kind: "exact" as const, value });
+    expect(validateWrite({ op: "deposit", asset: "NVDAx", amount: exact("1.5") }).ok).toBe(true);
+    expect(validateWrite({ op: "deposit", asset: "JupUSD", amount: exact("10") }).ok).toBe(true);
+    expect(validateWrite({ op: "swap", asset: "NVDAx", to_asset: "AAPLx", amount: exact("1") }).ok).toBe(true);
+    expect(validateWrite({ op: "deposit", asset: "NVDAx", amount: exact("1.123456789") }).ok).toBe(false); // 8 decimals
+    expect(validateWrite({ op: "earn_supply", asset: "JupUSD", amount: exact("10") }).ok).toBe(false);
+    expect(validateWrite({ op: "borrow", asset: "TSLAx", amount: exact("1") }).ok).toBe(false);
+    const usdt = validateWrite({ op: "deposit", asset: "USDT", amount: exact("10") });
+    expect(usdt.ok).toBe(false);
+    expect(!usdt.ok && usdt.message).toMatch(/not offered as a margin collateral deposit/);
+    expect(validateWrite({ op: "withdraw", asset: "USDT", amount: { kind: "all" } }).ok).toBe(true);
+    expect(validateWrite({ op: "borrow", asset: "USDT", amount: exact("10") }).ok).toBe(true);
+    const farm = validateWrite({ op: "farm_deposit", asset: "JitoSOL", amount: exact("1") });
+    expect(!farm.ok && farm.message).toMatch(/closed to new supply/);
+    expect(validateWrite({ op: "farm_redeem", asset: "JitoSOL", amount: { kind: "all" } }).ok).toBe(true);
+    expect(validateWrite({ op: "farm_deposit", asset: "NVDAx", amount: exact("1") }).ok).toBe(false);
+    expect(validateWrite({ op: "farm_deposit", asset: "SOL", amount: exact("1") }).ok).toBe(true);
   });
 
   it("bounds leverage and refuses borrowing the asset being levered", () => {

@@ -19,6 +19,7 @@ import type { StructuredAnswer } from "./answer-schema";
 import { DOMAIN_FIREWALL_SYSTEM } from "./domain-firewall";
 import {
   PRODUCT_ASSETS,
+  LEND_BORROW_ASSETS,
   normalizeAsset,
   parseDecimalString,
   unofferedMessage,
@@ -28,6 +29,7 @@ import {
   type AmountSpec,
   type Intent,
   type ReadIntent,
+  type ChainStep,
   type WriteIntent,
   type WriteOp,
 } from "./intent";
@@ -208,7 +210,7 @@ export const ROUTER_TOOLS: LlmFunctionDecl[] = [
       properties: {
         asset: { type: "STRING", enum: ASSET_ENUM },
         leverage: { type: "NUMBER", description: "Multiple of equity, e.g. 2." },
-        borrow_asset: { type: "STRING", enum: ["USDC", "USDT"], description: "Only if the user named it." },
+        borrow_asset: { type: "STRING", enum: [...LEND_BORROW_ASSETS], description: "Only if the user named it." },
         amount: { type: "STRING", description: "Units of the asset to lever, only if the user gave a number." },
         min_hf: { type: "NUMBER", description: "Only if the user gave a health-factor floor." },
       },
@@ -334,7 +336,7 @@ export function intentFromCall(name: string, a: Record<string, unknown>): Intent
     }
     if (name === "action_chain") {
       const raw = Array.isArray(a.steps) ? a.steps : [];
-      const steps: Array<{ write: WriteIntent } | { report: true }> = [];
+      const steps: ChainStep[] = [];
       for (const r of raw.slice(0, 8)) {
         if (!r || typeof r !== "object") return { lane: "unknown" };
         const o = r as Record<string, unknown>;
@@ -358,7 +360,8 @@ export function intentFromCall(name: string, a: Record<string, unknown>): Intent
       if (!asset || !Number.isFinite(leverage)) return { lane: "unknown" };
       const amount = typeof a.amount === "string" ? parseDecimalString(a.amount) : typeof a.amount === "number" ? parseDecimalString(String(a.amount)) : null;
       const minHf = typeof a.min_hf === "number" && a.min_hf > 1 ? a.min_hf : null;
-      const borrow = a.borrow_asset === "USDC" || a.borrow_asset === "USDT" ? a.borrow_asset : null;
+      const namedBorrow = typeof a.borrow_asset === "string" ? normalizeAsset(a.borrow_asset) : null;
+      const borrow = namedBorrow && LEND_BORROW_ASSETS.includes(namedBorrow) ? namedBorrow : null;
       const v = validateLever({ asset, leverage, borrow_asset: borrow, amount, min_hf: minHf });
       return v.ok ? { lane: "lever", lever: v.value } : { lane: "refuse", reason: "guard", message: v.message };
     }
@@ -367,7 +370,7 @@ export function intentFromCall(name: string, a: Record<string, unknown>): Intent
       return q ? { lane: "ask", question: q } : { lane: "unknown" };
     }
     if (name === "decline") {
-      return { lane: "refuse", reason: "model_decline", message: "I can only help with SOL, USDC, USDT, JitoSOL and JupSOL on Vanna: Earn, margin, swaps and Kamino farm." };
+      return { lane: "refuse", reason: "model_decline", message: `I can only help with ${PRODUCT_ASSETS.join(", ")} on Vanna: Earn, margin, swaps and Kamino farm.` };
     }
   } catch {
     /* fall through */

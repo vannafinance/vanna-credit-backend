@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@/hooks/use-wallet";
 import { useMarginAccountInfoStore } from "@/store/margin-account-info-store";
 import { HEALTH_FACTOR_INFINITY_SENTINEL } from "@/lib/margin-health";
@@ -39,6 +39,8 @@ function shortAddress(a: string): string {
 
 type ServerState = "checking" | "ok" | "degraded" | "unreachable";
 
+/** Eight lines of the prompt box (21px line height) plus its 10px top and bottom padding. */
+const COMPOSER_MAX_HEIGHT = 8 * 21 + 20;
 export function CopilotWorkspace() {
   const { address, walletName, connectWallet } = useWallet();
   const copilot = useCopilot();
@@ -48,6 +50,17 @@ export function CopilotWorkspace() {
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [server, setServer] = useState<ServerState>("checking");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The prompt box grows with what is typed, like any chat composer, up to about eight lines; only a longer prompt
+  // scrolls inside it (with a thin scrollbar). Sending clears the text and the box shrinks back to one line.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const full = el.scrollHeight;
+    el.style.height = `${Math.min(full, COMPOSER_MAX_HEIGHT)}px`;
+    el.style.overflowY = full > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+  }, [input]);
 
   // Server status for the rail chip. No probe: the route's cheap form only reports configuration.
   useEffect(() => {

@@ -1,0 +1,8 @@
+{
+  "category": "16_plan_reads_executed",
+  "group": "exec",
+  "prompts": [
+    { "id": "rdx-001", "prompt": "Deposit 10 USDC, 10 USDT, and 0.1 SOL into the lending pool, then show my total supplied balance and APY.", "kinds": ["plan_preview"], "ops": ["earn_supply", "earn_supply", "earn_supply", "report"], "execute": true, "readAnswerMatch": ["APR|APY|%"], "why": "executed on the fork: the read step answers with the balances and rates after the supplies" },
+    { "id": "rdx-002", "prompt": "show my Earn balances, then supply 5 USDC, then show my Earn balances again", "kinds": ["plan_preview"], "ops": ["report", "earn_supply", "report"], "execute": true, "readAnswerMatch": ["USDC"], "why": "executed: a read before and after the supply, each answered at its own step" }
+  ]
+}

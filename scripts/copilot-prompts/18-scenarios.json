@@ -1,0 +1,14 @@
+{
+  "category": "18_scenarios_and_partial",
+  "group": "acct",
+  "prompts": [
+    { "id": "sc-001", "prompt": "Deposit 100 USDC as collateral, borrow SOL at 2x leverage, farm it on Kamino, then simulate what happens to my health factor if SOL drops by 10%.", "kinds": ["plan_preview", "blocked"], "ops": ["deposit", "borrow", "farm_deposit", "report"], "readTools": ["simulate"], "forbid": ["cannot simulate", "can't simulate"], "why": "a price-shock scenario after the plan is a simulate read step; the transactions still go ahead" },
+    { "id": "sc-002", "prompt": "what happens to my health factor if SOL drops 30%?", "kinds": ["answer"], "forbid": ["cannot simulate", "can't simulate", "not able to simulate"], "why": "a price shock is simulated on the protocol's maths" },
+    { "id": "sc-003", "prompt": "if I borrowed 100 USDC and SOL then fell 20%, would I be close to liquidation?", "kinds": ["answer"], "forbid": ["cannot simulate", "can't simulate"], "why": "a hypothetical borrow plus a price move" },
+    { "id": "sc-004", "prompt": "how far can SOL fall before my account gets liquidated if I borrow 200 USDC?", "kinds": ["answer"], "match": ["%|\\$"], "why": "the drop to liquidation after a hypothetical borrow" },
+    { "id": "sc-005", "prompt": "deposit 100 USDC as collateral and short SOL", "kinds": ["preview", "plan_preview", "blocked"], "plan": { "steps": [{ "op": "deposit", "asset": "USDC" }] }, "match": ["short"], "why": "the short is held back with the reason; the deposit goes ahead" },
+    { "id": "sc-006", "prompt": "supply 50 USDC and remind me tomorrow to check the APY", "kinds": ["preview", "plan_preview", "blocked"], "plan": { "steps": [{ "op": "earn_supply", "asset": "USDC", "amount": "50" }] }, "match": ["Not done|remind|later|right now"], "why": "the reminder is held back; the supply goes ahead" },
+    { "id": "sc-007", "prompt": "sell 1 SOL when it hits 200 and supply 20 USDC", "kinds": ["preview", "plan_preview", "blocked"], "ops": ["earn_supply"], "match": ["Not done"], "why": "the conditional sale is never turned into a sale now; the supply goes ahead" },
+    { "id": "sc-008", "prompt": "when SOL drops below 100, sell 1 SOL", "kinds": ["blocked"], "why": "a message that is only a conditional order is still refused whole" }
+  ]
+}

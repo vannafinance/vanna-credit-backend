@@ -13,6 +13,7 @@ import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts";
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
 import type { LlmFunctionDecl } from "../vertex";
+import { SIM_OPS, simulate, simulateArgsProblem } from "./simulate";
 
 const ASSETS = [...PRODUCT_ASSETS] as string[];
 const LEND_ASSETS = [...LEND_BORROW_ASSETS] as string[];
@@ -24,7 +25,7 @@ const assetList = (enumValues: string[], description: string) => ({ type: "ARRAY
 export const READ_TOOLS: LlmFunctionDecl[] = [
   { name: "get_account_health", description: "The user's margin account: health factor, total collateral and debt in USD, each collateral and debt position with its oracle price, liquidation status. Says when the user has no margin account." },
   { name: "get_positions", description: "Everything the user holds in Vanna: margin collateral and debt, Earn pool deposits, Kamino farm receipts." },
-  { name: "get_wallet_balances", description: "The user's wallet token balances (SOL, USDC, USDT, JitoSOL, JupSOL) and Earn shares. Use before planning anything that spends from the wallet." },
+  { name: "get_wallet_balances", description: `The user's wallet token balances (${PRODUCT_ASSETS.join(", ")}) and Earn shares. Use before planning anything that spends from the wallet.` },
   { name: "get_prices", description: "Oracle USD prices the protocol itself uses.", parameters: obj({ assets: assetList(ASSETS, "Assets to price.") }, ["assets"]) },
   { name: "get_pool_rates", description: "Vanna Earn / borrow pool figures per asset: supply APR, borrow APR, utilization, liquidity available to borrow.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools to read.") }, ["assets"]) },
   { name: "get_earn_positions", description: "The user's Earn pool deposits: shares and the amount redeemable now, per pool. Fast.", parameters: obj({ assets: assetList(LEND_ASSETS, "Pools; empty means all.") }) },
@@ -56,6 +57,26 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
   },
   { name: "get_liquidation_risk", description: "Whether the account is liquidatable and how far prices can fall before it is." },
   {
+    name: "simulate",
+    description:
+      "The account's health under any scenario: price moves on any assets (\"SOL drops 10%\": percent -10), hypothetical changes (deposit, withdraw, borrow, repay, swap, farm), or both; changes apply in order, then the price moves. Returns collateral, debt and health factor now, after the changes and after the price moves, whether it would be liquidatable or below the Copilot floor, and how far each moved asset could fall (or rise) before liquidation. Uses the protocol's health maths on live oracle prices; nothing is built. Liquid-staking tokens (JitoSOL, JupSOL) have their own prices: move them too if the user means SOL in general. Inside a plan, a report leg with simulate runs on the account after the earlier steps, so its changes list only what has not happened yet.",
+    parameters: obj({
+      price_changes: { type: "ARRAY", items: obj({ asset: { type: "STRING", enum: ASSETS }, percent: { type: "NUMBER", description: "-10 = falls 10%, 25 = rises 25%." } }, ["asset", "percent"]), description: "Price moves to apply." },
+      changes: {
+        type: "ARRAY",
+        items: obj({
+          op: { type: "STRING", enum: [...SIM_OPS] },
+          asset: { type: "STRING", enum: ASSETS },
+          to_asset: { type: "STRING", enum: ASSETS, description: "swap only." },
+          amount: { type: "STRING", description: "Token units, or \"all\"." },
+          usd: { type: "STRING", description: "A dollar value instead of units." },
+          source: { type: "STRING", enum: ["wallet", "margin"], description: "repay only: margin = paid from the margin balance." },
+        }, ["op", "asset"]),
+        description: "Hypothetical position changes, in order.",
+      },
+    }),
+  },
+  {
     name: "get_swap_quote",
     description: "A live Jupiter quote: output amount and minimum received at the default slippage.",
     parameters: obj({ from: { type: "STRING", enum: ASSETS }, to: { type: "STRING", enum: ASSETS }, amount: { type: "STRING", description: "Decimal amount of `from`." } }, ["from", "to", "amount"]),
@@ -76,6 +97,31 @@ const assetArg = (v: unknown): Asset | null => (typeof v === "string" ? normaliz
 const decimalArg = (v: unknown): string | null => (typeof v === "string" ? parseDecimalString(v.trim()) : typeof v === "number" ? parseDecimalString(String(v)) : null);
 
 export type ReadOutput = { ok: boolean; result: unknown };
+
+/**
+ * Why these arguments can't run this read tool, or null when they can. The same checks `executeRead` applies, done up
+ * front for a read the model puts inside a plan (it runs later, when nobody can correct it).
+ */
+export function readArgsProblem(tool: string, args: Record<string, unknown>): string | null {
+  if (!READ_TOOL_NAMES.has(tool)) return `unknown read tool ${tool}`;
+  switch (tool) {
+    case "get_prices":
+      return assetsArg(args.assets, ASSETS).length ? null : "get_prices needs at least one product asset in assets";
+    case "what_if":
+      return assetArg(args.asset) && (decimalArg(args.amount) || (typeof args.target_hf === "number" && args.target_hf > 1)) ? null : "what_if needs an asset and either an amount or a target_hf";
+    case "get_leverage_capacity":
+      return assetArg(args.asset) ? null : "get_leverage_capacity needs a product asset";
+    case "get_swap_quote": {
+      const from = assetArg(args.from);
+      const to = assetArg(args.to);
+      return from && to && from !== to && decimalArg(args.amount) ? null : "get_swap_quote needs two different product assets and a decimal amount";
+    }
+    case "simulate":
+      return simulateArgsProblem(args);
+    default:
+      return null;
+  }
+}
 
 async function viaRead(read: ReadIntent, ctx: ReadCtx): Promise<ReadOutput> {
   const out = await runRead(read, ctx);
@@ -160,6 +206,8 @@ export async function executeRead(tool: string, args: Record<string, unknown>, c
     }
     case "get_liquidation_risk":
       return viaRead({ kind: "liquidation_risk" }, ctx);
+    case "simulate":
+      return simulate(args, ctx);
     case "get_swap_quote": {
       const from = assetArg(args.from);
       const to = assetArg(args.to);

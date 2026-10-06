@@ -25,15 +25,17 @@ import {
   type AskOption,
   type Intent,
   type ReadIntent,
+  type ChainStep,
   type WriteIntent,
   type WriteOp,
   type ConceptTopic,
   type ParsedClause,
 } from "./intent";
-import { CONDITIONAL_BASE_MESSAGE, detectConditional, immediateRemainder } from "./conditional";
+import { CONDITIONAL_BASE_MESSAGE, detectConditional, immediateRemainder, withoutHealthTargets } from "./conditional";
 import { LlmUnavailable, llmConfigured, routeWithModel } from "./vertex";
 
-const QUESTION_OPENER = /^(?:what|what's|whats|how|which|show|list|tell|give|is|are|do|does|where|why|when|who)\b/;
+/** "when" opens a question only as "when is / will / does ..."; "when SOL drops below 100, sell" is an order. */
+const QUESTION_OPENER = /^(?:what|what's|whats|how|which|show|list|tell|give|is|are|do|does|where|why|when(?=\s+(?:is|was|are|were|do|does|did|will|would|can|could|should)\b)|who)\b/;
 /** A polite or first-person request is still a command even though it is phrased as a question. */
 const POLITE = /^(?:(?:can|could|would|will)\s+you|please|pls|i\s+(?:want|wanna|would\s+like|need)\s+to|let'?s|go\s+ahead)\b/;
 /** "can I ...", "what if ...", "without getting liquidated": a question about an outcome, never an order. */
@@ -156,7 +158,8 @@ function deferredRefusal(nowVersion: string): Intent {
  * about a condition ("what happens if SOL drops 20%?") is not an order and passes.
  */
 export function conditionalRefusal(message: string): string | null {
-  const raw = message.trim();
+  // "borrow until my health factor is 1.5" sizes an action done now; it is not a condition to wait for.
+  const raw = withoutHealthTargets(message.trim());
   const lower = raw.toLowerCase().replace(/[’`]/g, "'");
   if (!lower) return null;
   const questionish = QUESTION_OPENER.test(lower) || lower.endsWith("?") || HYPOTHETICAL.test(lower);
@@ -518,7 +521,7 @@ export function keywordRoute(message: string): Intent {
   if (asLever) return routeClause(asLever);
 
   const marginFlow = clauses.some((c) => MARGIN_FLOW.test(c.toLowerCase()));
-  const steps: Array<{ write: WriteIntent } | { report: true }> = [];
+  const steps: ChainStep[] = [];
   // A step that needs a choice ("deposit where?") must not drop the rest of the plan when answered.
   let pending: { index: number; question: string; options: AskOption[] } | null = null;
   let prev: WriteIntent | null = null;
@@ -575,7 +578,8 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
   };
   const amountOk = (a: WriteIntent["amount"] | undefined) => {
     if (!a) return true;
-    if (a.kind === "exact" || a.kind === "out") return typedAs(a.value);
+    if (a.kind === "exact" || a.kind === "out" || a.kind === "usd") return typedAs(a.value);
+    if (a.kind === "hf") return typedAs(String(a.target));
     if (a.kind === "lev" && a.base) return typedAs(a.base.value);
     return true;
   };

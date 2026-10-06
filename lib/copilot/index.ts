@@ -24,11 +24,29 @@ import { copilotConfig } from "./config";
 import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount, fmtUsd } from "./explain";
-import type { AmountSpec, Asset, Intent, WriteIntent } from "./intent";
+import type { AmountSpec, Asset, ChainStep, Intent, WriteIntent } from "./intent";
+import { isDepositable } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
 import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
-import { MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
+import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
+import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
+import { policyClauses } from "./conditional";
+import { productRefusal } from "./domain-firewall";
+
+/**
+ * Clauses of a message the product refuses, each with the product's reason, when other clauses ask for something it
+ * does. Empty when nothing is refused, or when everything is (then the whole message is refused as before).
+ */
+function heldBackParts(message: string): Array<{ text: string; reason: string }> {
+  const clauses = policyClauses(message);
+  if (clauses.length < 2) return [];
+  const held = clauses.flatMap((c) => {
+    const reason = conditionalRefusal(c) ?? productRefusal(c);
+    return reason ? [{ text: c, reason: reason.replace(/\s*If you want it now, tell me:.*$/, "") }] : [];
+  });
+  return held.length && held.length < clauses.length ? held : [];
+}
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -95,23 +113,38 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
       source = "clarify";
     } else {
       const modelDecides = copilotConfig.investigationEnabled && llmConfigured();
-      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides });
+      // Parts the product refuses (a conditional or scheduled order, a short, multi-asset liquidity) are held back clause
+      // by clause when the rest of the message asks for something else, so one refused part never blocks the rest.
+      const held = modelDecides ? heldBackParts(message) : [];
+      const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides, heldBack: held.length > 0 });
       if (!fw.allow) return { kind: fw.kind === "empty" ? "clarification" : "blocked", message: fw.message, ...base };
       let decided: Intent | null = null;
       if (modelDecides) {
-        // Conditional, scheduled and standing orders are product policy: refused in the product's words, before Gemini.
-        const conditional = conditionalRefusal(message);
-        if (conditional) return { kind: "blocked", message: conditional, ...base };
+        // Conditional, scheduled and standing orders are product policy: refused in the product's words, before Gemini,
+        // unless only part of the message asks for one (held back above).
+        if (!held.length) {
+          const conditional = conditionalRefusal(message);
+          if (conditional) return { kind: "blocked", message: conditional, ...base };
+        }
         // Stage 2: Gemini investigates with read tools and decides. Its decision is already guarded (decision.ts).
-        const inv = await investigate({ message, history, ctx, signal });
+        const inv = await investigate({ message, history, ctx, signal, heldBack: held });
         tokens += inv.trace.tokens;
         debugNote("investigation", inv.trace);
+        const heldNotes = held.map((h) => `Not done: "${h.text}". ${h.reason}`);
         if (inv.outcome.kind === "answer") {
-          return { kind: "answer", message: answerToText(inv.outcome.answer), answer: inv.outcome.answer, ...base };
+          const answer = heldNotes.length ? { ...inv.outcome.answer, note: [inv.outcome.answer.note, ...heldNotes].filter(Boolean).join(" ") } : inv.outcome.answer;
+          return { kind: "answer", message: answerToText(answer), answer, ...base };
         }
         if (inv.outcome.kind === "intent") {
           decided = inv.outcome.intent;
+          // What was held back is always said next to the plan, whatever the model wrote.
+          if (heldNotes.length && (decided.lane === "write" || decided.lane === "chain")) decided = { ...decided, notes: [...heldNotes, ...(decided.notes ?? [])] };
+          else if (heldNotes.length && decided.lane === "ask") decided = { ...decided, question: `${decided.question} (${heldNotes.join(" ")})` };
           source = "model";
+        }
+        if (!decided && held.length) {
+          // Without the model the message can't be split safely: refuse it whole, as before.
+          return { kind: "blocked", message: held[0].reason, ...base };
         }
       }
       if (decided) {
@@ -192,11 +225,11 @@ async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
       if (t.surface === "assistant") {
         return { kind: "blocked", message: "The page guide only explains and reads. Open the Copilot workspace to prepare a transaction.", ...base };
       }
-      return handleWrite([intent.write], t);
+      return handleWrite([intent.write], t, intent.notes);
     }
     case "chain": {
       if (t.surface === "assistant") return { kind: "blocked", message: "The page guide only explains and reads. Open the Copilot workspace to prepare transactions.", ...base };
-      return handleWrite(intent.steps, t);
+      return handleWrite(intent.steps, t, intent.notes);
     }
     case "lever":
     case "unwind": {
@@ -224,22 +257,27 @@ async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ 
   if (a.kind === "out") return { ok: true, amount: `${OUT_PREFIX}${a.value}` };
   if (a.kind === "prev") return { ok: false, message: "That amount depends on an earlier step. Say it in the same request." };
   if (a.kind === "lev") return { ok: false, message: "A leverage target is sized together with the deposit it applies to. Say it in one request, for example: deposit 100 USDC in margin and borrow SOL at 3x." };
+  if (a.kind === "hf") return { ok: true, amount: `${HF_PREFIX}${a.target}` };
+  if (a.kind === "usd") return { ok: false, message: "That dollar amount couldn't be converted." };
   if (index > 0) return { ok: false, message: "A percentage can only be used on the first step, because later amounts depend on earlier steps. Give an exact amount or say \"all\"." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
   const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.source === "margin" }, t.ctx);
   return r.ok ? { ok: true, amount: r.amount } : { ok: false, message: r.message };
 }
 
-async function handleWrite(items: Array<{ write: WriteIntent } | { report: true } | WriteIntent>, t: Turn): Promise<Reply> {
+async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes: string[] = []): Promise<Reply> {
   const { base } = t;
-  const writes = items.map((i) => ("write" in i ? i.write : "report" in i ? null : i));
+  const writes = items.map((i) => ("write" in i ? i.write : "report" in i || "read" in i ? null : i));
   const steps: StepSpec[] = [];
-  const extras: string[] = [];
+  // Parts of the request that can't be done lead the plan's notes, so the user sees them before approving.
+  const extras: string[] = [...notes];
   let k = 0;
   for (let i = 0; i < items.length; i++) {
     const w = writes[i];
     if (!w) {
-      steps.push(reportStep());
+      const item = items[i];
+      // Something the user asked to see at this point: it runs when the plan reaches it.
+      steps.push("read" in item ? readLegStep(item.read) : reportStep());
       continue;
     }
     if (w.op !== "create_account" && w.op !== "close_account" && !w.amount) {
@@ -257,8 +295,14 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
         prior.amount = sized.amount;
         value = sized.amount;
       }
-      if (!prior || !value || value === "all" || value.startsWith(OUT_PREFIX)) {
+      if (!prior || !value || value === "all" || value.startsWith(OUT_PREFIX) || value.startsWith(HF_PREFIX)) {
         return { kind: "clarification", message: `How much${w.asset ? ` ${w.asset}` : ""} should the step after "${prior ? labelFor(prior) : "the first step"}" use? Its amount is only known once it runs.`, ...base };
+      }
+      if (w.amount.pct !== undefined && w.amount.pct < 100) {
+        // "swap half of it": that share of the earlier step's exact amount, rounded down to the token's decimals.
+        const share = floorDecimals((Number(value) * w.amount.pct) / 100, tokenDecimals(w.asset ?? prior.asset ?? ""));
+        if (!(Number(share) > 0)) return { kind: "clarification", message: `${w.amount.pct}% of ${value} is too small to use. Give an amount instead.`, ...base };
+        value = share;
       }
       steps.push(stepFromWrite(w, value));
       k++;
@@ -270,6 +314,17 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
       if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
       steps.push(stepFromWrite(w, sized.amount));
       extras.push(...sized.notes);
+      k++;
+      continue;
+    }
+    if (w.amount?.kind === "usd" && w.asset) {
+      // "$100 worth of SOL": converted once, at the protocol's oracle price, so the plan carries an exact amount.
+      const price = await loadFreshPrice(w.asset, t.ctx);
+      if (!price) return { kind: "unavailable", message: `The ${w.asset} price is unavailable right now, so I can't turn $${w.amount.value} into ${w.asset}.`, ...base };
+      const units = usdToUnits(Number(w.amount.value), price.usd, w.asset);
+      if (!(Number(units) > 0)) return { kind: "clarification", message: `$${w.amount.value} is less than the smallest ${w.asset} amount. Give a larger amount.`, ...base };
+      steps.push(stepFromWrite(w, units));
+      extras.push(`$${w.amount.value} of ${w.asset} at the oracle price of ${fmtUsd(price.usd)} is ${units} ${w.asset}.`);
       k++;
       continue;
     }
@@ -301,6 +356,13 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
       const held = h.health.collateral.find((r) => r.symbol === firstMargin.asset)?.units ?? 0;
       const short = Number(firstMargin.amount) - held;
       if (short > 1e-9) {
+        if (!isDepositable(firstMargin.asset)) {
+          return {
+            kind: "blocked",
+            message: `Kamino farm supplies from your margin balance, which holds ${fmtAmount(held, firstMargin.asset)}. ${firstMargin.asset} can't be deposited as margin collateral, so I can't top it up from your wallet; borrow or swap into ${firstMargin.asset} inside the margin account first, or farm a smaller amount.`,
+            ...base,
+          };
+        }
         const spend = await walletSpendable(firstMargin.asset, t.ctx);
         if (spend === null || spend + 1e-9 < short) {
           return { kind: "blocked", message: `Kamino farm supplies from your margin balance, which holds ${fmtAmount(held, firstMargin.asset)}. Your wallet can't cover the ${fmtAmount(short, firstMargin.asset)} difference.`, ...base };
@@ -311,7 +373,7 @@ async function handleWrite(items: Array<{ write: WriteIntent } | { report: true 
       }
     }
   }
-  if (steps.length > MAX_PLAN_STEPS) return { kind: "blocked", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.`, ...base };
+  if (steps.filter((s) => s.kind === "write").length > MAX_PLAN_STEPS) return { kind: "blocked", message: `That is more than ${MAX_PLAN_STEPS} steps. Ask for fewer at a time.`, ...base };
 
   const writeSteps = steps.filter((s) => s.kind === "write");
   if (steps.length === 1 && writeSteps.length === 1) return singleAction(steps[0], extras, t);

@@ -1,3 +1,10 @@
+import { isFarmListed, KAMINO_RECEIPTS } from "../solana/kamino";
+import { findToken, TOKENS } from "../solana/tokens";
+import { copilotConfig } from "./config";
+
+/** The protocol's liquidation line (program `risk_engine.rs`; also `risk.ts` `LIQUIDATION_HF`). */
+const LIQUIDATION_HF_LINE = 1.1;
+
 /**
  * Intents: what a user sentence means, as typed data.
  *
@@ -8,37 +15,48 @@
  */
 
 // ── Product assets ───────────────────────────────────────────────────────────
+// All derived from the app's token registry (`lib/solana/tokens.ts`), the Kamino receipts (`lib/solana/kamino.ts`)
+// and the farm listing (`isFarmListed`, also in kamino.ts), so the Copilot offers exactly what the website offers.
 
-/** Lend + borrow + collateral. */
-export const LEND_BORROW_ASSETS = ["SOL", "USDC", "USDT"] as const;
-/** Collateral, swap and Kamino farm only (no Vanna lending pool). */
-export const COLLATERAL_ONLY_ASSETS = ["JitoSOL", "JupSOL"] as const;
-export const PRODUCT_ASSETS = [...LEND_BORROW_ASSETS, ...COLLATERAL_ONLY_ASSETS] as const;
-export type Asset = (typeof PRODUCT_ASSETS)[number];
+/** A product asset's UI symbol (a registry symbol). */
+export type Asset = string;
+
+/** Every token the app lists, in registry order. */
+export const PRODUCT_ASSETS: readonly Asset[] = TOKENS.map((t) => t.symbol);
+/** Lend + borrow + collateral (`lendable` in the registry: has an Earn pool and can be borrowed). */
+export const LEND_BORROW_ASSETS: readonly Asset[] = TOKENS.filter((t) => t.lendable).map((t) => t.symbol);
+/** Collateral and swap only (no Vanna lending pool). */
+export const COLLATERAL_ONLY_ASSETS: readonly Asset[] = TOKENS.filter((t) => !t.lendable).map((t) => t.symbol);
+/** Offered as a margin collateral deposit (`depositable`); the rest can still be held, swapped and withdrawn. */
+export const DEPOSIT_ASSETS: readonly Asset[] = TOKENS.filter((t) => t.depositable).map((t) => t.symbol);
+/** Underlyings with a Kamino farm open to new supply. */
+export const FARM_ASSETS: readonly Asset[] = KAMINO_RECEIPTS.map((r) => r.underlying).filter((s) => isFarmListed(s));
 
 /** Kamino receipt -> underlying. Receipts are produced by farming; users redeem them, never buy them. */
-export const RECEIPT_TO_UNDERLYING: Record<string, Asset> = {
-  ksol: "SOL",
-  kusdc: "USDC",
-  kusdt: "USDT",
-  kjitosol: "JitoSOL",
-  kjupsol: "JupSOL",
-};
+export const RECEIPT_TO_UNDERLYING: Record<string, Asset> = Object.fromEntries(
+  KAMINO_RECEIPTS.map((r) => [r.symbol.toLowerCase(), r.underlying]),
+);
 
 const ASSET_ALIASES: Record<string, Asset> = {
-  sol: "SOL",
+  ...Object.fromEntries(TOKENS.map((t) => [t.symbol.toLowerCase(), t.symbol])),
   wsol: "SOL",
-  usdc: "USDC",
-  usdt: "USDT",
-  jitosol: "JitoSOL",
-  jupsol: "JupSOL",
 };
 
-/** Assets the program may register but the product deliberately does not offer. Named so the refusal can say so. */
-const KNOWN_UNOFFERED = new Set([
-  "jupusd", "nvdax", "tslax", "googlx", "aaplx", "spyx", "anthropic", "openai", "xstocks", "prestocks",
-  "bonk", "wif", "eth", "btc", "weth", "wbtc", "usde", "dai", "pyusd", "msol", "bsol",
-]);
+/** Well-known tokens outside the product. Named so the refusal can say so. */
+const KNOWN_UNOFFERED = new Set(
+  ["spyx", "anthropic", "openai", "prestocks", "bonk", "wif", "eth", "btc", "weth", "wbtc", "usde", "dai", "pyusd", "msol", "bsol"].filter(
+    (w) => !ASSET_ALIASES[w],
+  ),
+);
+
+export function isDepositable(a: string): boolean {
+  return DEPOSIT_ASSETS.includes(a);
+}
+
+/** One line naming the product's assets by role, for refusals and the model's instructions. */
+export function assetRoles(): string {
+  return `${LEND_BORROW_ASSETS.join(", ")} (lend and borrow), plus ${COLLATERAL_ONLY_ASSETS.join(", ")} (margin collateral and swap)`;
+}
 
 /** Words that can follow an amount without being an asset ("100 worth of", "5 to"). */
 const AMOUNT_FILLER = new Set([
@@ -79,8 +97,18 @@ export type AmountSpec =
        */
       base?: { asset: Asset; value: string };
     }
-  /** "swap the borrowed USDC": the exact amount the previous step of the same plan was sized to. */
-  | { kind: "prev" };
+  /**
+   * "swap the borrowed USDC": the exact amount the previous step of the same plan was sized to; with `pct`, that share
+   * of it ("swap half of it").
+   */
+  | { kind: "prev"; pct?: number }
+  /** "$100 worth of SOL": a USD value the user typed, converted to units at the oracle price when the plan is drawn. */
+  | { kind: "usd"; value: string }
+  /**
+   * "borrow until my health factor is 1.5", "repay enough to get back to 2": sized when the step is built, from the account
+   * as it is then, so the step leaves the health factor at `target` (borrow, withdraw: down to it; repay, deposit: up to it).
+   */
+  | { kind: "hf"; target: number };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
@@ -92,9 +120,12 @@ export interface AmountIssue {
   message: string;
 }
 
-/** Decimals of the on-chain token (program registry: SOL/JitoSOL/JupSOL 9, USDC/USDT 6). */
+/** Decimals of the token, from the registry (Kamino receipts 6, like the app); 9 when unknown. */
 export function assetDecimals(symbol: string): number {
-  return symbol === "USDC" || symbol === "USDT" ? 6 : 9;
+  const token = findToken(symbol);
+  if (token) return token.decimals;
+  if (RECEIPT_TO_UNDERLYING[symbol.trim().toLowerCase()]) return 6;
+  return 9;
 }
 
 /** Exact decimal string for (intPart.fracPart) x 10^exp, no float involved. */
@@ -210,8 +241,8 @@ export type ConceptTopic = "health_factor" | "liquidation" | "leverage" | "colla
 export interface LeverIntent {
   asset: Asset;
   leverage: number;
-  /** Stable asset borrowed to fund the extra exposure; null = ask. */
-  borrow_asset: "USDC" | "USDT" | null;
+  /** Lendable asset borrowed to fund the extra exposure (a stable, usually); null = ask. */
+  borrow_asset: Asset | null;
   /** Units of `asset` the user wants to lever; null = their existing margin balance of it. */
   amount: string | null;
   min_hf?: number | null;
@@ -231,10 +262,35 @@ export interface AskOption {
   apply: Intent;
 }
 
+/** One read tool call inside a plan's read leg: a catalogue tool name and its arguments. */
+export interface ReadCall {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * Something the user asked to SEE at a point of their plan ("then show my balance and APY"): the read tools that answer
+ * it run when the plan reaches this leg, on live data, so it reflects every transaction before it.
+ */
+export interface ReadLeg {
+  /** The user's own words asking for it. */
+  question: string;
+  /** Short title shown on the plan card. */
+  label: string;
+  reads: ReadCall[];
+}
+
+/**
+ * A step of a chain: a transaction, a read leg, or `report` (the account's health report, used by the keyword router and
+ * the leverage strategy).
+ */
+export type ChainStep = { write: WriteIntent } | { read: ReadLeg } | { report: true };
+
 export type Intent =
   | { lane: "read"; read: ReadIntent }
-  | { lane: "write"; write: WriteIntent }
-  | { lane: "chain"; steps: Array<{ write: WriteIntent } | { report: true }> }
+  /** `notes`: parts of the request that can't be done, with why; shown with the plan, which goes ahead with the rest. */
+  | { lane: "write"; write: WriteIntent; notes?: string[] }
+  | { lane: "chain"; steps: ChainStep[]; notes?: string[] }
   | { lane: "lever"; lever: LeverIntent }
   | { lane: "unwind"; unwind: UnwindIntent }
   | { lane: "ask"; question: string; options?: AskOption[] }
@@ -262,7 +318,7 @@ const OP_ASSETS: Record<WriteOp, "none" | "lend" | "any"> = {
 };
 
 export function unofferedMessage(asset: string): string {
-  return `${asset} is not part of the Vanna Copilot product. I work with SOL, USDC and USDT (lend and borrow), plus JitoSOL and JupSOL (collateral, swap and Kamino farm).`;
+  return `${asset} is not part of the Vanna Copilot product. I work with ${assetRoles()}.`;
 }
 
 /** Null when `amount` fits the token's decimals; otherwise the refusal. Rounding a user's amount would silently change it. */
@@ -281,10 +337,21 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
     if (!w.asset) return fail("Which asset?");
     if (!(PRODUCT_ASSETS as readonly string[]).includes(w.asset)) return fail(unofferedMessage(String(w.asset)));
     if (rule === "lend" && !isLendBorrow(w.asset)) {
-      return fail(
-        `${w.asset} can be used as collateral, swapped, or farmed on Kamino, but it has no Vanna lending pool, so it cannot be lent or borrowed.`,
-      );
+      return fail(`${w.asset} can be used as margin collateral and swapped, but it has no Vanna lending pool, so it cannot be lent or borrowed.`);
     }
+  }
+  if (w.op === "deposit" && w.asset && !isDepositable(w.asset)) {
+    return fail(
+      `${w.asset} is not offered as a margin collateral deposit. It can still be lent, borrowed, repaid and withdrawn, and held in the margin account by borrowing or swapping into it. Collateral deposits: ${DEPOSIT_ASSETS.join(", ")}.`,
+    );
+  }
+  if (w.op === "farm_deposit" && w.asset && !FARM_ASSETS.includes(w.asset)) {
+    const hasVault = KAMINO_RECEIPTS.some((r) => r.underlying === w.asset);
+    return fail(
+      hasVault
+        ? `The Kamino farm for ${w.asset} is closed to new supply. An existing ${w.asset} farm position can still be redeemed. Open farms: ${FARM_ASSETS.join(", ")}.`
+        : `${w.asset} has no Kamino farm. Open farms: ${FARM_ASSETS.join(", ")}.`,
+    );
   }
   if (w.op === "swap") {
     if (!w.to_asset) return fail("Which asset do you want to swap into?");
@@ -307,6 +374,19 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
         if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the leverage is taken on is not valid.");
       }
     }
+    if (w.amount.kind === "usd") {
+      if (!w.asset) return fail("Which asset should that dollar amount buy or move?");
+      if (parseDecimalString(w.amount.value) === null) return fail("That dollar amount is not valid.");
+    }
+    if (w.amount.kind === "prev" && w.amount.pct !== undefined && !(w.amount.pct > 0 && w.amount.pct <= 100)) return fail("Percentages must be between 0 and 100.");
+    if (w.amount.kind === "hf") {
+      const t = w.amount.target;
+      if (!["borrow", "withdraw", "repay", "deposit"].includes(w.op)) return fail("A health-factor target can size a borrow, a withdrawal, a repayment or a collateral deposit.");
+      if (!Number.isFinite(t) || t <= LIQUIDATION_HF_LINE || t > 100) return fail(`A health factor target has to be above the ${LIQUIDATION_HF_LINE.toFixed(2)} liquidation line.`);
+      if ((w.op === "borrow" || w.op === "withdraw") && t < copilotConfig.minHealthFactor) {
+        return fail(`I keep every borrow and withdrawal at a health factor of ${copilotConfig.minHealthFactor.toFixed(2)} or above, so I can't size one down to ${t}.`);
+      }
+    }
     if (w.amount.kind === "out") {
       if (w.op !== "swap") return fail("Only a swap can be sized by the amount you want to receive.");
       if (parseDecimalString(w.amount.value) === null) return fail("That amount is not valid.");
@@ -321,7 +401,7 @@ export function validateLever(l: LeverIntent): GuardResult<LeverIntent> {
   if (!(PRODUCT_ASSETS as readonly string[]).includes(l.asset)) return fail(unofferedMessage(l.asset));
   if (!Number.isFinite(l.leverage) || l.leverage <= 1) return fail("Leverage has to be above 1x.");
   if (l.leverage > 10) return fail("I won't size above 10x; at this protocol's health rules it could never hold the 1.15 floor.");
-  if (l.borrow_asset && l.borrow_asset !== "USDC" && l.borrow_asset !== "USDT") return fail("I fund leverage by borrowing USDC or USDT.");
+  if (l.borrow_asset && !isLendBorrow(l.borrow_asset)) return fail(`I fund leverage by borrowing one of ${LEND_BORROW_ASSETS.join(", ")}.`);
   if (l.borrow_asset && l.borrow_asset === (l.asset as string)) return fail("Borrowing the same asset you are levering adds no exposure.");
   if (l.amount !== null) {
     if (parseDecimalString(l.amount) === null) return fail("That amount is not valid.");
@@ -419,6 +499,74 @@ export function typedNumbers(text: string): number[] {
     const k = body.endsWith("k");
     const n = Number(body.replace(/k$/, "").replace(/,/g, ""));
     if (Number.isFinite(n)) out.push(k ? n * 1000 : n);
+  }
+  return [...out, ...wordNumbers(text)];
+}
+
+const UNIT_WORDS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+const SCALE_WORDS: Record<string, number> = { hundred: 100, thousand: 1_000, million: 1_000_000 };
+
+/**
+ * Amounts written in English words ("a hundred", "two thousand five hundred", "one and a half", "one point five",
+ * "half a"): exact values, so a model that writes them as digits still passes the typed-amount check. Words that are
+ * not part of a number end it; nothing is guessed.
+ */
+export function wordNumbers(text: string): number[] {
+  const words = text.toLowerCase().replace(/-/g, " ").split(/[^a-z]+/).filter(Boolean);
+  const out: number[] = [];
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    const startsNumber = w in UNIT_WORDS || ((w === "a" || w === "an") && words[i + 1] in SCALE_WORDS) || (w === "half" && (words[i + 1] === "a" || words[i + 1] === "an"));
+    if (!startsNumber) {
+      i++;
+      continue;
+    }
+    if (w === "half") {
+      out.push(0.5);
+      i += 2;
+      continue;
+    }
+    let total = 0;
+    let current = 0;
+    let seen = false;
+    while (i < words.length) {
+      const x = words[i];
+      if (x in UNIT_WORDS) {
+        current += UNIT_WORDS[x];
+        seen = true;
+      } else if ((x === "a" || x === "an") && words[i + 1] in SCALE_WORDS && !seen) {
+        current = 1;
+        seen = true;
+      } else if (x === "hundred" && seen) {
+        current = (current || 1) * 100;
+      } else if (x in SCALE_WORDS && seen) {
+        total += (current || 1) * SCALE_WORDS[x];
+        current = 0;
+      } else if (x === "and" && words[i + 1] in UNIT_WORDS && seen) {
+        // "two hundred and fifty"
+      } else break;
+      i++;
+    }
+    let value = total + current;
+    // "one and a half", "one point five"
+    if (words[i] === "and" && words[i + 1] === "a" && words[i + 2] === "half") {
+      value += 0.5;
+      i += 3;
+    } else if (words[i] === "point") {
+      let frac = "";
+      let j = i + 1;
+      while (j < words.length && words[j] in UNIT_WORDS && UNIT_WORDS[words[j]] < 10) frac += String(UNIT_WORDS[words[j++]]);
+      if (frac) {
+        value = Number(`${value}.${frac}`);
+        i = j;
+      }
+    }
+    if (seen) out.push(value);
   }
   return out;
 }

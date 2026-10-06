@@ -72,11 +72,27 @@ const INFO_QUESTION = re(
 /** Instructions even when they start like a question word ("how about you supply ... every week"). */
 const IMPERATIVE_AFTER_Q = re(`${L}(?:please\\s+)?(?:set\\s+up|schedule|create|place|make)\\s+(?:a|an|my)?\\s*(?:\\w+\\s+){0,2}(?:order|schedule|recurring|alert|rule|automation)`);
 
+/**
+ * A health-factor TARGET that sizes an action done now ("borrow USDC until my health factor is 1.5", "repay enough to
+ * get my HF up to 2", "withdraw down to a health factor of 1.6") is not a standing order: nothing waits for the market,
+ * the amount is computed now. Such a phrase is taken out before looking for conditions, so only real triggers ("when my
+ * HF drops below 1.3, repay") are refused.
+ */
+const HEALTH_TARGET = re(
+  `${L}(?:until|till|so\\s+that|such\\s+that|(?:enough\\s+)?to\\s+(?:reach|get|bring|take|put|keep|leave)|up\\s+to|down\\s+to|keeping|leaving)\\s+(?:it\\s+|me\\s+)?(?:my\\s+|the\\s+|a\\s+|an\\s+)?(?:account'?s?\\s+)?(?:hf|health(?:\\s+factor)?)(?:\\s+(?:is|at|of|reaches|hits|becomes|gets\\s+to|goes\\s+(?:up|down)\\s+to|back\\s+to|up\\s+to|down\\s+to|to|=|around|about|exactly)){0,3}\\s*\\d+(?:\\.\\d+)?`,
+);
+const HEALTH_TARGET_ALL = new RegExp(HEALTH_TARGET.source, "giu");
+
+/** The message with every health-factor sizing phrase removed (see HEALTH_TARGET). */
+export function withoutHealthTargets(message: string): string {
+  return message.replace(HEALTH_TARGET_ALL, " ").replace(/\s{2,}/g, " ").trim();
+}
+
 export type Conditional = { kind: "price" | "time" | "recurring" | "limit_order" | "standing" | "unknown"; phrase: string };
 
 /** Returns the conditional/scheduled phrase when the message asks for something later or standing. */
 export function detectConditional(message: string): Conditional | null {
-  const m = (message ?? "").replace(/[’`]/g, "'").trim();
+  const m = withoutHealthTargets((message ?? "").replace(/[’`]/g, "'").trim());
   if (!m) return null;
   const info = INFO_QUESTION.test(m) && !IMPERATIVE_AFTER_Q.test(m);
 
@@ -113,9 +129,42 @@ export function immediateRemainder(message: string, c: Conditional): string {
   let t = message.replace(/[’`]/g, "'");
   const cut = t.search(re(`${L}(?:when|once|as\\s+soon\\s+as|if|every|each|until|till|unless|whenever|at\\s+(?:\\$|\\d)|tomorrow|tonight|next\\s+\\w+|on\\s+(?:${DAYS})|in\\s+(?:an?|\\d+)\\s*\\w+|daily|weekly|monthly|hourly)${R}`));
   if (cut > 0) t = t.slice(0, cut);
+  // The condition comes first ("when SOL drops below 100, sell 1 SOL"): the action is what follows it.
+  else if (cut === 0) t = t.includes(",") ? t.slice(t.indexOf(",") + 1) : "";
   t = t.replace(re(`${L}(?:set\\s+(?:up\\s+)?an?\\s+(?:limit\\s+order|stop[\\s-]?loss|order)\\s+(?:to|for)|place\\s+an?\\s+(?:limit\\s+)?order\\s+(?:to|for)|schedule(?:\\s+(?:a|an))?|automatically|auto[\\s-]?\\w*|please)${R}`), " ");
   void c;
   return t.replace(/[\s,;:-]+$/g, "").replace(/\s{2,}/g, " ").trim();
+}
+
+const CONDITION_ONLY_START = re(`^\\s*(?:when|whenever|if|once|as\\s+soon\\s+as|until|till|unless|in\\s+case|provided|every|each|daily|weekly|monthly|hourly|at\\s+\\d|tomorrow|tonight|next\\s+\\w+)${R}`);
+
+/**
+ * The message cut into clauses for the policy checks, so one refused part (a conditional order, a short) can be held
+ * back while the rest of the request goes ahead. A clause that is only a condition ("when SOL drops below 100") is kept
+ * with the action next to it, so a condition can never be separated from the action it governs.
+ */
+export function policyClauses(message: string): string[] {
+  const raw = message
+    .replace(/[’`]/g, "'")
+    .split(/\s*(?:[.;!?]+\s+|,\s*|\s+and\s+then\s+|\s+then\s+|\s+and\s+|\s+also\s+|\s+plus\s+)\s*/i)
+    .map((p) => p.trim().replace(/[.;!?,\s]+$/g, ""))
+    .filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i];
+    if (!ACTION.test(p) && CONDITION_ONLY_START.test(p)) {
+      if (i + 1 < raw.length) {
+        raw[i + 1] = `${p}, ${raw[i + 1]}`;
+        continue;
+      }
+      if (out.length) {
+        out[out.length - 1] = `${out[out.length - 1]} ${p}`;
+        continue;
+      }
+    }
+    out.push(p);
+  }
+  return out;
 }
 
 export const CONDITIONAL_BASE_MESSAGE =

@@ -133,6 +133,8 @@ export interface PlanStepView {
   status: StepStatus;
   signature?: string | null;
   note?: string | null;
+  /** A read leg's answer, once the plan reached it. */
+  answer?: StructuredAnswer | null;
 }
 
 export interface PlanView {

@@ -4,7 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { zoneOf, zoneLabel } from "./health-dial";
 import type { ConversationSummary } from "@/lib/copilot/client/conversations";
-import { COIN_ICONS } from "@/lib/constants/margin";
+import { KAMINO_RECEIPTS } from "@/lib/solana/kamino";
+import { tokenIcon } from "@/lib/solana/tokens";
+
+/**
+ * The website's icon for a position symbol: the registry token's own icon (any spelling), and for a Kamino receipt
+ * (kSOL, kUSDC, ...) its underlying token's icon, as the Farm and Portfolio pages show it.
+ */
+function positionIcon(symbol: string): string {
+  const receipt = KAMINO_RECEIPTS.find((r) => r.symbol.toLowerCase() === symbol.toLowerCase());
+  return tokenIcon(receipt ? receipt.underlying : symbol);
+}
 
 /**
  * The left rail's contents: New chat, status chips, health factor, positions, recents.
@@ -227,7 +237,7 @@ function PositionsSection({
                     drawn from two sources that can disagree about what it looks like. */}
                 <div style={{ position: "relative", width: p.pairedSymbol ? 26 : 20, height: 20, flex: "none" }}>
                   <img
-                    src={COIN_ICONS[p.symbol.toUpperCase()] ?? "/coins/default.svg"}
+                    src={positionIcon(p.symbol)}
                     alt=""
                     width={20}
                     height={20}
@@ -235,7 +245,7 @@ function PositionsSection({
                   />
                   {p.pairedSymbol && (
                     <img
-                      src={COIN_ICONS[p.pairedSymbol.toUpperCase()] ?? "/coins/default.svg"}
+                      src={positionIcon(p.pairedSymbol)}
                       alt=""
                       width={20}
                       height={20}

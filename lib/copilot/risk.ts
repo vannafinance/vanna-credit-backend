@@ -8,6 +8,7 @@
  */
 
 import type { RiskResult, Simulation } from "./types";
+import { assetDecimals } from "./intent";
 
 export const LIQUIDATION_HF = 1.1;
 /** Ratio above the floor that is still flagged as thin. */
@@ -119,7 +120,7 @@ export function floorDecimals(n: number, dp: number): string {
 }
 
 export function tokenDecimals(symbol: string): number {
-  return symbol === "USDC" || symbol === "USDT" ? 6 : 9;
+  return assetDecimals(symbol);
 }
 
 export function usdToUnits(usd: number, priceUsd: number, symbol: string): string {

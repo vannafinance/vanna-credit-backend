@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto";
 import type { Venue } from "./types";
-import type { WriteIntent, WriteOp } from "./intent";
+import type { ReadCall, ReadLeg, WriteIntent, WriteOp } from "./intent";
 
 export type Op = WriteOp | "report";
 export type SlotValue = string | number | boolean | null;
@@ -30,6 +30,10 @@ export const PLAN_TTL_MS = 5 * 60 * 1000;
 /** Once approved, new steps may still be started for this long; after that the plan expires. */
 export const RUN_WINDOW_MS = 30 * 60 * 1000;
 export const MAX_PLAN_STEPS = 8;
+/** "Show me" legs a plan may hold besides its transactions (they ask for no signature). */
+export const MAX_PLAN_READS = 6;
+/** Read tool calls one read leg may make. */
+export const MAX_LEG_READS = 4;
 
 export const VENUE_BY_OP: Record<Op, Venue> = {
   create_account: "margin",
@@ -90,6 +94,17 @@ export const marginSwapBlockedMessage = (asset: string): string =>
 export const OUT_PREFIX = "out:";
 export const outTarget = (amount: string | null): string | null => (amount && amount.startsWith(OUT_PREFIX) ? amount.slice(OUT_PREFIX.length) : null);
 
+/**
+ * A step sized to leave the health factor at a target carries its amount as "hf:<target>" until the step is built; it is
+ * then sized from the account as it is at that moment (after every earlier step).
+ */
+export const HF_PREFIX = "hf:";
+export const hfTarget = (amount: string | null): number | null => {
+  if (!amount || !amount.startsWith(HF_PREFIX)) return null;
+  const n = Number(amount.slice(HF_PREFIX.length));
+  return Number.isFinite(n) ? n : null;
+};
+
 const fmtQty = (amount: string | null, asset: string | null): string => {
   if (!amount && !asset) return "";
   return `${amount === "all" ? "all" : amount ?? ""} ${asset ?? ""}`.trim();
@@ -97,6 +112,14 @@ const fmtQty = (amount: string | null, asset: string | null): string => {
 
 export function labelFor(s: StepSpec): string {
   const q = fmtQty(s.amount, s.asset);
+  const hf = hfTarget(s.amount);
+  if (hf !== null && s.asset) {
+    const t = hf.toFixed(2);
+    if (s.op === "borrow") return `Borrow ${s.asset} down to a health factor of ${t}`;
+    if (s.op === "withdraw") return `Withdraw ${s.asset} down to a health factor of ${t}`;
+    if (s.op === "repay") return `Repay ${s.asset} ${s.slots.source === "margin" ? "from your margin balance" : "from your wallet"} up to a health factor of ${t}`;
+    if (s.op === "deposit") return `Deposit ${s.asset} as margin collateral up to a health factor of ${t}`;
+  }
   switch (s.op) {
     case "create_account":
       return "Open your margin account";
@@ -134,7 +157,7 @@ export function labelFor(s: StepSpec): string {
       return `Redeem ${what} from Kamino (farm) back to margin`;
     }
     case "report":
-      return "Report your health factor";
+      return typeof s.slots.label === "string" && s.slots.label ? s.slots.label : "Report your health factor";
   }
 }
 
@@ -168,12 +191,32 @@ export function reportStep(): StepSpec {
   return { kind: "read", op: "report", asset: null, amount: null, slots: { report: "health" } };
 }
 
+/** A read leg as a plan step. Its reads are part of the approved plan, so they are hashed with it. */
+export function readLegStep(leg: ReadLeg): StepSpec {
+  return { kind: "read", op: "report", asset: null, amount: null, slots: { report: "reads", question: leg.question, label: leg.label, reads: JSON.stringify(leg.reads) } };
+}
+
+/** The read leg a stored step carries, or null for the health report (and for anything malformed). */
+export function readLegOf(s: Pick<StepSpec, "slots">): ReadLeg | null {
+  if (s.slots.report !== "reads" || typeof s.slots.reads !== "string") return null;
+  try {
+    const reads = JSON.parse(s.slots.reads) as ReadCall[];
+    if (!Array.isArray(reads) || !reads.length || reads.length > MAX_LEG_READS) return null;
+    if (!reads.every((r) => r && typeof r.tool === "string" && r.args && typeof r.args === "object" && !Array.isArray(r.args))) return null;
+    return { question: String(s.slots.question ?? ""), label: String(s.slots.label ?? ""), reads };
+  } catch {
+    return null;
+  }
+}
+
 /** A plan must be non-empty, bounded, and only contain steps the executor knows how to build. */
 export function validateSteps(steps: StepSpec[]): string | null {
   if (!steps.length) return "That plan has no steps.";
-  if (steps.length > MAX_PLAN_STEPS) return `A plan can have at most ${MAX_PLAN_STEPS} steps.`;
+  if (steps.filter((s) => s.kind === "write").length > MAX_PLAN_STEPS) return `A plan can have at most ${MAX_PLAN_STEPS} steps.`;
+  if (steps.filter((s) => s.kind === "read").length > MAX_PLAN_READS) return `A plan can show at most ${MAX_PLAN_READS} things along the way.`;
   for (const s of steps) {
     if (s.kind === "read" && s.op !== "report") return "Unsupported read step.";
+    if (s.kind === "read" && s.slots.report === "reads" && !readLegOf(s)) return "A step that shows information is malformed.";
     if (s.kind === "write" && s.op === "report") return "A report is not a write.";
     if (s.kind === "write" && s.op !== "create_account" && s.op !== "close_account" && !s.asset) return "A step is missing its asset.";
     if (s.kind === "write" && s.op !== "create_account" && s.op !== "close_account" && !s.amount) return "A step is missing its amount.";

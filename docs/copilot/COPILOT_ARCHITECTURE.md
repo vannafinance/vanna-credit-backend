@@ -93,7 +93,7 @@ function calling required) given:
 - the instructions in `investigation/prompt.ts`: the product, the protocol maths (§5), the rules for amounts, and the
   stages, all generated from the same constants the guards enforce;
 - the conversation, the user's message, the evidence gathered so far and any decision that was rejected;
-- the tools: 17 read tools and 6 decision tools.
+- the tools: 18 read tools, `calculate`, and 6 decision tools.
 
 **Read tools** (`investigation/catalog.ts`, each backed by the MCP through `mcp-facts.ts` / `mcp-client.ts`):
 
@@ -111,14 +111,44 @@ function calling required) given:
 | `what_if` | Projected health after a borrow / withdraw / repay, or the amount for a target health |
 | `get_leverage_capacity` | Highest safe multiple for a leveraged long and worst-case health at common multiples |
 | `get_liquidation_risk` | Liquidation status and distance |
+| `simulate` | Any scenario on the protocol's health maths: price moves on any assets ("SOL drops 10%") and hypothetical deposits, withdrawals, borrows, repays, swaps and farms, in order. Returns collateral, debt and HF now, after the changes and after the price moves, whether it would be liquidatable or below the floor, and how far each moved asset could fall (or rise) before liquidation (`investigation/simulate.ts`; swaps at oracle prices before slippage) |
 | `get_swap_quote` | Live Jupiter quote and minimum received |
 | `get_history`, `get_protocol_info`, `explain_concept` | History, on-chain configuration, product explanations |
 
 The wallet for every read is the session's wallet; a read cannot be pointed elsewhere.
 
 **Decision tools** (`investigation/decision.ts`): `answer` (an answer built from the evidence), `propose_actions` (one
-or more actions in order), `propose_leverage` (a leveraged long), `propose_unwind` (exit positions), `ask_user` (one
-question when something essential is missing) and `decline` (outside the product).
+or more actions in order, with report legs), `propose_leverage` (a leveraged long), `propose_unwind` (exit positions),
+`ask_user` (one question when something essential is missing) and `decline` (outside the product).
+
+**One refused part never blocks the rest.** `propose_actions` carries `not_done`: the parts of a request that can't
+be done, each with the reason (grounded, no internal names). They lead the plan's notes; the rest goes ahead. Gemini
+is told to check its tools first (`simulate`, `calculate`, the reads) and to decline only when nothing can be done.
+Product refusals are also applied clause by clause (`index.ts` `heldBackParts`, `conditional.ts` `policyClauses`): in
+"sell 1 SOL when it hits 200 and supply 100 USDC" the conditional order is held back and the supply is planned. Gemini
+is told which clauses are held back; code rejects any action whose quoted words come only from a held-back clause, so
+a conditional order can never become an immediate one; and the reason for each held-back clause is always shown with
+the plan or answer. A clause that is only a condition stays with the action it governs ("when SOL drops below 100,
+sell 1 SOL" is one clause and is refused whole). Attacks, liquidating others, admin actions, other programs and the
+faucet still refuse the whole message, and without the model a message with a held-back part is refused whole.
+
+A health-factor target is sizing, not a condition: the firewall's conditional-order check (`conditional.ts`
+`withoutHealthTargets`) takes "until / so that / up to / down to my health factor is N" out before it looks for
+triggers, so "borrow USDC until my health factor is 1.5" is planned now, while "when my HF drops below 1.3, repay" is
+still refused.
+
+**Report legs** (things to see inside a plan). A request can ask to see something before, between or after its
+transactions ("deposit 100 USDC, 100 USDT and 1 SOL into the lending pool, then show my total supplied balance and APY";
+"show my health factor, borrow 50 USDC, then show it again"). Gemini keeps each such part as an `op: "report"` leg of
+`propose_actions`, at the point the user asked for it, with the read tools that answer it (any catalogue tool, with its
+arguments as `args_json`), a short label and the user's quoted words. Nothing about which reads to run is fixed in code.
+`parseDecision` checks the quote, that each tool exists and its arguments are usable (`catalog.ts` `readArgsProblem`),
+at most 4 reads per leg and 6 legs per plan, and that a plan holds at least one transaction (a request that only asks to
+see things is answered now). The leg becomes a read step of the plan (`plan.ts` `readLegStep`; its reads are hashed
+with the plan). When the plan reaches it, after every earlier transaction confirmed, `investigation/plan-reads.ts`
+runs its reads live and Gemini writes the answer with the `answer` tool from those results alone, under the same
+grounding check (a figure not in a result is refused, then retried once); if the model is unavailable the readers' own
+wording is shown. The answer is stored on the step and shown on the plan card at that step, as soon as it runs.
 
 Each turn Gemini either calls read tools (several at once when they are independent) or one decision tool. Reads run in
 parallel with 15 s each; their results become evidence for the next turn. The loop allows 6 turns, 16 reads and 50 s;
@@ -130,9 +160,13 @@ the last turn offers only decision tools.
 - every proposed action quotes the user's own words asking for it (`source_quote`, at least 80% of its words found in the
   user's messages, `quotesUser`); an action that cannot be quoted was not asked for, so an invented step (a swap, a deposit
   nobody mentioned) is rejected and the model is told to leave it out;
-- a `literal` amount, and the base amount of a leverage borrow, must be a number the user typed in this or an earlier
-  message (`router.ts` `amountsAreTyped`);
-- an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`);
+- a `literal`, `usd` or `receive` amount, a `health_target`, and the base amount of a leverage borrow must be a number
+  the user typed in this or an earlier message, in digits or in English words ("a hundred", "two and a half")
+  (`router.ts` `amountsAreTyped`, `intent.ts` `typedNumbers` / `wordNumbers`);
+- an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`).
+  Gemini never computes a figure itself: for a total, a difference, a USD value or a percentage no tool reports, it
+  calls `calculate` (`investigation/calculate.ts`) with figures copied from the evidence; the code checks every operand
+  is in the evidence, does the exact arithmetic, and the result becomes evidence the answer may quote;
 - a rejected decision goes back to Gemini with the reason, and the next turn corrects it.
 
 The result is either a structured answer (returned as is) or an intent for stage 3: a single action, a chain, a
@@ -144,16 +178,18 @@ A decision states amounts as a number the user typed or as a sizing word. Code r
 
 | Sizing | Meaning | Resolved by |
 |---|---|---|
-| `literal` | The user's exact number | Used as typed (after the typed-number check) |
+| `literal` | The user's exact number of tokens (digits or words) | Used as typed (after the typed-number check) |
+| `usd` | A dollar value the user typed ("$50 worth of SOL") | `index.ts` `handleWrite`: units = USD ÷ oracle price, rounded down to the token's decimals, when the plan is drawn |
 | `fraction` | A percentage of the relevant balance | `workflow/steps.ts` `resolvePercent` |
 | `all` | The whole balance or debt | At build time from the live balance |
 | `max_safe` | The largest borrow / withdrawal that keeps the floor | `mcp-facts.ts` `sizeSafeBorrow` / `sizeSafeWithdraw` |
-| `previous_leg` | The amount the previous action produced | `index.ts` `handleWrite` |
+| `health_target` | Sized so the health factor ends at a number the user gave ("borrow until my health factor is 1.5", "repay enough to get back to 2"). Carried as `hf:<target>` and sized when the step is built, after every earlier step: borrow / withdraw use the safe sizers with the target as the floor (never below 1.15); repay from the wallet x = D − C/T, from the margin balance x = (T·D − C)/(T − 1); deposit x = T·D − C; repay and deposit round up, a repay never exceeds the debt; already at the target = the step is skipped | `mcp-facts.ts` `sizeToHealth`, `workflow/steps.ts` `preflightStep` |
+| `previous_leg` | The amount the previous action produced, or a percentage of it ("swap half of it") | `index.ts` `handleWrite` |
 | `leverage` | A borrow at N x leverage, as on the website's Margin page: borrow value = base value × (N − 1), nothing swapped. The base is the collateral the user names (`base_asset`, `base_amount`, which they must hold or deposit in the same plan), else the deposits in the request, else the account's equity | `workflow/leverage-borrow.ts` `sizeLevBorrow` |
 | `receive` | A swap sized so the minimum received covers a typed amount | `workflow/steps.ts` `sizeExactOut` |
 
-Strategies have their own planners: `workflow/strategy.ts` (`planLever`: deposit if needed, borrow a stable, margin
-swap into the asset, report) and `workflow/unwind.ts` (`planUnwind`: Kamino, then repay, then withdraw, then Earn).
+Strategies have their own planners: `workflow/strategy.ts` (`planLever`: deposit if needed, borrow a lendable asset the
+user names or picks (any registry `lendable` token other than the one levered), margin swap into the asset, report) and `workflow/unwind.ts` (`planUnwind`: Kamino, then repay, then withdraw, then Earn).
 `handleWrite` also opens a margin account first when the user has none, tops up a Kamino deposit from the wallet when
 the margin balance is short, and enforces the 8-step cap.
 
@@ -248,9 +284,17 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
 
 ## 6. What the Copilot may and may not do
 
-- **Assets:** SOL, USDC, USDT (lend, borrow, collateral, swap, farm); JitoSOL and JupSOL (collateral, swap, farm); the
-  Kamino receipts farming produces. Other assets registered on-chain are hidden and refused with `asset_not_offered`,
-  while any existing position in one still counts in health and can be withdrawn.
+- **Assets:** exactly the tokens the app lists, read from its token registry (`lib/solana/tokens.ts`) and the Kamino
+  receipt catalogue (`lib/solana/kamino.ts`); `lib/copilot/intent.ts` derives every list from them, and the firewall,
+  refusals, concept texts, read tools, decision-tool enums and Gemini's prompt are generated from those lists. Today:
+  SOL, USDC, USDT can be lent and borrowed (`lendable`); JitoSOL, JupSOL, JupUSD and the Token-2022 xStocks NVDAx,
+  GOOGLx, AAPLx, TSLAx are margin collateral and swap only. Decimals come from the registry (SOL and the LSTs 9, the
+  stables 6, the xStocks 8).
+- **The website's action rules:** a margin collateral deposit only for `depositable` tokens (USDT is lendable,
+  borrowable and withdrawable, but not a collateral deposit, so the Kamino top-up before a USDT farm explains instead
+  of depositing); the Kamino farm only for listed underlyings (`isFarmListed`: SOL, USDC, USDT; JitoSOL and JupSOL
+  are closed to new supply, an existing position can still be redeemed). Tokens outside the registry are refused;
+  any existing position in a registered asset still counts in health and can be withdrawn.
 - **Refused always:** liquidating someone, admin and protocol settings, the faucet, arbitrary programs, transfers to
   an address, Kamino multi-asset liquidity, perpetuals / options / shorts, other wallets, conditional or scheduled
   orders.
@@ -318,7 +362,8 @@ Local stack for the live suite: the MCP (`python scripts/run_local.py` in `Vanna
 | Who signs | The user's wallet; no Sign Service, no auto-sign |
 | Prices on the fork | The app's price keeper |
 | Lend / borrow | SOL, USDC, USDT |
-| Product assets | SOL, USDC, USDT, JitoSOL, JupSOL and Kamino receipts |
+| Product assets | The app's token registry: SOL, USDC, USDT, JitoSOL, JupSOL, JupUSD, NVDAx, GOOGLx, AAPLx, TSLAx and the Kamino receipts |
+| Collateral deposits / Kamino farm | Every token except USDT / SOL, USDC, USDT |
 | Liquidation, admin, faucet, perps | Not offered by the Copilot |
 | AI | Vertex Gemini `gemini-3.8-flash` in `solana-mcp`; service account `vanna-copilot` (`roles/aiplatform.user`); no service-account keys (organization policy), so hosted uses the attached account and local uses a developer's login |
 | Copilot → MCP auth | WorkOS machine-to-machine token plus Cloud Run IAM (§7); the M2M secret lives only in Secret Manager |

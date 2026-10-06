@@ -1,0 +1,13 @@
+{
+  "category": "15_plan_reads",
+  "group": "acct",
+  "prompts": [
+    { "id": "rd-001", "prompt": "Deposit 100 USDC, 100 USDT, and 1 SOL into the lending pool, then show my total supplied balance and APY.", "kinds": ["plan_preview", "blocked"], "ops": ["earn_supply", "earn_supply", "earn_supply", "report"], "readTools": ["get_pool_rates"], "why": "three Earn supplies, then a read step for the balance and APY (it was silently dropped before)" },
+    { "id": "rd-002", "prompt": "show my health factor, then borrow 20 USDC, then show my health factor again", "kinds": ["plan_preview", "blocked"], "ops": ["report", "borrow", "report"], "readTools": ["get_account_health"], "why": "reads before and after a transaction, in the user's order" },
+    { "id": "rd-003", "prompt": "tell me the SOL price, then swap 10 USDC to SOL from my wallet and show my wallet balances", "kinds": ["plan_preview", "blocked", "unavailable"], "ops": ["report", "swap", "report"], "readTools": ["get_prices", "get_wallet_balances"], "why": "a price before the swap and the balances after it" },
+    { "id": "rd-004", "prompt": "supply 10 USDC and tell me what APY the USDC pool pays", "kinds": ["plan_preview", "blocked"], "ops": ["earn_supply", "report"], "readTools": ["get_pool_rates"], "why": "a single action with a question becomes a plan with a read step" },
+    { "id": "rd-005", "prompt": "deposit 1 SOL as collateral, then show how much USDC I can borrow safely, then borrow 10 USDC", "kinds": ["plan_preview", "blocked"], "ops": ["deposit", "report", "borrow"], "readTools": ["get_capacity"], "why": "a read between two transactions" },
+    { "id": "rd-006", "prompt": "borrow 5 USDC and tell me what my health factor would be if I then withdrew 1 SOL", "kinds": ["plan_preview", "blocked"], "ops": ["borrow", "report"], "readTools": ["what_if"], "why": "a what-if read after a borrow" },
+    { "id": "rd-007", "prompt": "show my positions and the USDC supply APR", "kinds": ["answer"], "why": "only things to see: answered now, no plan" }
+  ]
+}

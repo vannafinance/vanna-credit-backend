@@ -13,7 +13,7 @@
 
 import { copilotConfig } from "./config";
 import { CONCEPTS, fmtAmount, fmtFractionPct, fmtHf, fmtPct, fmtUsd, humanizeMcpError } from "./explain";
-import { LEND_BORROW_ASSETS, type Asset, type ConceptTopic, type ReadIntent } from "./intent";
+import { COLLATERAL_ONLY_ASSETS, LEND_BORROW_ASSETS, PRODUCT_ASSETS, type Asset, type ConceptTopic, type ReadIntent } from "./intent";
 import { mcp, MCPError, type McpCtx } from "./mcp-client";
 import {
   floorDecimals,
@@ -145,8 +145,9 @@ export async function loadFreshPrice(asset: string, ctx: ReadCtx): Promise<Price
 export type Sized = { ok: true; amount: string; usd: number; hfAfter: number | null; protocolMax: string | null } | { ok: false; reason: string };
 
 /** Largest borrow that keeps HF >= floor, verified through the MCP. */
-export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult } = {}): Promise<Sized> {
-  const floor = copilotConfig.minHealthFactor;
+export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult; floor?: number } = {}): Promise<Sized> {
+  // A user may ask for a higher floor ("borrow down to a health factor of 1.5"), never a lower one.
+  const floor = Math.max(copilotConfig.minHealthFactor, opts.floor ?? 0);
   const h = opts.hint ?? (await loadHealth(ctx));
   if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
   if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe borrow." };
@@ -179,8 +180,8 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
 }
 
 /** Largest collateral withdrawal that keeps HF >= floor, verified through the MCP. */
-export async function sizeSafeWithdraw(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult } = {}): Promise<Sized> {
-  const floor = copilotConfig.minHealthFactor;
+export async function sizeSafeWithdraw(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult; floor?: number } = {}): Promise<Sized> {
+  const floor = Math.max(copilotConfig.minHealthFactor, opts.floor ?? 0);
   const h = opts.hint ?? (await loadHealth(ctx));
   if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
   if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe withdrawal." };
@@ -207,6 +208,52 @@ export async function sizeSafeWithdraw(asset: Asset, ctx: ReadCtx, opts: { hint?
     units *= 0.97;
   }
   return { ok: false, reason: `You can't withdraw any ${asset} right now without taking your health factor below ${floor.toFixed(2)}.` };
+}
+
+/** Smallest decimal string >= x at `dp` places. */
+function ceilDecimals(x: number, dp: number): string {
+  const f = 10 ** dp;
+  return (Math.ceil(x * f - 1e-9) / f).toFixed(dp).replace(/\.?0+$/, "");
+}
+
+/**
+ * A step sized so the health factor ends at `target`, from the account as it is now (HF = C / D, USD at oracle prices):
+ * - borrow / withdraw: the largest amount that keeps HF >= target (the safe sizers, with `target` as the floor);
+ * - repay from the wallet: debt falls by x, so C / (D - x) = T  ->  x = D - C / T;
+ * - repay from the margin balance: both fall by x, so (C - x) / (D - x) = T  ->  x = (T*D - C) / (T - 1);
+ * - deposit: collateral rises by x, so (C + x) / D = T  ->  x = T*D - C.
+ * Repay and deposit round up (so the target is reached) and a repay never exceeds the debt. Already at the target: skip.
+ */
+export async function sizeToHealth(
+  op: string,
+  asset: Asset,
+  target: number,
+  ctx: ReadCtx,
+  opts: { hint?: HealthResult; fromMargin?: boolean } = {},
+): Promise<Sized | { ok: true; skip: string }> {
+  if (op === "borrow") return sizeSafeBorrow(asset, ctx, { hint: opts.hint, floor: target });
+  if (op === "withdraw") return sizeSafeWithdraw(asset, ctx, { hint: opts.hint, floor: target });
+  const h = opts.hint ?? (await loadHealth(ctx));
+  if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
+  if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size this to a health factor." };
+  const { collateralUsd: c, debtUsd: d } = h.health;
+  if (!(d > 0)) return { ok: true, skip: "You have no debt, so there is no health factor to move." };
+  if (c / d >= target - 1e-9) return { ok: true, skip: `Your health factor is already ${(c / d).toFixed(2)}, at or above ${target.toFixed(2)}.` };
+  const price = await loadFreshPrice(asset, ctx);
+  if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
+  let usd: number;
+  if (op === "repay") {
+    const row = h.health.debt.find((r) => r.symbol === asset);
+    if (!row || !(row.units > 0)) return { ok: false, reason: `You have no ${asset} debt to repay.` };
+    usd = opts.fromMargin ? (target * d - c) / (target - 1) : d - c / target;
+    if (usd >= row.usd - 1e-9) return { ok: true, amount: row.unitsText, usd: row.usd, hfAfter: null, protocolMax: null };
+  } else if (op === "deposit") {
+    usd = target * d - c;
+  } else {
+    return { ok: false, reason: `A health-factor target can't size a ${op}.` };
+  }
+  const amount = ceilDecimals(usd / price.usd, tokenDecimals(asset));
+  return { ok: true, amount, usd: Number(amount) * price.usd, hfAfter: target, protocolMax: null };
 }
 
 // ── Read intents ────────────────────────────────────────────────────────────
@@ -410,7 +457,7 @@ async function readPositions(ctx: ReadCtx): Promise<ReadOutcome> {
 }
 
 async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
-  const list = assets.length ? assets : (["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"] as Asset[]);
+  const list = assets.length ? assets : [...PRODUCT_ASSETS];
   let raw: Record<string, unknown>;
   try {
     raw = list.length === 1 ? { [list[0]]: await mcp.price(list[0], ctx) } : await mcp.prices(list, ctx);
@@ -449,7 +496,7 @@ async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
 async function readPools(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
   const list = (assets.length ? assets : [...LEND_BORROW_ASSETS]).filter((a) => (LEND_BORROW_ASSETS as readonly string[]).includes(a));
   if (!list.length) {
-    return { ok: true, fixedWording: true, data: {}, answer: { headline: "Only SOL, USDC and USDT have Vanna Earn pools. JitoSOL and JupSOL can be collateral, swapped or farmed on Kamino.", facts: [], venue: "earn" } };
+    return { ok: true, fixedWording: true, data: {}, answer: { headline: `Only ${LEND_BORROW_ASSETS.join(", ")} have Vanna Earn pools. ${COLLATERAL_ONLY_ASSETS.join(", ")} can be margin collateral and swapped.`, facts: [], venue: "earn" } };
   }
   const settled = await Promise.allSettled(list.map((a) => mcp.poolStats(a, ctx)));
   const rows: string[][] = [];
@@ -573,7 +620,7 @@ async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ct
   const h = await loadHealth(ctx);
   if (h.kind === "no_account") return noMargin(what === "borrow" ? "borrowing capacity" : "withdrawable collateral");
   if (h.kind !== "ok") return unavailable(h.kind === "unavailable" ? h.error : new Error("incomplete account data"), "your account");
-  const targets: Asset[] = what === "borrow" ? (asset ? [asset] : [...LEND_BORROW_ASSETS]) : asset ? [asset] : (h.health.collateral.map((r) => r.symbol).filter((s): s is Asset => ["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"].includes(s)));
+  const targets: Asset[] = what === "borrow" ? (asset ? [asset] : [...LEND_BORROW_ASSETS]) : asset ? [asset] : (h.health.collateral.map((r) => r.symbol).filter((s): s is Asset => PRODUCT_ASSETS.includes(s)));
   if (!targets.length) return { ok: true, fixedWording: true, data: {}, answer: { headline: "You have no collateral to withdraw.", facts: [], venue: "margin" } };
   const sized = await Promise.all(targets.map((a) => (what === "borrow" ? sizeSafeBorrow(a, ctx, { hint: h }) : sizeSafeWithdraw(a, ctx, { hint: h }))));
   const rows: string[][] = [];
@@ -768,7 +815,7 @@ async function readHistory(ctx: ReadCtx): Promise<ReadOutcome> {
 async function readProtocol(ctx: ReadCtx): Promise<ReadOutcome> {
   const [cfg, assets, integ] = await Promise.allSettled([mcp.protocolInfo("config", ctx), mcp.protocolInfo("assets", ctx), mcp.protocolInfo("integrations", ctx)]);
   if (cfg.status !== "fulfilled" || assets.status !== "fulfilled") return unavailable(cfg.status === "rejected" ? cfg.reason : (assets as PromiseRejectedResult).reason, "protocol information");
-  const offered = (Array.isArray(assets.value.assets) ? (assets.value.assets as Array<Record<string, unknown>>) : []).filter((a) => ["SOL", "USDC", "USDT", "JitoSOL", "JupSOL"].includes(String(a.symbol)));
+  const offered = (Array.isArray(assets.value.assets) ? (assets.value.assets as Array<Record<string, unknown>>) : []).filter((a) => PRODUCT_ASSETS.includes(String(a.symbol)));
   const integrations = integ.status === "fulfilled" && Array.isArray(integ.value.integrations) ? (integ.value.integrations as Array<Record<string, unknown>>) : [];
   return {
     ok: true,

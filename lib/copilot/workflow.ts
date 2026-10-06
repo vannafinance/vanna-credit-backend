@@ -166,6 +166,7 @@ export function toStepView(s: StoredStep): PlanStepView {
     status: s.status,
     signature: s.signature,
     note: s.note,
+    ...(s.answer ? { answer: s.answer } : {}),
   };
 }
 
@@ -341,7 +342,7 @@ export async function advanceWorkflow(id: string, user: CopilotUser, ctx: Omit<R
         answer = outcome.answer;
         await update<null>(id, user, (r, t) =>
           r.steps.find((s) => s.n === step.n)?.status === "pending"
-            ? { next: { ...withStep(r, step.n, { status: "done", note: answerToText(outcome.answer).slice(0, 600) }), log: logEvent(r, t, `read_done:${step.n}`) }, out: null }
+            ? { next: { ...withStep(r, step.n, { status: "done", answer: outcome.answer, note: null }), log: logEvent(r, t, `read_done:${step.n}`) }, out: null }
             : { next: null, out: null },
         );
       }

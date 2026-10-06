@@ -1,0 +1,140 @@
+{
+  "category": "14_new_tokens",
+  "group": "acct",
+  "prompts": [
+    {
+      "id": "tok-001",
+      "prompt": "deposit 1 NVDAx as margin collateral",
+      "kinds": [
+        "preview",
+        "plan_preview",
+        "blocked"
+      ],
+      "forbid": [
+        "not part of the Vanna Copilot product",
+        "not offered"
+      ],
+      "why": "an xStock is a product collateral token now"
+    },
+    {
+      "id": "tok-002",
+      "prompt": "swap 0.5 NVDAx to AAPLx in my margin account",
+      "kinds": [
+        "preview",
+        "plan_preview",
+        "blocked",
+        "unavailable",
+        "error"
+      ],
+      "plan": {
+        "steps": [
+          {
+            "op": "swap",
+            "asset": "NVDAx",
+            "to_asset": "AAPLx"
+          }
+        ]
+      },
+      "forbid": [
+        "not part of the Vanna Copilot product"
+      ],
+      "why": "xStock to xStock swap inside the margin account"
+    },
+    {
+      "id": "tok-003",
+      "prompt": "deposit 10 USDT as collateral",
+      "kinds": [
+        "blocked",
+        "clarification",
+        "answer"
+      ],
+      "match": [
+        "not offered as a margin collateral deposit",
+        "can't be deposited",
+        "cannot be deposited",
+        "not.*deposit"
+      ],
+      "why": "USDT is not depositable as margin collateral, as on the website"
+    },
+    {
+      "id": "tok-004",
+      "prompt": "farm 1 JitoSOL on kamino",
+      "kinds": [
+        "blocked",
+        "clarification",
+        "answer"
+      ],
+      "match": [
+        "closed to new supply",
+        "no longer",
+        "not open",
+        "delisted",
+        "closed",
+        "not available",
+        "only (supported|available) for",
+        "only accepts",
+        "cannot be supplied"
+      ],
+      "why": "the JitoSOL Kamino farm is closed to new supply"
+    },
+    {
+      "id": "tok-005",
+      "prompt": "supply 10 JupUSD to the earn pool",
+      "kinds": [
+        "blocked",
+        "clarification",
+        "answer"
+      ],
+      "match": [
+        "no Vanna lending pool",
+        "cannot be lent",
+        "can't be lent",
+        "only.*(SOL|USDC|USDT)"
+      ],
+      "forbid": [
+        "not part of the Vanna Copilot product"
+      ],
+      "why": "JupUSD is collateral and swap only, not lendable"
+    },
+    {
+      "id": "tok-006",
+      "prompt": "what tokens can I use as collateral?",
+      "kinds": [
+        "answer"
+      ],
+      "match": [
+        "NVDAx",
+        "xStock"
+      ],
+      "why": "the answer lists the new collateral tokens"
+    },
+    {
+      "id": "tok-007",
+      "prompt": "what is the price of TSLAx and GOOGLx?",
+      "kinds": [
+        "answer",
+        "unavailable"
+      ],
+      "forbid": [
+        "not part of the Vanna Copilot product"
+      ],
+      "why": "xStock prices are read"
+    },
+    {
+      "id": "tok-008",
+      "prompt": "borrow 1 TSLAx",
+      "kinds": [
+        "blocked",
+        "answer",
+        "clarification"
+      ],
+      "match": [
+        "no Vanna lending pool",
+        "cannot be (lent or )?borrowed",
+        "can't be borrowed",
+        "only.*(SOL|USDC|USDT)"
+      ],
+      "why": "xStocks cannot be borrowed"
+    }
+  ]
+}

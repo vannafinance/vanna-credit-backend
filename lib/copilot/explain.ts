@@ -4,6 +4,7 @@
  */
 
 import { MCPError } from "./mcp-client";
+import { LEND_BORROW_ASSETS, PRODUCT_ASSETS } from "./intent";
 
 export function fmtUsd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -88,9 +89,9 @@ export const CONCEPTS: Record<string, string> = {
   leverage:
     "Leverage here means borrowing a stable asset (USDC or USDT) against your collateral, swapping it into the asset you want more of, and keeping that as collateral. \"2x\" means exposure of twice your equity. The Copilot sizes it so your health factor stays at or above 1.15 even if the swap fills at its worst allowed price.",
   collateral:
-    "Collateral is what you deposit into your margin account (SOL, USDC, USDT, JitoSOL, JupSOL or Kamino receipts). Borrowed funds also sit in the margin account and count as collateral. You can only withdraw collateral while your health factor stays safe.",
+    `Collateral is what you deposit into your margin account (${PRODUCT_ASSETS.join(", ")} or Kamino receipts). Borrowed funds also sit in the margin account and count as collateral. You can only withdraw collateral while your health factor stays safe.`,
   earn:
-    "Earn is the Vanna lending pool: supply SOL, USDC or USDT and earn the pool's supply rate, redeemable any time there is available liquidity. It is separate from your margin account.",
+    `Earn is the Vanna lending pool: supply ${LEND_BORROW_ASSETS.join(", ")} and earn the pool's supply rate, redeemable any time there is available liquidity. It is separate from your margin account.`,
   farm:
     "Farm supplies a single asset to Kamino lend from your margin balance and gives you a Kamino receipt token (kSOL, kUSDC, ...) that still counts as collateral. Redeeming converts it back.",
   margin:

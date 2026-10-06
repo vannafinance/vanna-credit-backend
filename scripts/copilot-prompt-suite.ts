@@ -68,6 +68,12 @@ interface Expect {
   match?: string[];
   /** No regex may match message+answer text (case-insensitive). */
   forbid?: string[];
+  /** Every step of the plan in order, reads included ("report"); an account opening the server adds is ignored. */
+  ops?: string[];
+  /** Read tools that must appear in the plan's read steps. */
+  readTools?: string[];
+  /** After execution: every read step answered, and its answer text matches one of these. */
+  readAnswerMatch?: string[];
 }
 interface Prompt {
   id: string;
@@ -250,6 +256,7 @@ interface ExecOut {
   final: string;
   log: string[];
   confirmed: number;
+  plan?: any;
 }
 
 async function execPlan(w: Wallet, planRes: any): Promise<ExecOut> {
@@ -281,7 +288,7 @@ async function execPlan(w: Wallet, planRes: any): Promise<ExecOut> {
     }
     if (adv.status !== 200) return { final: `advance_${adv.status}`, log: [...log, JSON.stringify(adv.json).slice(0, 300)], confirmed };
     const a = adv.json;
-    if (a.plan.state === "completed") return { final: "completed", log, confirmed };
+    if (a.plan.state === "completed") return { final: "completed", log, confirmed, plan: a.plan };
     if (!a.unsigned_tx) {
       if (a.plan.state === "paused" && /out of date|stale|route|price|temporar|try again/i.test(a.pause_reason ?? "") && staleRetries++ < 5) {
         log.push(`pause(retry ${staleRetries}): ${a.pause_reason}`);
@@ -512,6 +519,21 @@ async function evaluate(p: Prompt, out: ChatOut, ctx: { w: Wallet | null; histor
 
   if (kind === "plan_preview" && typeof res.plan?.hf_floor === "number" && res.plan.hf_floor < 1.15 - 1e-9) f.push(`plan health-factor floor ${res.plan.hf_floor} is below the 1.15 policy floor`);
 
+  // the whole plan, reads included, in the user's order
+  if (exp.ops && (kind === "preview" || kind === "plan_preview")) {
+    const ops = (res.plan?.steps ?? []).map((s: any) => s.op).filter((op: string, i: number) => !(i === 0 && op === "create_account" && !exp.ops!.includes("create_account")));
+    if (ops.join(",") !== exp.ops.join(",")) f.push(`plan steps are ${ops.join(",")}, expected ${exp.ops.join(",")}`);
+  }
+  if (exp.readTools && (kind === "preview" || kind === "plan_preview")) {
+    const used = new Set<string>();
+    for (const s of res.plan?.steps ?? []) {
+      if (s.kind !== "read" || typeof s.slots?.reads !== "string") continue;
+      try {
+        for (const r of JSON.parse(s.slots.reads)) used.add(r.tool);
+      } catch {}
+    }
+    for (const tool of exp.readTools) if (!used.has(tool)) f.push(`no read step uses ${tool}; reads: ${[...used].join(", ") || "none"}`);
+  }
   // plan content equals what was asked
   if (exp.plan && (kind === "preview" || kind === "plan_preview")) {
     const writes = (res.plan?.steps ?? []).filter((s: any) => s.kind === "write");
@@ -621,7 +643,7 @@ function loadCorpus(): { prompts: Prompt[]; api: Array<{ id: string; category: s
         group: j.group ?? "acct",
         ...e,
         category: j.category,
-        expect: { kinds: e.kinds, ...(e.plan ? { plan: e.plan } : {}), ...(e.match ? { match: e.match } : {}), ...(e.forbid ? { forbid: e.forbid } : {}) },
+        expect: { kinds: e.kinds, ...(e.plan ? { plan: e.plan } : {}), ...(e.match ? { match: e.match } : {}), ...(e.forbid ? { forbid: e.forbid } : {}), ...(e.ops ? { ops: e.ops } : {}), ...(e.readTools ? { readTools: e.readTools } : {}), ...(e.readAnswerMatch ? { readAnswerMatch: e.readAnswerMatch } : {}) },
         why: e.why,
       });
     }
@@ -765,6 +787,14 @@ async function runPrompt(p: Prompt, w: Wallet | null, groupError: string | undef
         r.status = "fail";
         r.failures.push(`execution ended "${x.final}", expected "${want}": ${x.log.slice(-3).join(" / ")}`);
       } else if (want === "completed") {
+        const reads = (x.plan?.steps ?? []).filter((s: any) => s.kind === "read");
+        for (const s of reads) {
+          const text = s.answer ? [s.answer.headline, s.answer.note ?? "", ...(s.answer.facts ?? []).map((f: any) => `${f.label} ${f.value}`)].join(" ") : "";
+          if (!text) r.failures.push(`read step ${s.n} (${s.label}) has no answer`);
+          else if (p.expect.readAnswerMatch && !p.expect.readAnswerMatch.some((m) => new RegExp(m, "i").test(text))) r.failures.push(`read step ${s.n} answer matched none of ${p.expect.readAnswerMatch.join(" | ")}: ${text.slice(0, 200)}`);
+          else r.warnings.push(`read step ${s.n}: ${text.slice(0, 240)}`);
+        }
+        if (r.failures.length) r.status = "fail";
         const after = await groundTruth(w);
         r.warnings.push(`executed; wallet SOL ${before.wallet?.sol_balance} -> ${after.wallet?.sol_balance}; HF ${before.health?.health_factor ?? "n/a"} -> ${after.health?.health_factor ?? "n/a"}`);
         const hfRaw = after.health?.health_factor;

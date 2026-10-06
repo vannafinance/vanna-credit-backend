@@ -237,6 +237,20 @@ html.dark * {
   line-height: 21px;
   letter-spacing: 0;
   padding: 10px 0;
+  overflow-y: hidden;
+  /* Only a prompt longer than the box's maximum scrolls; its scrollbar stays thin and quiet. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--cp-g100) transparent;
+}
+.cp-composer-input::-webkit-scrollbar {
+  width: 6px;
+}
+.cp-composer-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cp-composer-input::-webkit-scrollbar-thumb {
+  background: var(--cp-g100);
+  border-radius: 999px;
 }
 
 /* Inline sidebar glyphs inherit the button colour and expose their moving parts. */

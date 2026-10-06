@@ -1,0 +1,13 @@
+{
+  "category": "17_sizing",
+  "group": "acct",
+  "prompts": [
+    { "id": "sz-001", "prompt": "deposit $50 worth of SOL as collateral", "kinds": ["preview", "plan_preview", "blocked"], "plan": { "steps": [{ "op": "deposit", "asset": "SOL" }] }, "forbid": ["How much SOL"], "why": "a dollar amount is converted at the oracle price, not asked about" },
+    { "id": "sz-002", "prompt": "supply a hundred USDC to earn", "kinds": ["preview", "plan_preview", "blocked"], "plan": { "steps": [{ "op": "earn_supply", "asset": "USDC", "amount": "100" }] }, "why": "an amount written in words" },
+    { "id": "sz-003", "prompt": "borrow 20 USDC and swap half of it to SOL inside my margin account", "kinds": ["plan_preview", "blocked"], "plan": { "steps": [{ "op": "borrow", "asset": "USDC", "amount": "20" }, { "op": "swap", "asset": "USDC", "to_asset": "SOL", "amount": "10" }] }, "why": "a share of the previous step" },
+    { "id": "sz-004", "prompt": "borrow USDC until my health factor is 3", "kinds": ["preview", "plan_preview", "blocked"], "plan": { "steps": [{ "op": "borrow", "asset": "USDC" }] }, "forbid": ["can't watch prices", "standing", "conditional"], "why": "a health-factor target sizes a borrow now; it is not a standing order" },
+    { "id": "sz-005", "prompt": "borrow USDC until my health factor is 1.12", "kinds": ["blocked", "clarification", "answer"], "match": ["1\\.15"], "why": "a target below the Copilot's floor is refused, citing the floor" },
+    { "id": "sz-006", "prompt": "what is the total USD value of my margin collateral and my Earn deposits together?", "kinds": ["answer", "unavailable"], "forbid": ["isn't reported", "not reported", "can't compute", "cannot compute"], "why": "a total no tool reports is computed with calculate, not refused" },
+    { "id": "sz-007", "prompt": "lever SOL 2x borrowing USDT", "kinds": ["plan_preview", "blocked", "clarification"], "forbid": ["Which one should I borrow"], "why": "the named lendable asset funds the long" }
+  ]
+}
