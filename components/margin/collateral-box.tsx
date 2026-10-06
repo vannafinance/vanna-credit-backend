@@ -3,7 +3,7 @@ import { useState, useEffect, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Dropdown } from "../ui/dropdown";
 import {
-  DropdownOptions,
+  CollateralDropdownOptions as DropdownOptions,
   iconPaths,
 } from "@/lib/constants";
 import Image from "next/image";

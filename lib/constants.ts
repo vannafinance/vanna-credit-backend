@@ -1,4 +1,4 @@
-import { LENDING_SYMBOLS, TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
+import { DEPOSIT_SYMBOLS, LENDING_SYMBOLS, TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
 
 export const navbarItems = [
   { title: "Portfolio", link: "/portfolio", group: "primary" },
@@ -26,6 +26,12 @@ export const DropdownOptions: string[] = [...TOKEN_SYMBOLS];
  * collateral-only.
  */
 export const BorrowDropdownOptions: string[] = [...LENDING_SYMBOLS];
+
+/**
+ * Margin collateral deposit pickers (Leverage "Deposit", Transfer Collateral "MB"): every registry
+ * token flagged `depositable` (SOL, USDC, JitoSOL, JupSOL, JupUSD and the xStocks; not USDT).
+ */
+export const CollateralDropdownOptions: string[] = [...DEPOSIT_SYMBOLS];
 
 /** Icon path per symbol (registry icons). */
 export const iconPaths: Record<string, string> = Object.fromEntries(

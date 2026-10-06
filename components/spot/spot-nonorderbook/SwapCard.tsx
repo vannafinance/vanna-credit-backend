@@ -24,6 +24,9 @@ import { SwapSettings, AUTO_SLIPPAGE_PERCENT } from "./SwapSettings";
 import { RouteInfo } from "./RouteInfo";
 import { Token, SwapButtonState, RouteStep } from "./types";
 import { SWAP_TOKENS, routeTokenForMint } from "./registry-tokens";
+
+/** Quick-pick chips in the token picker: the majors, JupUSD and the xStocks. */
+const POPULAR_SYMBOLS = ["SOL", "USDC", "USDT", "JupUSD", "NVDAx", "GOOGLx", "AAPLx", "TSLAx"];
 import { showTxStep, showTxSuccess, showTxError } from "@/lib/tx-progress";
 import { amountFromBalancePercent, getMaxSwappableBalance } from "@/lib/utils/swap-amount";
 
@@ -657,7 +660,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
         onClose={() => setTokenModalTarget(null)}
         onSelect={handleTokenSelect}
         tokens={tokenList}
-        popularTokens={tokenList.slice(0, 5)}
+        popularTokens={tokenList.filter((t) => POPULAR_SYMBOLS.includes(t.symbol))}
         balances={tokenListBalances}
       />
     </>

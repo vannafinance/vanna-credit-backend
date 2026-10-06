@@ -168,22 +168,32 @@ export interface MarginSwapRequest {
 
 /**
  * Route size budget for a margin swap. `margin_execute` carries the route's accounts plus every
- * position group and the agent segments, and the core program runs out of heap ("memory allocation
- * failed") on long routes, so ask Jupiter for a shorter one (the guide's `maxAccounts` advice).
+ * position group and the agent segments. With the core's 256 KiB heap frame (see tx.ts) routes of
+ * ~30 accounts fit, which xStock ↔ xStock pairs (e.g. GOOGLx → AAPLx) need; a shorter route is still
+ * preferred when Jupiter has one, since it leaves room for more position groups in the transaction.
  */
 const MARGIN_SWAP_MAX_ACCOUNTS = 20;
+/** Second try when no route fits {@link MARGIN_SWAP_MAX_ACCOUNTS}. */
+const MARGIN_SWAP_FALLBACK_MAX_ACCOUNTS = 32;
 
-/** Exact-input quote for a margin swap (same routing as wallet swaps, shorter routes). */
-export function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQuote> {
+/** Exact-input quote for a margin swap (same routing as wallet swaps, shorter routes first). */
+export async function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQuote> {
   const from = getToken(req.fromSymbol);
   const to = getToken(req.toSymbol);
-  return fetchJupiterQuote({
-    inputMint: from.mint.toBase58(),
-    outputMint: to.mint.toBase58(),
-    amount: toRaw(req.amount, from.decimals),
-    slippageBps: req.slippageBps,
-    maxAccounts: MARGIN_SWAP_MAX_ACCOUNTS,
-  });
+  const quote = (maxAccounts: number) =>
+    fetchJupiterQuote({
+      inputMint: from.mint.toBase58(),
+      outputMint: to.mint.toBase58(),
+      amount: toRaw(req.amount, from.decimals),
+      slippageBps: req.slippageBps,
+      maxAccounts,
+    });
+  try {
+    return await quote(MARGIN_SWAP_MAX_ACCOUNTS);
+  } catch (error) {
+    if (!/no routes? found/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    return quote(MARGIN_SWAP_FALLBACK_MAX_ACCOUNTS);
+  }
 }
 
 /**

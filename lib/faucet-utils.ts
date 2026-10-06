@@ -1,6 +1,7 @@
 /**
  * Client-side faucet helper for the local Surfpool fork. Every registry token (SOL, USDC, USDT,
- * JitoSOL, JupSOL) is topped up by its `faucetAmount` (1000) through POST /api/faucet, which uses
+ * JitoSOL, JupSOL, JupUSD, and the xStocks NVDAx / GOOGLx / AAPLx / TSLAx) is topped up by its
+ * `faucetAmount` (1000; 10 for an xStock) through POST /api/faucet, which uses
  * Surfpool cheatcodes (`surfnet_setAccount` for SOL lamports, `surfnet_setTokenAccount` for SPL
  * tokens) — no transaction, no wallet signature, no rate limit.
  */

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Dropdown } from "../ui/dropdown";
 import { AnimatePresence, motion } from "framer-motion";
-import { DropdownOptions } from "@/lib/constants";
+import { CollateralDropdownOptions, DropdownOptions } from "@/lib/constants";
 import { DEPOSIT_PERCENTAGES, PERCENTAGE_COLORS } from "@/lib/constants/margin";
 import { Button } from "../ui/button";
 import { useTheme } from "@/contexts/theme-context";
@@ -270,7 +270,8 @@ export const TransferCollateral = () => {
               }`}
               selectedOption={selectedCurrency}
               setSelectedOption={setSelectedCurrency}
-              items={DropdownOptions}
+              // MB deposits offer only depositable tokens; WB withdraws any token the margin holds.
+              items={selectedTransferType === "MB" ? CollateralDropdownOptions : DropdownOptions}
               dropdownClassname="text-[13px] gap-2"
             />
           </div>
@@ -364,6 +365,7 @@ export const TransferCollateral = () => {
                   type="button"
                   onClick={() => {
                     setSelectedTransferType(mode as "WB" | "MB");
+                    if (mode === "MB" && !CollateralDropdownOptions.includes(selectedCurrency)) setSelectedCurrency(CollateralDropdownOptions[0]);
                     setPercentage(0);
                     setValueInput("");
                     setWithdrawAll(false);

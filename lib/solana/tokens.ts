@@ -1,5 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 /**
  * THE token registry — the single source of truth for every asset the app knows about.
@@ -15,11 +15,12 @@ export interface TokenInfo {
   name: string;
   mint: PublicKey;
   decimals: number;
-  /** SPL Token program that owns the mint (classic SPL for all five today). */
+  /** Token program that owns the mint: classic SPL, or Token-2022 for the xStocks. */
   tokenProgram: PublicKey;
   /**
    * Pyth price feed id (hex, no 0x). Reference only: the program now prices each asset from its
-   * on-chain `OracleConfig` (see oracle.ts / prices.ts), not from this id.
+   * on-chain `OracleConfig` (see oracle.ts / prices.ts), not from this id. Empty for the xStocks,
+   * which are priced from Kamino's Scope only.
    */
   pythFeedId: string;
   /** Path under /public. */
@@ -34,7 +35,33 @@ export interface TokenInfo {
    * e.g. the liquid-staking tokens.
    */
   lendable: boolean;
+  /**
+   * True = offered in the Margin page's collateral deposit pickers (Leverage "Deposit" and Transfer
+   * Collateral "MB"). USDT stays lendable / borrowable and withdrawable, it just isn't offered as a
+   * deposit. Every registered token can still be held, swapped and withdrawn.
+   */
+  depositable: boolean;
 }
+
+/**
+ * xStocks (Backed Finance tokenized equities): Token-2022 mints, 8 decimals, collateral only, priced
+ * per raw token by Kamino's Scope (Chainlink xStocks, which already applies the mint's Scaled-UI
+ * multiplier). Amounts shown are raw token amounts, which differ from wallets that apply that
+ * multiplier by well under 1%.
+ */
+const xStock = (symbol: string, name: string, mint: string): TokenInfo => ({
+  symbol,
+  name,
+  mint: new PublicKey(mint),
+  decimals: 8,
+  tokenProgram: TOKEN_2022_PROGRAM_ID,
+  pythFeedId: "",
+  icon: `/coins/${symbol.toLowerCase()}.png`,
+  isNative: false,
+  faucetAmount: 10,
+  lendable: false,
+  depositable: true,
+});
 
 export const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
@@ -50,6 +77,7 @@ export const TOKENS: readonly TokenInfo[] = [
     isNative: true,
     faucetAmount: 1000,
     lendable: true,
+    depositable: true,
   },
   {
     symbol: "USDC",
@@ -62,6 +90,7 @@ export const TOKENS: readonly TokenInfo[] = [
     isNative: false,
     faucetAmount: 1000,
     lendable: true,
+    depositable: true,
   },
   {
     symbol: "USDT",
@@ -74,6 +103,7 @@ export const TOKENS: readonly TokenInfo[] = [
     isNative: false,
     faucetAmount: 1000,
     lendable: true,
+    depositable: false,
   },
   {
     symbol: "JitoSOL",
@@ -86,6 +116,7 @@ export const TOKENS: readonly TokenInfo[] = [
     isNative: false,
     faucetAmount: 1000,
     lendable: false,
+    depositable: true,
   },
   {
     symbol: "JupSOL",
@@ -98,7 +129,25 @@ export const TOKENS: readonly TokenInfo[] = [
     isNative: false,
     faucetAmount: 1000,
     lendable: false,
+    depositable: true,
   },
+  {
+    symbol: "JupUSD",
+    name: "Jupiter USD",
+    mint: new PublicKey("JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD"),
+    decimals: 6,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    pythFeedId: "8ed858a2214e892c9371694fb6c8a9037b6ed4052c4edf209f8cb988484e81d9",
+    icon: "/coins/jupusd.png",
+    isNative: false,
+    faucetAmount: 1000,
+    lendable: false,
+    depositable: true,
+  },
+  xStock("NVDAx", "NVIDIA xStock", "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh"),
+  xStock("GOOGLx", "Alphabet xStock", "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN"),
+  xStock("AAPLx", "Apple xStock", "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"),
+  xStock("TSLAx", "Tesla xStock", "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB"),
 ] as const;
 
 /** Every registered UI symbol, in registry order. */
@@ -107,6 +156,9 @@ export const TOKEN_SYMBOLS: readonly string[] = TOKENS.map((t) => t.symbol);
 /** Tokens with an Earn pool the app offers — also the only tokens the Margin page lets you borrow. */
 export const LENDING_TOKENS: readonly TokenInfo[] = TOKENS.filter((t) => t.lendable);
 export const LENDING_SYMBOLS: readonly string[] = LENDING_TOKENS.map((t) => t.symbol);
+
+/** Tokens offered as a Margin collateral deposit (see `TokenInfo.depositable`). */
+export const DEPOSIT_SYMBOLS: readonly string[] = TOKENS.filter((t) => t.depositable).map((t) => t.symbol);
 
 const BY_UPPER_SYMBOL = new Map(TOKENS.map((t) => [t.symbol.toUpperCase(), t]));
 const BY_MINT = new Map(TOKENS.map((t) => [t.mint.toBase58(), t]));

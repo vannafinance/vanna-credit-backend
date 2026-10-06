@@ -16,6 +16,7 @@ import { useFarmPools, useFarmPositions } from "@/lib/farm/use-farm";
 import { formatMetric, formatTokenMetric, type FarmPoolConfig } from "@/lib/farm/pools";
 import { useMarginHistory } from "@/hooks/use-margin";
 import { explorerUrl } from "@/lib/solana/config";
+import { isFarmListed } from "@/lib/solana/farm";
 import { useAccountSnapshot } from "@/hooks/use-account-snapshot";
 import { HEALTH_FACTOR_INFINITY_SENTINEL } from "@/lib/margin-health";
 import { BASIS_VAULTS, fmtPct, fmtSignedPct, fmtUsdCompact } from "@/lib/farm/basis-vaults";
@@ -77,7 +78,7 @@ export default function FarmPage() {
   // Single-asset table. Column order matches singleAssetTableHeadings:
   //   Asset · Protocol · Total Deposits · Total Borrow · Supply APY · Borrow APY · Utilization · Holding
   const singleAssetTableBody = useMemo(() => {
-    const rows: FarmTableRow[] = pools.map((pool) => ({
+    const rows: FarmTableRow[] = pools.filter((pool) => isFarmListed(pool.symbol)).map((pool) => ({
       id: pool.id,
       cell: [
         { chain: pool.symbol, title: pool.symbol, tags: [pool.protocol, "Supply"] },
@@ -236,7 +237,7 @@ export default function FarmPage() {
       icon: "",
       title: "Farm DeFi Yields",
       description:
-        "Supply SOL, USDC, USDT, JitoSOL and JupSOL to Kamino straight from your margin account and earn Kamino's supply yield.",
+        "Supply SOL, USDC and USDT to Kamino straight from your margin account and earn Kamino's supply yield.",
     },
     {
       icon: "",
