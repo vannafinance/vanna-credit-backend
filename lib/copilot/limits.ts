@@ -167,6 +167,11 @@ export async function checkSpend(user: CopilotUser, usd: number): Promise<LimitR
   return { ok: true };
 }
 
+/** USD already counted toward today's cap for this user (read-only; used to check a whole plan before it is offered). */
+export async function spentTodayUsd(user: CopilotUser): Promise<number> {
+  return (await read(`spend:${user.subject}:${utcDay(limitsClock.now())}`)) / 1e6;
+}
+
 /** Counts USD value toward today's cap (micro-dollars, so the counter stays an integer). */
 export async function recordSpend(user: CopilotUser, usd: number): Promise<void> {
   if (!Number.isFinite(usd) || usd <= 0) return;

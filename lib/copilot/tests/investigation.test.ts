@@ -295,3 +295,30 @@ describe("questions with choices", () => {
     expect(picked.preview?.slots.op).toBe("deposit");
   });
 });
+
+describe("spending limits are checked before a plan is offered", () => {
+  it("refuses a leverage borrow over the per-action limit up front, with the largest multiple that fits", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "deposit", asset: "JitoSOL", sizing: { kind: "literal", amount: "10" } },
+      { op: "borrow", asset: "SOL", sizing: { kind: "leverage", multiple: 5 } },
+    ] } }]]));
+    const res = await chat("take a loan of sol using 10 jitosol as collateral in margin account and use leverage of 5x");
+    // 10 JitoSOL x $140 = $1,400; (5 - 1) x $1,400 = $5,600 > $5,000; most = 1 + 5,000 / 1,400 = 4.57x
+    expect(res.kind).toBe("clarification");
+    expect(res.message).toMatch(/\$5,600\.00/);
+    expect(res.message).toMatch(/per-action limit of \$5,000\.00/);
+    expect(res.message).toMatch(/4\.57x/);
+    expect(workflows.docs.size).toBe(0); // nothing offered, nothing to approve
+  });
+
+  it("does not offer a plan with any step over the per-action limit", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "1" } },
+      { op: "borrow", asset: "USDC", sizing: { kind: "literal", amount: "6000" } },
+    ] } }]]));
+    const res = await chat("deposit 1 SOL and borrow 6000 USDC");
+    expect(res.kind).toBe("blocked");
+    expect(res.message).toMatch(/Step 2 .* above the per-action limit/);
+    expect(workflows.docs.size).toBe(0);
+  });
+});

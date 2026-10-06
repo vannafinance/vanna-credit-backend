@@ -23,10 +23,10 @@ import { answerToText } from "./answer-schema";
 import { copilotConfig } from "./config";
 import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
-import { fmtAmount } from "./explain";
+import { fmtAmount, fmtUsd } from "./explain";
 import type { AmountSpec, Asset, Intent, WriteIntent } from "./intent";
-import { checkAndConsume, LimitContentionError, recordTokens } from "./limits";
-import { loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
+import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
+import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
 import { investigate } from "./investigation";
@@ -384,8 +384,37 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
   return { kind: "preview", message: lines.join("\n"), preview, plan: view, workflow_id: rec.id, ...base };
 }
 
+/**
+ * The spending limits for a whole plan, checked before it is offered. Each step is checked again when it runs (prices
+ * move), but a plan whose step is already over the per-action limit, or whose total would pass today's limit, must not
+ * be offered at all: the user would approve it, sign the first steps, and be stopped halfway.
+ */
+async function planSpendProblem(steps: StepSpec[], t: Turn): Promise<string | null> {
+  const perAction = copilotConfig.maxActionUsd;
+  const daily = copilotConfig.maxDailyUsd;
+  let total = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.kind !== "write" || !s.asset || !s.amount || !/^\d+(?:\.\d+)?$/.test(s.amount)) continue; // "all" / receive-sized: checked when built
+    const p = await loadFreshPrice(s.asset, t.ctx);
+    if (!p) continue;
+    const usd = Number(s.amount) * p.usd;
+    total += usd;
+    if (usd > perAction) {
+      return `Step ${i + 1} (${labelFor(s)}) is worth about ${fmtUsd(usd)}, above the per-action limit of ${fmtUsd(perAction)}, so I haven't prepared this plan. Ask for a smaller amount.`;
+    }
+  }
+  const spent = await spentTodayUsd(t.user);
+  if (spent + total > daily) {
+    return `This plan is worth about ${fmtUsd(total)}; with ${fmtUsd(spent)} already done today it would pass the daily limit of ${fmtUsd(daily)}, so I haven't prepared it. Ask for a smaller amount.`;
+  }
+  return null;
+}
+
 async function planPreview(plan: PlannedWorkflow, t: Turn): Promise<Reply> {
   const { base } = t;
+  const overLimit = await planSpendProblem(plan.steps, t);
+  if (overLimit) return { kind: "blocked", message: overLimit, ...base };
   const rec = await createWorkflow({
     user: t.user,
     summary: plan.summary,

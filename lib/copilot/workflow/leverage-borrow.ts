@@ -11,6 +11,7 @@
  * drawn, and refused with the highest multiple that does hold it.
  */
 
+import { copilotConfig } from "../config";
 import { fmtAmount, fmtHf, fmtUsd } from "../explain";
 import type { WriteIntent } from "../intent";
 import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
@@ -71,6 +72,11 @@ export async function sizeLevBorrow(w: WriteIntent, earlier: StepSpec[], ctx: Re
     return { ok: false, message: `${multiple}x on ${basis} would borrow about ${fmtUsd(borrowUsd)} of ${asset} and take your health factor to ${fmtHf(after)}, below the ${floor.toFixed(2)} floor.${holds}` };
   }
 
+  // The per-action limit applies to the borrow itself; say the largest multiple it allows instead of failing mid-plan.
+  if (borrowUsd > copilotConfig.maxActionUsd) {
+    const most = Math.floor((1 + copilotConfig.maxActionUsd / baseUsd) * 100) / 100;
+    return { ok: false, message: `${multiple}x on ${basis} would borrow about ${fmtUsd(borrowUsd)} of ${asset}, above the per-action limit of ${fmtUsd(copilotConfig.maxActionUsd)}. The most I can borrow in one action on this is about ${most.toFixed(2)}x. Ask for that or less.` };
+  }
   const amount = usdToUnits(borrowUsd, price.usd, asset);
   if (!(Number(amount) > 0)) return { ok: false, message: `That leverage works out to less than the smallest ${asset} amount, so there is nothing to borrow.` };
 
