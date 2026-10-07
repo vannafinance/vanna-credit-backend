@@ -16,6 +16,8 @@ interface RouteInfoProps {
 }
 
 const PROVIDER_NAME: Record<string, string> = { jupiter: "Jupiter", titan: "Titan" };
+/** Logo for the "via …" badge, keyed by the aggregator's display name. */
+const PROVIDER_LOGO: Record<string, string> = { Jupiter: "/protocols/jupiter.png", Titan: "/protocols/titan.png" };
 
 /** One leg of the path between two consecutive tokens; a split leg has several AMMs. */
 interface Leg {
@@ -80,7 +82,11 @@ export const RouteInfo = ({ route, isLoading, dex, alternatives, outDecimals, ou
           )}
         </div>
         {dex && (
-          <span className="shrink-0 text-[11px] font-semibold leading-[15px] px-2.5 py-0.5 rounded-full text-white bg-linear-to-r from-[#FC5457] to-[#703AE6]">
+          <span className="shrink-0 flex items-center gap-1 text-[11px] font-semibold leading-[15px] pl-1 pr-2.5 py-0.5 rounded-full text-white bg-linear-to-r from-[#FC5457] to-[#703AE6]">
+            {PROVIDER_LOGO[dex] && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={PROVIDER_LOGO[dex]} alt="" className="w-4 h-4 rounded-full" />
+            )}
             via {dex}
           </span>
         )}

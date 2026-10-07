@@ -34,6 +34,15 @@ export interface TitanRouteResponse {
   addressLookupTables: string[];
   /** Venues the route goes through, when Titan names them. */
   labels: string[];
+  /** Each hop / split leg: venue, its input and output mint, and its share of the input (%). */
+  steps: TitanRouteStep[];
+}
+
+export interface TitanRouteStep {
+  label: string;
+  inputMint: string;
+  outputMint: string;
+  percent: number;
 }
 
 /**
@@ -88,5 +97,12 @@ export async function titanQuote(params: {
     instructions: (route.instructions ?? []) as TitanRouteInstruction[],
     addressLookupTables: ((route.addressLookupTables ?? []) as string[]).map(String),
     labels: steps.map((s) => String(s.label ?? s.dex ?? s.amm ?? "")).filter(Boolean),
+    // allocPpb = the leg's share of the input in parts per billion.
+    steps: steps.map((s) => ({
+      label: String(s.label ?? s.dex ?? s.amm ?? "Titan"),
+      inputMint: String(s.inputMint ?? ""),
+      outputMint: String(s.outputMint ?? ""),
+      percent: s.allocPpb !== undefined ? Math.round(Number(s.allocPpb) / 1e7) : 100,
+    })),
   };
 }

@@ -16,8 +16,6 @@ const SLIPPAGE_OPTIONS = [
   { bps: 50, label: "0.5%" },
   { bps: 100, label: "1%" },
   { bps: 200, label: "2%" },
-  { bps: 300, label: "3%" },
-  { bps: 500, label: "5%" },
 ];
 
 interface PerpsOrderPlacementFormProps {
@@ -77,8 +75,9 @@ const PerpsOrderPlacementForm = ({
   const price = market?.indexPrice;
   const indexPrice = price != null && Number.isFinite(price) && price > 0 ? price : null;
   const sizeTokens = indexPrice == null || !Number.isFinite(sizeUsd) ? null : sizeUsd / indexPrice;
-  // The order's worst price is set from the live index price (Phoenix's mark as a fallback).
-  const refPrice = indexPrice ?? (market?.markPrice && market.markPrice > 0 ? market.markPrice : null);
+  // The order's worst price is set around Phoenix's own mark — where the book trades (the index as
+  // a fallback); lib/solana/perps.ts uses the same reference (the live mainnet mark on the fork).
+  const refPrice = market?.markPrice && market.markPrice > 0 ? market.markPrice : indexPrice;
   const acceptablePrice = refPrice == null ? null : refPrice * (1 + (side === "long" ? 1 : -1) * slippageBps / 10_000);
   const currentHealth = account?.hasMargin ? healthFactorDisplay(account.healthFactor) : null;
   const zeroEquityPrice =
@@ -312,8 +311,8 @@ const PerpsOrderPlacementForm = ({
       {/* slippage */}
       <div className="flex flex-col gap-1.5">
         <span className={`text-[11px] leading-[15px] font-medium ${primary}`}>Slippage</span>
-        {/* Five equal-width options that always fit the form column. */}
-        <div className="grid grid-cols-5 gap-1.5">
+        {/* Equal-width options that always fit the form column. */}
+        <div className="grid grid-cols-3 gap-1.5">
           {SLIPPAGE_OPTIONS.map((o) => (
             <button
               key={o.bps}
@@ -385,7 +384,7 @@ const PerpsOrderPlacementForm = ({
           </Link>
         )}
         <p className={`text-[10px] leading-[15px] ${muted}`}>
-          Market order on Phoenix, filled immediately (or not at all) within your slippage of the index price. Your first
+          Market order on Phoenix, filled immediately (or not at all) within your slippage of Phoenix&apos;s mark price. If nothing fills, your USDC stays in Phoenix. Your first
           trade also creates your Phoenix account (one extra wallet approval).
         </p>
       </div>

@@ -51,7 +51,10 @@ function titanAsQuote(t: TitanQuote, req: QuoteRequest): AggregatedQuote {
     outAmount: t.outAmount,
     otherAmountThreshold: ((out * BigInt(10_000 - t.slippageBps)) / 10_000n).toString(),
     slippageBps: t.slippageBps,
-    routePlan: (t.labels.length ? t.labels : ["Titan"]).map((label) => ({ swapInfo: { label }, percent: 100 })),
+    // Same shape as Jupiter's routePlan, so the route card shows each leg's tokens and split.
+    routePlan: t.steps?.length
+      ? t.steps.map((s) => ({ swapInfo: { label: s.label, inputMint: s.inputMint, outputMint: s.outputMint }, percent: s.percent }))
+      : (t.labels.length ? t.labels : ["Titan"]).map((label) => ({ swapInfo: { label, inputMint: req.inputMint, outputMint: req.outputMint }, percent: 100 })),
     provider: "titan",
     titan: t,
     quotes: [],
@@ -113,6 +116,9 @@ export async function executeSwapQuote(
 }
 
 export const providerLabel = (p: SwapProvider): string => (p === "titan" ? "Titan" : "Jupiter");
+
+/** Each aggregator's logo (public/protocols). */
+export const providerLogo = (p: SwapProvider): string => (p === "titan" ? "/protocols/titan.png" : "/protocols/jupiter.png");
 
 /** Short explanation of Titan's part in the current quote. */
 export const titanStatusLabel = (s: TitanStatus | undefined): string =>

@@ -126,7 +126,8 @@ export interface PerpHistoryRow {
   timestamp: number;
   /** "open" market order, "close" reduce-only order, "deposit" USDC into Phoenix, "settle" USDC
    * back to the margin ("cancel" / "setup" are kept for older rows). */
-  action: "open" | "close" | "cancel" | "settle" | "setup" | "deposit";
+  /** "nofill": an immediate-or-cancel order that found nothing inside its price limit. */
+  action: "open" | "close" | "cancel" | "settle" | "setup" | "deposit" | "nofill";
   market: string | null;
   side: PerpSide | null;
   /** Order size, USD (open / close). */

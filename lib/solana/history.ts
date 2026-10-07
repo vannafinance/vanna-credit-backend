@@ -55,7 +55,7 @@ export type MarginEventType =
   | "open-debt"
   | "close-debt"
   | "close-collateral"
-  /** `margin_execute` via Jupiter: `symbol`/`amount` = spent, `toSymbol`/`toAmount` = received. */
+  /** `margin_execute` via Jupiter or Titan (`via`): `symbol`/`amount` = spent, `toSymbol`/`toAmount` = received. */
   | "swap"
   /** `margin_execute` Kamino deposit: `symbol`/`amount` = underlying supplied. */
   | "farm-deposit"
@@ -80,7 +80,15 @@ export interface MarginHistoryRow {
   /** Received side of a swap. */
   toSymbol?: string;
   toAmount?: string;
+  /** Aggregator a swap ran through (from the `MarginExecuted` event's target program). */
+  via?: "Jupiter" | "Titan";
 }
+
+/** Swap aggregators by program id, to label `swap` rows. */
+const SWAP_VIA: Record<string, "Jupiter" | "Titan"> = {
+  JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4: "Jupiter",
+  T1TANpTeScyeqVzzgNViGDNrkQ6qHz9KrSBS4aNXvGT: "Titan",
+};
 
 export interface HistoryPage<T> {
   rows: T[];
@@ -250,6 +258,7 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
               healthFactor: hf(e.data),
               toSymbol: to?.symbol ?? "",
               toAmount: to ? fromRaw(received, to.decimals) : "0",
+              via: SWAP_VIA[target],
             });
           }
           break;

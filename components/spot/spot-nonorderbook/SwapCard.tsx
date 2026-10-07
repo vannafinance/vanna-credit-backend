@@ -9,7 +9,7 @@ import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-
 import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { PublicKey } from "@solana/web3.js";
-import { bestSwapQuote, executeSwapQuote, providerLabel, type AggregatedQuote, type SwapProvider } from "@/lib/solana/aggregator";
+import { bestSwapQuote, executeSwapQuote, providerLabel, providerLogo, type AggregatedQuote, type SwapProvider } from "@/lib/solana/aggregator";
 import { TitanUnavailableError } from "@/lib/solana/titan";
 import { fromRaw, toRaw } from "@/lib/solana/math";
 import { spendableLamports } from "@/lib/solana/balances";
@@ -508,6 +508,8 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
                   title={routeLabel ? `Current route: ${routeLabel}` : undefined}
                 >
                   <span className={isDark ? "text-[#777777]" : "text-[#A7A7A7]"}>via</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={providerLogo(aggregator)} alt="" className="w-4 h-4 rounded-full" />
                   <span className="font-semibold">{providerLabel(aggregator)}</span>
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={`transition-transform ${isAggregatorMenuOpen ? "rotate-180" : ""}`}>
                     <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -516,7 +518,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
                 {isAggregatorMenuOpen && (
                   <div
                     role="listbox"
-                    className={`absolute left-0 top-full mt-1.5 z-20 w-[230px] rounded-xl p-1 border shadow-lg ${
+                    className={`absolute left-0 top-full mt-1.5 z-20 w-[260px] rounded-xl p-1 border shadow-lg ${
                       isDark ? "bg-[#1F1F1F] border-[#2E2E2E]" : "bg-white border-[#E8E8E8]"
                     }`}
                   >
@@ -533,18 +535,20 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
                             setIsAggregatorMenuOpen(false);
                             setTxHash("");
                           }}
-                          className={`w-full flex items-start justify-between gap-2 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
+                          className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
                             selected
                               ? isDark ? "bg-[#703AE6]/15" : "bg-[#703AE6]/10"
                               : isDark ? "hover:bg-[#2A2A2A]" : "hover:bg-[#F4F4F4]"
                           }`}
                         >
-                          <span className="flex flex-col">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={providerLogo(a.id)} alt="" className="w-7 h-7 rounded-full shrink-0" />
+                          <span className="flex flex-col flex-1 min-w-0">
                             <span className={`text-[13px] font-semibold ${isDark ? "text-white" : "text-[#111111]"}`}>{a.label}</span>
                             <span className={`text-[11px] ${isDark ? "text-[#888888]" : "text-[#777777]"}`}>{a.hint}</span>
                           </span>
                           {selected && (
-                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="mt-0.5 shrink-0">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0">
                               <path d="M3 7.5L5.8 10L11 4" stroke="#703AE6" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           )}

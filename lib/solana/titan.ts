@@ -61,6 +61,8 @@ export interface TitanQuote {
   instructions: TitanInstruction[];
   addressLookupTables: string[];
   labels: string[];
+  /** Each hop / split leg (venue, input / output mint, share of the input in %). */
+  steps?: { label: string; inputMint: string; outputMint: string; percent: number }[];
 }
 
 /** Thrown when the server has no TITAN_API_KEY: callers fall back to Jupiter quietly. */

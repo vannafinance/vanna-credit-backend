@@ -59,10 +59,10 @@ import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryR
 
 /** Phoenix collateral (the market book's `collateral_mint`). */
 const USDC = getToken("USDC");
-/** Default worst-price protection for market orders, bps: 1% on crypto markets, 3% on the stock
- * markets (thinner books, wider spreads). */
+/** Default worst-price protection for market orders, bps: 1% on crypto markets, 2% on the stock
+ * markets (thinner books, wider spreads). The Perps form offers 0.5 / 1 / 2%. */
 const DEFAULT_SLIPPAGE_BPS = 100;
-const STOCK_SLIPPAGE_BPS = 300;
+const STOCK_SLIPPAGE_BPS = 200;
 const STOCK_MARKETS = new Set(["TSLA", "META"]);
 /** The default price limit for a market, bps. */
 export const defaultSlippageBps = (market: string): number => (STOCK_MARKETS.has(market.toUpperCase().replace(/-PERP$/, "")) ? STOCK_SLIPPAGE_BPS : DEFAULT_SLIPPAGE_BPS);
@@ -204,13 +204,25 @@ async function loadPerpsContext(owner: PublicKey): Promise<PerpsContext> {
  * The price an order's limit is set from: the live index (on the fork Phoenix's own mark can lag,
  * while the book is refreshed from mainnet before each trade), else Phoenix's mark.
  */
-function refPrice(m: PhoenixListedMarket): number {
-  return m.index?.usd && m.index.usd > 0 ? m.index.usd : m.markUsd;
+/**
+ * The price an order's limit is set around: where Phoenix's book trades (`liveMark` from the fork's
+ * book refresh, else the market's own mark), falling back to the index. Orders fill against the
+ * book, so pricing off the index missed fills whenever the two diverged (TSLA's index ran ~0.9% above
+ * Phoenix's book and a 1% short found nothing).
+ */
+function refPrice(m: PhoenixListedMarket, liveMark?: number | null): number {
+  if (liveMark && liveMark > 0) return liveMark;
+  if (m.markUsd > 0) return m.markUsd;
+  return m.index?.usd ?? 0;
 }
 
-/** Fork only: re-copy the market's book from mainnet before trading (no-op elsewhere / on error). */
-async function refreshBook(market: string): Promise<void> {
-  await postApi("/api/perps/phoenix-book", { market }).catch(() => undefined);
+/**
+ * Fork only: re-copy the market's book from mainnet before trading and get mainnet Phoenix's mark
+ * for it (null elsewhere / on error — the market's own mark is live there).
+ */
+async function refreshBook(market: string): Promise<number | null> {
+  const res = await postApi<{ markUsd?: number | null }>("/api/perps/phoenix-book", { market }).catch(() => null);
+  return res?.markUsd ?? null;
 }
 
 function marketFor(venue: PhoenixVenueContext, key: string): PhoenixListedMarket {
@@ -287,7 +299,7 @@ function lotsFor(m: PhoenixListedMarket, sizeUsd: number, priceUsd: number): big
 export async function openPerp(req: OpenPerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   opts.onStatus?.("Refreshing prices and the order book");
-  await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
+  const [, liveMark] = await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
   opts.onStatus?.("Preparing your order");
   const p = await loadPerpsContext(signer.publicKey);
   const m = marketFor(p.venue, req.market);
@@ -301,7 +313,7 @@ export async function openPerp(req: OpenPerpRequest, opts: MarginServiceOptions 
 
   const isLong = req.side === "long";
   const slip = (req.slippageBps ?? defaultSlippageBps(m.meta.key)) / 10_000;
-  const ref = refPrice(m);
+  const ref = refPrice(m, liveMark);
   if (!(ref > 0)) throw new Error(`No price for ${m.meta.name}`);
   const limit = isLong ? ref * (1 + slip) : ref * (1 - slip);
   // Size = collateral × leverage, valued at the limit price as the validator does, and kept inside
@@ -393,7 +405,7 @@ export async function withdrawPerpCollateral(req: WithdrawPerpCollateralRequest 
 export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   opts.onStatus?.("Refreshing prices and the order book");
-  await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
+  const [, liveMark] = await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
   opts.onStatus?.("Preparing your order");
   const p = await loadPerpsContext(signer.publicKey);
   const m = marketFor(p.venue, req.market);
@@ -401,7 +413,7 @@ export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOption
   if (base === 0n) throw new Error(`No open ${m.meta.name} position`);
   const isLong = base > 0n;
   const abs = isLong ? base : -base;
-  const ref = refPrice(m);
+  const ref = refPrice(m, liveMark);
   let lots = abs;
   if (req.sizeUsd !== undefined) {
     lots = lotsFor(m, req.sizeUsd, ref);
@@ -489,6 +501,8 @@ export async function fetchPerpsHistory(owner: PublicKey, limit = 100): Promise<
       const sig = sigs[i + k];
       const timestamp = sig.blockTime ?? tx.blockTime ?? 0;
       const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined });
+      const fills = orderFills(tx.meta.logMessages ?? []);
+      let orderIndex = 0;
       for (const ix of tx.transaction.message.compiledInstructions) {
         if (!keys.get(ix.programIdIndex)?.equals(program.programId)) continue;
         // margin_execute's target program is its 5th named account.
@@ -524,14 +538,18 @@ export async function fetchPerpsHistory(owner: PublicKey, limit = 100): Promise<
           const m = orderbookKey ? byOrderbook.get(orderbookKey) : undefined;
           const tokens = m ? lotsToTokens(lots, m.market.lotDecimals) : null;
           const price = hasPrice && m ? (Number(inner.readBigUInt64LE(11)) * Number(m.market.tickSize) * 10 ** m.market.lotDecimals) / 1e6 : null;
+          // What Phoenix actually filled (its return data); an IOC order with nothing in range fills 0.
+          const fill = fills[orderIndex++];
+          const unfilled = fill !== undefined && fill.baseLots === 0n && fill.quoteMicro === 0n;
+          const filledUsd = fill && fill.quoteMicro > 0n ? Number(fill.quoteMicro) / 1e6 : null;
           rows.push({
             signature: sig.signature,
             timestamp,
-            action: reduceOnly ? "close" : "open",
+            action: unfilled ? "nofill" : reduceOnly ? "close" : "open",
             // A reduce-only buy closes a short; a reduce-only sell closes a long.
             market: m?.meta.key ?? null,
             side: reduceOnly ? (side === "long" ? "short" : "long") : side,
-            sizeUsd: tokens !== null && price !== null ? tokens * price : null,
+            sizeUsd: unfilled ? null : filledUsd ?? (tokens !== null && price !== null ? tokens * price : null),
             usdc: null,
           });
         }
@@ -539,6 +557,29 @@ export async function fetchPerpsHistory(owner: PublicKey, limit = 100): Promise<
     });
   }
   return rows.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Phoenix `place_market_order` results in log order, from each call's return data (u64 slots): a
+ * buy fills quote paid at byte 16 and base lots received at byte 40; a sell fills base lots sold at
+ * byte 24 and quote received at byte 32 (USDC micro-units). All zero = the immediate-or-cancel order
+ * found nothing inside its price limit.
+ */
+function orderFills(logs: string[]): { quoteMicro: bigint; baseLots: bigint }[] {
+  const fills: { quoteMicro: bigint; baseLots: bigint }[] = [];
+  let pending = false;
+  const prefix = `Program return: ${PHOENIX_PROGRAM_ID.toBase58()} `;
+  for (const line of logs) {
+    if (line.includes("Phoenix Eternal: Place Market Order")) pending = true;
+    else if (pending && line.startsWith(prefix)) {
+      pending = false;
+      const data = Buffer.from(line.slice(prefix.length), "base64");
+      const slot = (offset: number) => (data.length >= offset + 8 ? data.readBigUInt64LE(offset) : 0n);
+      const max = (x: bigint, y: bigint) => (x > y ? x : y);
+      fills.push({ quoteMicro: max(slot(16), slot(32)), baseLots: max(slot(24), slot(40)) });
+    }
+  }
+  return fills;
 }
 
 /** Every market Vanna lists on Phoenix (static metadata, used before the market book loads). */
