@@ -37,7 +37,7 @@ export const SwapHistory = () => {
     <div className={`w-full rounded-2xl border p-5 flex flex-col gap-3 ${isDark ? "bg-[#1A1A1A] border-[#2A2A2A]" : "bg-white border-[#E2E2E2]"}`}>
       <div className="flex items-center justify-between">
         <span className={`text-[16px] font-semibold ${strong}`}>Swap history</span>
-        <span className={`text-[11px] font-medium ${muted}`}>Margin account · via Jupiter</span>
+        <span className={`text-[11px] font-medium ${muted}`}>Margin account · via Jupiter / Titan</span>
       </div>
       {swaps.length === 0 ? (
         <div className={`py-8 text-center text-[13px] ${muted}`}>{isLoading ? "Loading swaps…" : "No swaps yet"}</div>

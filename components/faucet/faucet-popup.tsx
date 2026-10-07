@@ -110,7 +110,7 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.97 }}
             transition={{ duration: 0.22, ease: "easeOut" }}
-            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2001] w-[92vw] max-w-[440px] rounded-[16px] overflow-hidden ${
+            className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2001] w-[92vw] max-w-[600px] max-h-[85vh] flex flex-col rounded-[16px] overflow-hidden ${
               isDark
                 ? "bg-[#161616] border border-[#2A2A2A]"
                 : "bg-white border border-[#E8E8E8]"
@@ -126,7 +126,7 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
           >
             {/* Header */}
             <div
-              className={`px-5 py-4 border-b flex items-start justify-between gap-3 ${
+              className={`shrink-0 px-5 py-4 border-b flex items-start justify-between gap-3 ${
                 isDark ? "border-[#222]" : "border-[#F0F0F0]"
               }`}
             >
@@ -166,8 +166,9 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
               </button>
             </div>
 
-            {/* Token rows */}
-            <div className="p-2.5 flex flex-col gap-1.5">
+            {/* Token rows — two compact columns on wider screens; the list scrolls inside the
+                popup so the header and the Fund All footer always stay on screen. */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-2.5 grid grid-cols-1 sm:grid-cols-2 gap-1.5 content-start">
               {TOKENS.map((token) => (
                 <FaucetRow
                   key={token.symbol}
@@ -184,7 +185,7 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
 
             {/* Action footer */}
             <div
-              className={`px-5 py-3 border-t flex items-center justify-between gap-3 ${
+              className={`shrink-0 px-5 py-3 border-t flex items-center justify-between gap-3 ${
                 isDark ? "border-[#222]" : "border-[#F0F0F0]"
               }`}
             >
@@ -239,12 +240,12 @@ const FaucetRow = ({ label, icon, description, state, isDark, disabled, onMint }
 
   return (
     <div
-      className={`flex items-center gap-3 rounded-[12px] px-3 py-2.5 ${
+      className={`flex items-center gap-2.5 rounded-[12px] px-2.5 py-2 ${
         isDark ? "bg-[#1C1C1C]" : "bg-[#F7F7F7]"
       }`}
     >
-      <div className="w-9 h-9 rounded-full overflow-hidden shrink-0 bg-white/5 flex items-center justify-center">
-        <Image src={icon} alt={label} width={28} height={28} />
+      <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 bg-white/5 flex items-center justify-center">
+        <Image src={icon} alt={label} width={26} height={26} />
       </div>
       <div className="flex-1 min-w-0">
         <p

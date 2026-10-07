@@ -150,7 +150,11 @@ function marginSwapCall(quote: TitanQuote, margin: PublicKey): { data: Buffer; a
   }
   const data = Buffer.from(swaps[0].d, "base64");
   if (data[0] !== SWAP_ROUTE_V3) throw new Error("Titan returned a route type the margin adapter doesn't allow");
-  if (data[1] !== KEEP_INPUT_ACCOUNT && data[1] !== MARGIN_CONFIG) throw new Error(`Titan route config ${data[1]} isn't allowed for a margin account`);
+  // The config byte is two flags (KEEP_OUTPUT_WSOL = 1, KEEP_INPUT_ACCOUNT = 2) that only decide
+  // whether wSOL accounts get closed; Titan picks them per pair (config 1 for a SOL input, 2 for a
+  // SOL output) regardless of the request. The margin's vaults must never be closed, so any flag
+  // combination is forced to both flags — the one config the Vanna validator allows.
+  if ((data[1] & ~MARGIN_CONFIG) !== 0) throw new Error(`Titan route config ${data[1]} isn't allowed for a margin account`);
   data[1] = MARGIN_CONFIG;
   const accounts = swaps[0].a.map((a) => ({ pubkey: new PublicKey(a.p), isSigner: false, isWritable: a.w }));
   if (accounts.length < FIXED_ACCOUNT_COUNT || !accounts[0].pubkey.equals(margin) || !accounts[1].pubkey.equals(margin)) {
