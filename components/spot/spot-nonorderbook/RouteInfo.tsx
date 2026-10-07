@@ -7,7 +7,15 @@ interface RouteInfoProps {
   route: RouteStep[] | null;
   isLoading?: boolean;
   dex: string | null;
+  /** Every aggregator that quoted (best first), raw out amounts — shown as a comparison line. */
+  alternatives?: { provider: string; outAmount: string }[];
+  /** Why Titan did or didn't quote (shown when only one provider quoted). */
+  titanNote?: string;
+  outDecimals?: number;
+  outSymbol?: string;
 }
+
+const PROVIDER_NAME: Record<string, string> = { jupiter: "Jupiter", titan: "Titan" };
 
 /** One leg of the path between two consecutive tokens; a split leg has several AMMs. */
 interface Leg {
@@ -49,7 +57,7 @@ const TokenNode = ({ token, isDark }: { token: Token; isDark: boolean }) => (
   </div>
 );
 
-export const RouteInfo = ({ route, isLoading, dex }: RouteInfoProps) => {
+export const RouteInfo = ({ route, isLoading, dex, alternatives, outDecimals, outSymbol, titanNote }: RouteInfoProps) => {
   const { isDark } = useTheme();
   if (!route && !isLoading) return null;
   const legs = route ? toLegs(route) : [];
@@ -77,6 +85,21 @@ export const RouteInfo = ({ route, isLoading, dex }: RouteInfoProps) => {
           </span>
         )}
       </div>
+
+      {alternatives && alternatives.length > 1 && outDecimals !== undefined && (
+        <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-medium ${muted}`}>
+          <span>Best price of {alternatives.length}:</span>
+          {alternatives.map((a, i) => (
+            <span key={a.provider} className={i === 0 ? "text-[#703AE6] font-semibold" : ""}>
+              {PROVIDER_NAME[a.provider] ?? a.provider} {(Number(a.outAmount) / 10 ** outDecimals).toLocaleString(undefined, { maximumFractionDigits: 6 })}
+              {outSymbol ? ` ${outSymbol}` : ""}
+              {i < alternatives.length - 1 ? " ·" : ""}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {titanNote && (!alternatives || alternatives.length < 2) && <div className={`text-[11px] font-medium ${muted}`}>{titanNote}</div>}
 
       {isLoading ? (
         <div className="flex items-center gap-3">

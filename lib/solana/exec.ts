@@ -1,18 +1,18 @@
 /**
- * `margin_execute` — the margin account calling a whitelisted outside program (Jupiter swaps,
- * Kamino Lend supply / redeem, GMTrade perps). The integration's VALIDATOR reviews the call (which
+ * `margin_execute` — the margin account calling a whitelisted outside program (Jupiter / Titan
+ * swaps, Kamino Lend supply / redeem, Ember USDC ↔ phUSD, Phoenix perps). The integration's VALIDATOR reviews the call (which
  * call account is the margin, which margin vaults are spent / received) before Vanna signs it, and
  * the account is health-checked after it (Frontend Integration Guide, "External calls").
  *
  * Accounts: authority, protocol_config, margin_account, integration ["integration", target],
- * target_program, validator, venue_asset + venue_account (GMTrade only, else null).
+ * target_program, validator, venue_asset (the Phoenix venue's AssetConfig for a Phoenix call, else null).
  * Args: data (the outside instruction's data), call_account_count, new_assets.
  * remaining_accounts, in order:
  *   1. the outside instruction's accounts (none a signer: Vanna signs as the margin / venue account);
  *   2. EVERY position group, in slot order;
  *   3. one `[asset_config, margin vault]` group per token received for the first time (new_assets);
  *   4. the oracle segment (price accounts of every holding and every new token);
- *   5. the validator segment, only when it needs accounts: GMTrade `[vanna_validator, market_book]`.
+ *   5. the validator segment, only when it needs accounts: Phoenix `[vanna_validator, market_book, exchange]`.
  * The receiving margin vault is created (idempotent ATA) before the call; Vanna doesn't create it.
  * Vanna sets no minimum output: slippage protection is the outside program's (Jupiter's min out).
  */
@@ -52,9 +52,9 @@ import {
   underlyingForReceipts,
   type KaminoReceipt,
 } from "./kamino";
-import { venueAccountOf } from "./perps-accounts";
+import type { PhoenixVenueContext } from "./phoenix-state";
 
-/** Kamino / Jupiter use 1,000,000 in the guide, GMTrade orders 1,400,000; one budget for all. */
+/** Kamino / Jupiter use 1,000,000 in the guide, a Phoenix deposit + order up to ~600,000; one budget for all. */
 export const EXEC_COMPUTE_UNITS = 1_400_000;
 
 function findAssetByMint(ctx: BatchContext, mint: PublicKey): AssetConfigState {
@@ -68,12 +68,19 @@ export interface ExecCall {
   target: PublicKey;
   data: Buffer;
   cpiAccounts: AccountMeta[];
-  /** The validator segment's accounts after the program (GMTrade: `[market_book]`). */
+  /** The validator segment's accounts after the program (Phoenix: `[market_book, exchange]`). */
   validatorAccounts?: PublicKey[];
-  /** A token call: what it spends / receives (new-asset group, model replay). */
-  token?: { spent: AssetConfigState; received: AssetConfigState; expectedSpent: bigint; expectedReceived: bigint };
-  /** A GMTrade call: the venue asset, the market leg it targets, whether it opens it, the USDC vault. */
-  venue?: { asset: AssetConfigState; leg: number | null; opensLeg: boolean; settleAsset: AssetConfigState };
+  /**
+   * What the call spends from / pays into the margin's vaults (new-asset group, model replay). A swap
+   * has both; a Phoenix deposit only spends phUSD, a Phoenix withdraw only receives it.
+   */
+  token?: { spent?: AssetConfigState; received?: AssetConfigState; expectedSpent: bigint; expectedReceived: bigint };
+  /**
+   * A call AT the Phoenix venue: its asset, the venue state, the market the call targets (priced even
+   * before a position exists), whether the call puts the venue on the collateral list (`opens`) and
+   * whether the venue is left holding nothing afterwards (`closes`).
+   */
+  venue?: { asset: AssetConfigState; state: PhoenixVenueContext; targetAssetIds: number[]; opens: boolean; closes: boolean };
 }
 
 /**
@@ -88,26 +95,29 @@ export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promis
   let newAssets = 0;
   if (call.token) {
     const { spent, received } = call.token;
-    if (!ctx.model.collateral.includes(spent.assetIndex)) throw new Error("The asset to spend is not active collateral in your margin account");
-    if (!received.collateralEnabled) throw new Error("The asset to receive is not enabled as collateral");
-    const receivedVault = marginVault(ctx.margin, received.mint, received.tokenProgram);
-    ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(ctx.owner, receivedVault, ctx.margin, received.mint, received.tokenProgram));
-    priced.push(spent, received);
-    if (!ctx.model.collateral.includes(received.assetIndex)) {
-      extraGroups.push(readonly(received.address), readonly(receivedVault));
-      newAssets = 1;
+    if (spent) {
+      if (!ctx.model.collateral.includes(spent.assetIndex)) throw new Error("The asset to spend is not active collateral in your margin account");
+      priced.push(spent);
+    }
+    if (received) {
+      if (!received.collateralEnabled) throw new Error("The asset to receive is not enabled as collateral");
+      const receivedVault = marginVault(ctx.margin, received.mint, received.tokenProgram);
+      ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(ctx.owner, receivedVault, ctx.margin, received.mint, received.tokenProgram));
+      priced.push(received);
+      if (!ctx.model.collateral.includes(received.assetIndex)) {
+        extraGroups.push(readonly(received.address), readonly(receivedVault));
+        newAssets = 1;
+      }
     }
   }
   let venueScan;
   if (call.venue) {
-    if (!ctx.venueBook) throw new Error("GMTrade market book not loaded");
-    // The margin USDC vault funds the order, so it is writable; the target market's accounts join
-    // the oracle segment even before its leg is open (the guide's `venueLegs: legBit(leg)`).
-    writable.push(marginVault(ctx.margin, call.venue.settleAsset.mint, call.venue.settleAsset.tokenProgram));
-    priced.push(call.venue.settleAsset);
-    venueScan = { book: ctx.venueBook, extraLegs: call.venue.leg === null ? 0n : 1n << BigInt(call.venue.leg), always: true };
-  } else if (ctx.venueBook) {
-    venueScan = { book: ctx.venueBook };
+    // The program values the venue after every Phoenix call (even before it is on the collateral
+    // list), including the market the call targets.
+    ctx.venue = call.venue.state;
+    venueScan = { venue: call.venue.state, extraAssetIds: call.venue.targetAssetIds, always: true };
+  } else if (ctx.venue) {
+    venueScan = { venue: ctx.venue };
   }
   const health = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {}, priced, { venue: venueScan, writable, extraGroups });
   const validatorSegment = call.validatorAccounts ? [readonly(VALIDATOR_PROGRAM_ID), ...call.validatorAccounts.map(readonly)] : [];
@@ -122,15 +132,16 @@ export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promis
       targetProgram: call.target,
       validator: VALIDATOR_PROGRAM_ID,
       venueAsset: call.venue ? call.venue.asset.address : null,
-      venueAccount: call.venue ? venueAccountOf(ctx.margin) : null,
     } as any)
     .remainingAccounts([...cpi, ...health, ...validatorSegment])
     .instruction();
   if (call.token) {
     const t = call.token;
-    ctx.model.execute(t.spent.assetIndex, t.expectedSpent, t.received.assetIndex, t.expectedReceived);
+    if (t.spent && t.received) ctx.model.execute(t.spent.assetIndex, t.expectedSpent, t.received.assetIndex, t.expectedReceived);
+    else if (t.spent) ctx.model.withdraw(t.spent.assetIndex, t.expectedSpent);
+    else if (t.received) ctx.model.deposit(t.received.assetIndex, t.expectedReceived);
   }
-  if (call.venue) ctx.model.venueCall(call.venue.asset.assetIndex, call.venue.opensLeg ? call.venue.leg : null);
+  if (call.venue) ctx.model.venueCall(call.venue.asset.assetIndex, call.venue.opens, call.venue.closes);
   return ix;
 }
 

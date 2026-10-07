@@ -100,7 +100,7 @@ export default function FarmPage() {
       id: v.id,
       cell: [
         { icon: v.icon, title: v.name, tags: ["Basis", "1x hedge"] },
-        { title: "Jupiter · GMTrade" },
+        { title: "Jupiter · Phoenix" },
         { title: fmtUsdCompact(v.tvl), tag: v.tvl / v.cap > 0.9 ? "Almost full" : `${Math.round((v.tvl / v.cap) * 100)}% of ${fmtUsdCompact(v.cap)}` },
         { title: fmtPct(v.apy7), tag: `30D ${fmtPct(v.apy30)}` },
         { title: fmtSignedPct(v.fundingNow), tag: v.perp },
@@ -219,7 +219,7 @@ export default function FarmPage() {
       icon: "",
       title: "Delta-neutral Vaults",
       description:
-        "Deposit from your margin account. Each vault buys spot on Jupiter and holds an equal 1x short on GMTrade, and earns the funding.",
+        "Deposit from your margin account. Each vault buys spot on Jupiter and holds an equal 1x short on Phoenix, and earns the funding.",
     },
     {
       icon: "",

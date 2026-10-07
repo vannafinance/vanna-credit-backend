@@ -4,9 +4,11 @@
 
 /** Pair slugs the route accepts → the market key the perps hooks take. */
 export const PERP_PAIRS: Record<string, string> = {
+  solusdc: "SOL",
   ethusdc: "ETH",
   btcusdc: "BTC",
-  solusdc: "SOL",
+  tslausdc: "TSLA",
+  metausdc: "META",
 };
 
 export const DEFAULT_PERP_PAIR = "ethusdc";

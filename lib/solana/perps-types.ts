@@ -2,22 +2,24 @@
  * The Perps page's data model — what `hooks/use-perps.ts` hands the UI. Kept in its own module so
  * components can import types without pulling the Solana service layer.
  *
- * Perps run on GMTrade (GMX-Solana) through the margin account's venue account; see
- * lib/solana/perps.ts. Market orders only (the validator refuses limit / trigger orders), USDC
- * collateral only, one pending order per market and side.
+ * Perps run on Phoenix through the margin account's own Phoenix trader (cross margin); see
+ * lib/solana/perps.ts. Immediate-or-cancel market orders only (filled inside the transaction, so
+ * there are never pending orders), USDC collateral (as phUSD) only.
  */
 
 export type PerpSide = "long" | "short";
 
 export interface PerpMarketInfo {
-  /** "ETH" | "BTC" | "SOL" — the key the actions take. */
+  /** "SOL" | "ETH" | "BTC" | "TSLA" | "META" — the key the actions take. */
   key: string;
   /** "ETH-PERP". */
   name: string;
-  /** Leg in the oracle's market book. */
+  /** Position in the oracle's market book. */
   leg: number;
   /** Index price the protocol values positions at (Scope / Pyth), USD. */
   indexPrice: number | null;
+  /** Phoenix's mark price (orders fill near it), USD. */
+  markPrice: number;
   /** True when that price is fresh enough for the program's checks. */
   priceFresh: boolean;
   /** Leverage cap, e.g. 5. */
@@ -38,10 +40,12 @@ export interface PerpPosition {
   markPrice: number;
   collateralUsdc: number;
   leverage: number;
-  /** Mark-price PnL before fees. */
+  /** Index-price PnL before fees and funding. */
   pnlUsd: number;
   pnlPercent: number;
-  /** What Vanna counts: collateral + PnL − pending borrowing / funding fees − close fee, ≥ 0. */
+  /** Funding owed (negative) or earned since the position was opened, USD. */
+  fundingUsd: number;
+  /** What Vanna counts for this position: PnL + funding − the taker fee to close. */
   equityUsd: number;
   /** Index price at which this position's equity reaches zero (fees ignored). */
   zeroEquityPrice: number;
@@ -66,10 +70,12 @@ export interface PerpsAccount {
   hasMargin: boolean;
   /** USDC in the margin vault — what a new order can use as collateral. */
   marginUsdc: number;
-  /** The whole venue account as Vanna values it (idle + escrow + equity), USD. */
+  /** The Phoenix account as Vanna values it (collateral + position equity), USD. */
   venueValueUsd: number;
-  /** USDC sitting in the venue account, not yet settled back to the margin. */
+  /** USDC (as phUSD) sitting in the Phoenix trader account. */
   idleUsdc: number;
+  /** How much Phoenix would pay out right now without queueing it (its withdraw budget). */
+  withdrawableNowUsdc: number;
   /** Margin account totals (all holdings incl. perps), USD. */
   totalCollateralUsd: number;
   totalDebtUsd: number;
@@ -103,23 +109,28 @@ export interface ClosePerpRequest {
   slippageBps?: number;
 }
 
+export interface WithdrawPerpCollateralRequest {
+  /** USDC to move from Phoenix back to the margin; omit for everything. */
+  amount?: number;
+}
+
 export interface CancelPerpRequest {
   market: string;
   side: PerpSide;
 }
 
-/** One on-chain GMTrade action of the margin's venue account (decoded from its transactions). */
+/** One on-chain Phoenix action of the margin (decoded from its transactions). */
 export interface PerpHistoryRow {
   signature: string;
   /** Unix seconds. */
   timestamp: number;
-  /** "open" increase order, "close" decrease order, "cancel" close_order_v2, "settle" USDC back to
-   * the margin, "setup" prepare_user / prepare_position. */
-  action: "open" | "close" | "cancel" | "settle" | "setup";
+  /** "open" market order, "close" reduce-only order, "deposit" USDC into Phoenix, "settle" USDC
+   * back to the margin ("cancel" / "setup" are kept for older rows). */
+  action: "open" | "close" | "cancel" | "settle" | "setup" | "deposit";
   market: string | null;
   side: PerpSide | null;
   /** Order size, USD (open / close). */
   sizeUsd: number | null;
-  /** USDC moved: order collateral (open) or swept back (settle). */
+  /** USDC moved into Phoenix (deposit) or back to the margin (settle). */
   usdc: number | null;
 }

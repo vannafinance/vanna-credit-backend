@@ -110,7 +110,7 @@ export default function BasisVaultPage() {
         <div className="flex gap-2 items-center flex-wrap">
           <Image src={v.icon} alt="" width={26} height={26} className="w-6 h-6 sm:w-7 sm:h-7 rounded-full" />
           <h1 className={`text-[18px] sm:text-[20px] font-bold ${isDark ? "text-white" : "text-[#181822]"}`}>{v.name}</h1>
-          {["Vault", "Jupiter", "GMTrade"].map((tag) => (
+          {["Vault", "Jupiter", "Phoenix"].map((tag) => (
             <span key={tag} className="text-[10px] sm:text-[12px] font-semibold rounded px-1.5 py-0.5 bg-[#703AE6] text-white">
               {tag}
             </span>

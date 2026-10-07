@@ -498,7 +498,7 @@ export const Navbar = (props: Navbar) => {
                                       {tradeItem.title === "Spot"
                                         ? "Leveraged Spot"
                                         : tradeItem.title === "Perps"
-                                        ? "Perpetuals on GMTrade"
+                                        ? "Perpetuals on Phoenix"
                                         : "Leverage over Leverage"}
                                     </p>
                                   </div>

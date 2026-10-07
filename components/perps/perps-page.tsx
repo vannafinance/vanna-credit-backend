@@ -14,11 +14,13 @@ import { PerpsAccountPanel } from "./non-orderbook";
 import { PerpsPairInfo } from "./perps-pair-info";
 import { pairSlug } from "./perps-format";
 
-const PROTOCOL_OPTIONS = ["GMTrade"];
+const PROTOCOL_OPTIONS = ["Phoenix"];
 const FALLBACK_CHART_SYMBOL: Record<string, string> = {
   ETH: "PYTH:ETHUSD",
   BTC: "PYTH:BTCUSD",
   SOL: "PYTH:SOLUSD",
+  TSLA: "NASDAQ:TSLA",
+  META: "NASDAQ:META",
 };
 
 interface PerpsPageProps {
@@ -142,7 +144,7 @@ const PerpsPage = ({ marketKey }: PerpsPageProps) => {
         )}
         {view && view.markets.length === 0 && (
           <div className="rounded-lg border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-4 py-2 text-[12px] font-medium text-[#F59E0B]">
-            GMTrade markets aren&apos;t listed on this network yet — trading opens once the admin lists them.
+            Phoenix markets aren&apos;t listed on this network yet — trading opens once the admin lists them.
           </div>
         )}
 

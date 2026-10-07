@@ -82,7 +82,7 @@ export const ClosePositionModal = ({ position, onClose, onConfirm }: ClosePositi
       />
 
       <p className={`text-[12px] leading-[140%] ${isDark ? "text-[#A7A7A7]" : "text-[#76737B]"}`}>
-        Closes at the market price on GMTrade. The released USDC is settled back into your margin account.
+        Closes at the market price on Phoenix. Once no position is left, the USDC goes back to your margin account.
       </p>
     </BaseModalContent>
   );

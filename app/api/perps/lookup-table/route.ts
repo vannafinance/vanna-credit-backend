@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/perps/lookup-table { owner } — FORK ONLY: writes the address lookup table a margin's
- * GMTrade transactions reference (protocol accounts + the margin's own) and returns its address.
+ * Phoenix transactions reference (protocol accounts + the margin's own) and returns its address.
  * In production the guide keeps one protocol lookup table instead.
  */
 export async function POST(request: NextRequest) {

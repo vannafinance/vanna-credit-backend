@@ -1,7 +1,7 @@
 /**
  * Delta-neutral ("basis") vaults for the Farm page — UI preview only.
  *
- * Each vault buys spot on Jupiter and holds an equal 1x short on GMTrade, earning the funding the
+ * Each vault buys spot on Jupiter and holds an equal 1x short on Phoenix, earning the funding the
  * short is paid. The program side is not built yet, so every vault figure here (TVL, cap, funding,
  * APY, share price, rebalance time) is SAMPLE DATA generated deterministically from a seed, ported
  * from the "Vanna Basis Vaults" design prototype v2. The UI labels it "Preview · sample data".
@@ -22,7 +22,7 @@ export interface BasisVaultConfig {
   name: string;
   /** Asset held spot and shorted, "SOL" | "BTC" | "ETH". */
   asset: string;
-  /** GMTrade market shorted. */
+  /** Phoenix market shorted. */
   perp: string;
   icon: string;
   /** Sample index price, USD. */
@@ -30,7 +30,7 @@ export interface BasisVaultConfig {
   /** Mean annualised funding (%) the series is generated around, and its daily volatility. */
   fundingMean: number;
   fundingVol: number;
-  /** Annualised GMTrade position + borrow fees on the short half (%). */
+  /** Annualised Phoenix position + borrow fees on the short half (%). */
   perpFee: number;
   /** Annualised Jupiter execution / rebalancing drag (%). */
   exec: number;

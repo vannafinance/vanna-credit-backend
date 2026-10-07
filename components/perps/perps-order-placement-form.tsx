@@ -10,11 +10,14 @@ import type { PerpSide, PerpsView } from "@/lib/solana/perps-types";
 import { LeverageSlider } from "../ui/leverage-slider";
 import { QuantitySlider } from "../ui/quantity-slider";
 import { fmtPrice, fmtTokenSize, fmtUsd, healthFactorDisplay } from "./perps-format";
+import { defaultSlippageBps } from "@/lib/solana/perps";
 
 const SLIPPAGE_OPTIONS = [
   { bps: 50, label: "0.5%" },
   { bps: 100, label: "1%" },
   { bps: 200, label: "2%" },
+  { bps: 300, label: "3%" },
+  { bps: 500, label: "5%" },
 ];
 
 interface PerpsOrderPlacementFormProps {
@@ -36,7 +39,7 @@ function leverageMarkers(max: number): number[] {
 }
 
 /**
- * Market-order form for GMTrade perps: USDC collateral from the margin account × leverage.
+ * Market-order form for Phoenix perps: USDC collateral from the margin account × leverage.
  * Only what the protocol supports — market orders, open long / short, slippage protection.
  */
 const PerpsOrderPlacementForm = ({
@@ -53,7 +56,13 @@ const PerpsOrderPlacementForm = ({
   const [collateralInput, setCollateralInput] = useState("");
   const [percentage, setPercentage] = useState(0);
   const [leverageRaw, setLeverageRaw] = useState(2);
-  const [slippageBps, setSlippageBps] = useState(100);
+  // Price limit around Phoenix's mark: 1% by default on crypto, 3% on the thinner stock books.
+  const [slippageBps, setSlippageBps] = useState(() => defaultSlippageBps(marketKey));
+  const [slippageFor, setSlippageFor] = useState(marketKey);
+  if (slippageFor !== marketKey) {
+    setSlippageFor(marketKey);
+    setSlippageBps(defaultSlippageBps(marketKey));
+  }
   const [sizeInUsd, setSizeInUsd] = useState(false);
 
   const market = view?.markets.find((m) => m.key === marketKey);
@@ -68,7 +77,9 @@ const PerpsOrderPlacementForm = ({
   const price = market?.indexPrice;
   const indexPrice = price != null && Number.isFinite(price) && price > 0 ? price : null;
   const sizeTokens = indexPrice == null || !Number.isFinite(sizeUsd) ? null : sizeUsd / indexPrice;
-  const acceptablePrice = indexPrice == null ? null : indexPrice * (1 + (side === "long" ? 1 : -1) * slippageBps / 10_000);
+  // The order's worst price is set from the live index price (Phoenix's mark as a fallback).
+  const refPrice = indexPrice ?? (market?.markPrice && market.markPrice > 0 ? market.markPrice : null);
+  const acceptablePrice = refPrice == null ? null : refPrice * (1 + (side === "long" ? 1 : -1) * slippageBps / 10_000);
   const currentHealth = account?.hasMargin ? healthFactorDisplay(account.healthFactor) : null;
   const zeroEquityPrice =
     indexPrice == null ? null : side === "long" ? indexPrice * (1 - 1 / leverage) : indexPrice * (1 + 1 / leverage);
@@ -299,15 +310,16 @@ const PerpsOrderPlacementForm = ({
       </div>
 
       {/* slippage */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-col gap-1.5">
         <span className={`text-[11px] leading-[15px] font-medium ${primary}`}>Slippage</span>
-        <div className="flex gap-2">
+        {/* Five equal-width options that always fit the form column. */}
+        <div className="grid grid-cols-5 gap-1.5">
           {SLIPPAGE_OPTIONS.map((o) => (
             <button
               key={o.bps}
               type="button"
               onClick={() => setSlippageBps(o.bps)}
-              className={`cursor-pointer h-8 min-w-12 rounded-lg px-2.5 text-[12px] leading-[18px] font-medium ${
+              className={`cursor-pointer h-8 min-w-0 rounded-lg px-1 text-[12px] leading-[18px] font-medium ${
                 slippageBps === o.bps
                   ? "bg-[#F1EBFD] text-[#703AE6]"
                   : isDark
@@ -373,8 +385,8 @@ const PerpsOrderPlacementForm = ({
           </Link>
         )}
         <p className={`text-[10px] leading-[15px] ${muted}`}>
-          Market order on GMTrade. Each new market/side&apos;s first order also sets up your GMTrade account (extra wallet
-          approval).
+          Market order on Phoenix, filled immediately (or not at all) within your slippage of the index price. Your first
+          trade also creates your Phoenix account (one extra wallet approval).
         </p>
       </div>
     </form>

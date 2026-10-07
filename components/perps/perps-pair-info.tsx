@@ -16,7 +16,7 @@ interface PerpsPairInfoProps {
 /* eslint-disable @next/next/no-img-element -- market icons come from the perps data layer and may be remote */
 
 /**
- * Pair info bar: pair selector (the listed GMTrade markets), live index price and the market
+ * Pair info bar: pair selector (the listed Phoenix markets), live index price and the market
  * stats the protocol actually exposes.
  */
 export const PerpsPairInfo = ({ marketKey, market, markets, onSelectMarket }: PerpsPairInfoProps) => {
