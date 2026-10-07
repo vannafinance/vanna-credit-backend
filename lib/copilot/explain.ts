@@ -42,11 +42,18 @@ export function fmtFractionPct(v: string | number): string {
 const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/insufficient funds|InsufficientFunds|0x1\b/i, "Your wallet does not hold enough of that asset (or enough SOL for fees) for this action."],
   [/StalePrice|0x178b|stale_price|price_unavailable/i, "A price feed is stale right now, so the program refuses to use it. Try again in a minute."],
+  // The program's check that every position in the margin account was named (IncompletePositionAccounts): about the
+  // account's positions, not about a swap route.
+  [/IncompletePositionAccounts|H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC failed: custom program error: 0x1788/i, "The program did not accept the list of positions sent with this step: it checks every asset in your margin account, and this step did not match what the program expects. Nothing was sent. Try again later; if it keeps happening, the app and the on-chain program are out of step."],
+  // A bare 6024 / 0x1788 with no program named is the swap pool's (Orca Whirlpool) tick-array error, as before.
   [/6024|0x1788|0x1787|\b6023\b|tick_?array|stale[_ ]pool|stale[_ ]bin|AccountNotEnoughKeys|\b3005\b|(?:whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc|CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK|LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo) failed/i, "The swap route's pool data looks out of date on this test network, so the route failed its simulation. Try again in a moment, or try a smaller amount."],
   [/SlippageToleranceExceeded|0x1771|6001/i, "The swap price moved past the allowed slippage. Try again for a fresh quote."],
   [/would breach|HealthFactor|0x1790|unhealthy/i, "The action would push the account below the protocol's health limit."],
   [/account_not_found|AccountNotInitialized|3012/i, "You do not have a margin account yet."],
-  [/transaction_too_large|size limit|exceeds Solana|too large for one/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
+  // Too large for one Solana transaction (1232 bytes): only a margin swap's route is about the pair; any other step is
+  // large because the health check names every asset the margin account holds.
+  [/(?:margin swap|swap route|route \(account cap)[\s\S]*(?:too large|exceeds)|(?:too large|exceeds)[\s\S]*(?:margin swap|swap route|route hops)/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
+  [/transaction_too_large|size limit|exceeds Solana|too large for one|VersionedTransaction too large|max: 1232/i, "This step's transaction is larger than one Solana transaction allows: the health check names every asset your margin account holds. Nothing was sent. Try again in a moment; withdrawing collateral you no longer use also makes it smaller."],
   [/asset_not_offered/i, "That asset is not offered for this action."],
   [/insufficient pool liquidity/i, "The pool does not have enough available liquidity for that."],
   [/borrow_cap|supply_cap|cap exceeded/i, "That would exceed the pool's cap."],
