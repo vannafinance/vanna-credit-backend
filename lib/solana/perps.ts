@@ -90,6 +90,7 @@ function toMarketInfo(m: PhoenixListedMarket, i: number) {
     priceFresh: Boolean(m.index?.fresh),
     maxLeverage: m.entry.maxLeverageBps / 10_000,
     tradingEnabled: m.entry.tradingEnabled,
+    takerFee: (m.orderbook?.takerFeeMicro ?? 0) / 1e6,
     chartSymbol: m.meta.chartSymbol,
     icon: m.meta.icon,
   };
@@ -111,8 +112,11 @@ export async function fetchPerpsView(owner: PublicKey | null): Promise<PerpsView
         totalCollateralUsd: snapshot.totalCollateralUsd,
         totalDebtUsd: snapshot.totalDebtUsd,
         healthFactor: snapshot.healthFactor,
+        // The venue's own line is valued from `positions` + `idleUsdc` by the account model.
+        collateralRows: snapshot.collateral.filter((c) => c.active && c.token !== null && c.usd > 0).map((c) => ({ symbol: c.symbol, usd: c.usd })),
+        debtRows: snapshot.debts.filter((d) => d.usd > 0).map((d) => ({ symbol: d.symbol, usd: d.usd })),
       }
-    : { hasMargin: false, marginUsdc: 0, venueValueUsd: 0, idleUsdc: 0, withdrawableNowUsdc: 0, totalCollateralUsd: 0, totalDebtUsd: 0, healthFactor: null };
+    : { hasMargin: false, marginUsdc: 0, venueValueUsd: 0, idleUsdc: 0, withdrawableNowUsdc: 0, totalCollateralUsd: 0, totalDebtUsd: 0, healthFactor: null, collateralRows: [], debtRows: [] };
   if (!venue) return { markets: [], positions: [], orders: [], account };
   const markets = venue.markets.map(toMarketInfo);
   if (!owner || !snapshot?.exists) return { markets, positions: [], orders: [], account };
@@ -141,6 +145,8 @@ export async function fetchPerpsView(owner: PublicKey | null): Promise<PerpsView
       sizeTokens: p.sizeTokens,
       entryPrice: p.entryPrice,
       markPrice: p.indexPrice,
+      indexPrice: p.indexPrice,
+      closeFeeUsd: p.closeFeeUsd,
       collateralUsdc: venue.collateralUsd,
       leverage: venueValue > 0 ? exposure / venueValue : 0,
       pnlUsd: p.pnlUsd,

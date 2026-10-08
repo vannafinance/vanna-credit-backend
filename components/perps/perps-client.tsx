@@ -2,9 +2,9 @@
 
 import dynamic from "next/dynamic";
 
-// Client-only: the page reads the wallet and polls Solana, and embeds the TradingView widget.
-const PerpsPage = dynamic(() => import("./perps-page"), { ssr: false });
+// Client-only: the terminal reads the wallet, polls Solana and streams Phoenix's live market data.
+const PerpsTerminal = dynamic(() => import("./terminal/perps-terminal"), { ssr: false });
 
 export default function PerpsClient({ marketKey }: { marketKey: string }) {
-  return <PerpsPage marketKey={marketKey} />;
+  return <PerpsTerminal marketKey={marketKey} />;
 }

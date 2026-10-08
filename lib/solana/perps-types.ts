@@ -25,6 +25,8 @@ export interface PerpMarketInfo {
   /** Leverage cap, e.g. 5. */
   maxLeverage: number;
   tradingEnabled: boolean;
+  /** Phoenix taker fee on this market (fraction of the notional, e.g. 0.00035), from its orderbook. */
+  takerFee: number;
   /** TradingView symbol for the chart. */
   chartSymbol: string;
   icon: string;
@@ -37,7 +39,12 @@ export interface PerpPosition {
   sizeUsd: number;
   sizeTokens: number;
   entryPrice: number;
+  /** Kept for older callers: the index price (see `indexPrice`). */
   markPrice: number;
+  /** Index price the oracle values the position at (what the health factor uses), USD. */
+  indexPrice: number;
+  /** Taker fee to close the whole position at the index price (the oracle deducts it), USD. */
+  closeFeeUsd: number;
   collateralUsdc: number;
   leverage: number;
   /** Index-price PnL before fees and funding. */
@@ -81,6 +88,10 @@ export interface PerpsAccount {
   totalDebtUsd: number;
   /** null = no debt (infinite). Liquidatable at ≤ 1.10. */
   healthFactor: number | null;
+  /** Every token collateral line counted in the health factor (the Phoenix venue excluded), USD. */
+  collateralRows: { symbol: string; usd: number }[];
+  /** Every debt line, USD. */
+  debtRows: { symbol: string; usd: number }[];
 }
 
 export interface PerpsView {
