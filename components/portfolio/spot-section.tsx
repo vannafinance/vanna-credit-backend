@@ -27,6 +27,13 @@ const fmtUsd = (n: number): string =>
  * cTokens are farm positions and live under the Farm tab. Spot History = the margin account's
  * Jupiter swaps (`margin_execute`), decoded from on-chain events.
  */
+/** The shared transaction headings plus the aggregator each swap ran through. */
+const spotHistoryHeadings = [
+  ...transactionTableHeadings.slice(0, 3),
+  { label: "Swap via", id: "via" },
+  ...transactionTableHeadings.slice(3),
+];
+
 export const SpotSection = () => {
   const { isDark } = useTheme();
   const [activeTab, setActiveTab] = useState("balances");
@@ -61,14 +68,15 @@ export const SpotSection = () => {
       rows: historyEntries.map((ev) => ({
         cell: [
           {
-            title: ev.timestamp ? new Date(ev.timestamp).toLocaleDateString() : "—",
-            description: ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : "",
+            // History timestamps are unix seconds.
+            title: ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleDateString() : "—",
+            description: ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleTimeString() : "",
           },
           { title: "Swap", badge: "green" },
           {
             title: `${(parseFloat(ev.amount) || 0).toFixed(4)} ${ev.symbol} to ${(parseFloat(ev.toAmount ?? "0") || 0).toFixed(4)} ${ev.toSymbol ?? ""}`,
-            description: "Jupiter",
           },
+          { title: ev.via ?? "—" },
           { title: "Success", badge: "green" },
           {
             title: `${ev.signature.slice(0, 8)}...${ev.signature.slice(-4)}`,
@@ -86,7 +94,7 @@ export const SpotSection = () => {
 
   const tableData = useMemo(() => {
     if (isHistoryTab) {
-      return { headings: transactionTableHeadings, body: historyTableBody };
+      return { headings: spotHistoryHeadings, body: historyTableBody };
     }
     return {
       headings: spotBalancesTableHeadings,

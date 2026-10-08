@@ -9,7 +9,8 @@ import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-
 import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { PublicKey } from "@solana/web3.js";
-import { bestSwapQuote, executeSwapQuote, providerLabel, titanStatusLabel, type AggregatedQuote } from "@/lib/solana/aggregator";
+import { bestSwapQuote, executeSwapQuote, providerLabel, providerLogo, type AggregatedQuote, type SwapProvider } from "@/lib/solana/aggregator";
+import { TitanUnavailableError } from "@/lib/solana/titan";
 import { fromRaw, toRaw } from "@/lib/solana/math";
 import { spendableLamports } from "@/lib/solana/balances";
 import { projectHealthFactor } from "@/lib/solana/margin";
@@ -71,6 +72,12 @@ function isNoRouteError(message: string): boolean {
   return /no route|could not find any route|COULD_NOT_FIND_ANY_ROUTE|NO_ROUTES_FOUND|not tradable|TOKEN_NOT_TRADABLE/i.test(message);
 }
 
+/** The aggregators the user can pick in the header dropdown; the swap runs through the picked one. */
+const AGGREGATORS: { id: SwapProvider; label: string; hint: string }[] = [
+  { id: "jupiter", label: "Jupiter", hint: "Jupiter's best route across Solana AMMs" },
+  { id: "titan", label: "Titan", hint: "Titan's meta-aggregated route" },
+];
+
 type RoutePlanStep = { swapInfo?: { label?: string; inputMint?: string; outputMint?: string }; percent?: number };
 
 interface SwapCardProps {
@@ -107,6 +114,19 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
     if (!Number.isFinite(n) || n <= 0) return Math.round(parseFloat(AUTO_SLIPPAGE_PERCENT) * 100);
     return Math.min(5_000, Math.max(1, Math.round(n * 100)));
   }, [slippagePercent]);
+
+  // Aggregator picked in the header dropdown (quote + execution both go through it).
+  const [aggregator, setAggregator] = useState<SwapProvider>("jupiter");
+  const [isAggregatorMenuOpen, setIsAggregatorMenuOpen] = useState(false);
+  const aggregatorMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isAggregatorMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!aggregatorMenuRef.current?.contains(e.target as Node)) setIsAggregatorMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [isAggregatorMenuOpen]);
 
   // Modal state
   const [tokenModalTarget, setTokenModalTarget] = useState<"in" | "out" | null>(null);
@@ -177,7 +197,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   // ---------------------------------------------------------------------------------------------
   const [quote, setQuote] = useState<AggregatedQuote | null>(null);
   const [quoteFetchedAt, setQuoteFetchedAt] = useState(0);
-  const [quoteError, setQuoteError] = useState<{ noRoute: boolean; message: string } | null>(null);
+  const [quoteError, setQuoteError] = useState<{ noRoute: boolean; message: string; unavailable?: boolean } | null>(null);
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const quoteRequestId = useRef(0);
@@ -196,8 +216,9 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
         amountRaw: raw,
         slippageBps,
         owner: userAddress ? new PublicKey(userAddress) : null,
+        provider: aggregator,
       }),
-    [swapMode, slippageBps, userAddress],
+    [swapMode, slippageBps, userAddress, aggregator],
   );
 
   useEffect(() => {
@@ -221,7 +242,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
         .catch((error) => {
           if (id !== quoteRequestId.current) return;
           const message = error instanceof Error ? error.message : String(error);
-          setQuoteError({ noRoute: isNoRouteError(message), message });
+          setQuoteError({ noRoute: isNoRouteError(message), message, unavailable: error instanceof TitanUnavailableError });
         })
         .finally(() => {
           if (id === quoteRequestId.current) setIsQuoteLoading(false);
@@ -474,28 +495,69 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
               >
                 Swap
               </span>
-              {/* Two aggregators are quoted side by side; the better output wins (lib/solana/aggregator.ts). */}
-              <span
-                className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-1 rounded-lg text-[12px] sm:text-[14px] font-medium leading-[18px] ${
-                  isDark ? "text-[#777777]" : "text-[#A7A7A7]"
-                }`}
-                title={`${titanStatusLabel(quote?.titanStatus)}${routeLabel ? ` · Current route: ${routeLabel}` : ""}`}
-              >
-                <span>via</span>
-                <span className={`font-semibold ${quote?.provider !== "titan" ? (isDark ? "text-[#CCCCCC]" : "text-[#555555]") : ""}`}>Jupiter</span>
-                <span>·</span>
-                <span
-                  className={`font-semibold ${
-                    quote?.provider === "titan"
-                      ? isDark ? "text-[#CCCCCC]" : "text-[#555555]"
-                      : quote?.titanStatus === "not-configured" || quote?.titanStatus === "no-route"
-                        ? "line-through opacity-60"
-                        : ""
+              {/* Aggregator picker: the quote and the swap both go through the picked one. */}
+              <div ref={aggregatorMenuRef} className="relative ml-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAggregatorMenuOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={isAggregatorMenuOpen}
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[12px] sm:text-[13px] font-medium cursor-pointer transition-colors ${
+                    isDark ? "text-[#CCCCCC] bg-[#222222] hover:bg-[#2A2A2A]" : "text-[#555555] bg-[#F4F4F4] hover:bg-[#ECECEC]"
                   }`}
+                  title={routeLabel ? `Current route: ${routeLabel}` : undefined}
                 >
-                  Titan
-                </span>
-              </span>
+                  <span className={isDark ? "text-[#777777]" : "text-[#A7A7A7]"}>via</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={providerLogo(aggregator)} alt="" className="w-4 h-4 rounded-full" />
+                  <span className="font-semibold">{providerLabel(aggregator)}</span>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={`transition-transform ${isAggregatorMenuOpen ? "rotate-180" : ""}`}>
+                    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {isAggregatorMenuOpen && (
+                  <div
+                    role="listbox"
+                    className={`absolute left-0 top-full mt-1.5 z-20 w-[260px] rounded-xl p-1 border shadow-lg ${
+                      isDark ? "bg-[#1F1F1F] border-[#2E2E2E]" : "bg-white border-[#E8E8E8]"
+                    }`}
+                  >
+                    {AGGREGATORS.map((a) => {
+                      const selected = a.id === aggregator;
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => {
+                            setAggregator(a.id);
+                            setIsAggregatorMenuOpen(false);
+                            setTxHash("");
+                          }}
+                          className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
+                            selected
+                              ? isDark ? "bg-[#703AE6]/15" : "bg-[#703AE6]/10"
+                              : isDark ? "hover:bg-[#2A2A2A]" : "hover:bg-[#F4F4F4]"
+                          }`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={providerLogo(a.id)} alt="" className="w-7 h-7 rounded-full shrink-0" />
+                          <span className="flex flex-col flex-1 min-w-0">
+                            <span className={`text-[13px] font-semibold ${isDark ? "text-white" : "text-[#111111]"}`}>{a.label}</span>
+                            <span className={`text-[11px] ${isDark ? "text-[#888888]" : "text-[#777777]"}`}>{a.hint}</span>
+                          </span>
+                          {selected && (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0">
+                              <path d="M3 7.5L5.8 10L11 4" stroke="#703AE6" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             <button
@@ -572,7 +634,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
           {/* Jupiter route (AMM per hop) */}
           {hasQuote && route && (
             <div className="mt-2">
-              <RouteInfo route={route} dex={quote ? providerLabel(quote.provider) : "Jupiter"} alternatives={quote?.quotes} outDecimals={tokenOut?.decimals} outSymbol={tokenOut?.symbol} titanNote={quote ? titanStatusLabel(quote.titanStatus) : undefined} />
+              <RouteInfo route={route} dex={quote ? providerLabel(quote.provider) : providerLabel(aggregator)} />
             </div>
           )}
 
@@ -585,8 +647,10 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
             >
               {warnIcon}
               <span>
-                {quoteError.noRoute
-                  ? `No route found for ${tokenIn?.symbol} → ${tokenOut?.symbol} at this amount on the fork's pool AMMs. Try a different amount or pair.`
+                {quoteError.unavailable
+                  ? "Titan isn't set up on this server yet (TITAN_API_KEY missing). Switch to Jupiter to swap."
+                  : quoteError.noRoute
+                  ? `No route found for ${tokenIn?.symbol} → ${tokenOut?.symbol} on ${providerLabel(aggregator)} at this amount. Try a different amount, pair or aggregator.`
                   : `Couldn't fetch a quote: ${quoteError.message}`}
               </span>
             </div>

@@ -12,6 +12,7 @@ const ACTION_LABEL: Record<PerpHistoryRow["action"], string> = {
   settle: "Withdraw to margin",
   setup: "Account setup",
   deposit: "Deposit to Phoenix",
+  nofill: "Order not filled",
 };
 
 const time = (unix: number) =>
@@ -21,7 +22,7 @@ const time = (unix: number) =>
 const TradeHistoryTable = ({ rows, loading }: { rows: PerpHistoryRow[]; loading: boolean }) => {
   const columns: PerpsColumn<PerpHistoryRow>[] = [
     { id: "time", header: "Time", render: (r) => time(r.timestamp) },
-    { id: "action", header: "Action", render: (r) => <span className="font-semibold">{ACTION_LABEL[r.action]}</span> },
+    { id: "action", header: "Action", render: (r) => <span className={`font-semibold ${r.action === "nofill" ? "text-[#999999]" : ""}`} title={r.action === "nofill" ? "Nothing on the book inside your price limit — the USDC stayed in Phoenix" : undefined}>{ACTION_LABEL[r.action]}</span> },
     { id: "market", header: "Market", render: (r) => (r.market ? `${r.market}-PERP` : "—") },
     {
       id: "side",

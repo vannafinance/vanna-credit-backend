@@ -33,6 +33,7 @@ import {
   phoenixMarketBook,
   phoenixTraderPda,
   readPhoenixExchange,
+  ticksToUsd,
 } from "../phoenix";
 import { TITAN_PROGRAM_ID } from "../titan";
 import { callCheatcode } from "./cheatcodes";
@@ -204,6 +205,23 @@ export async function resyncPhoenixOnFork(rpcUrl: string = SOLANA_RPC_URL, mainn
  * arenas are left as they are, so Vanna's registered traders keep their nodes. `market` is the
  * Phoenix symbol ("SOL", "TSLA", …). Uploading the 1.2 MB book ourselves took ~11 s per trade.
  */
+/**
+ * Fork only: the market's mark price on MAINNET Phoenix (what the freshly re-cloned book trades
+ * around). The fork's own perp asset map isn't re-cloned with the book, so its mark lags; the app
+ * prices order limits off this one so they sit where the book actually is. Null when unavailable.
+ */
+export async function liveMainnetPhoenixMark(market: string, mainnetUrl = process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com"): Promise<number | null> {
+  try {
+    const main = new Connection(mainnetUrl, "confirmed");
+    const ex = await readPhoenixExchange(main);
+    const m = (await fetchPerpAssetMap(main, ex.perpAssetMap)).find((x) => x.symbol === market.toUpperCase());
+    const usd = m ? ticksToUsd(m, m.markTicks) : 0;
+    return usd > 0 ? usd : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A market's book is re-cloned at most this often (trades seconds apart reuse it). */
 const BOOK_REFRESH_MIN_MS = 10_000;
 const lastBookRefresh = new Map<string, number>();

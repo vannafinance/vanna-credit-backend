@@ -20,8 +20,11 @@ const Coin = ({ symbol }: { symbol: string }) => {
   return icon ? <img src={icon} alt={symbol} className="w-5 h-5 rounded-full" /> : <span className="w-5 h-5 rounded-full bg-[#444444]" />;
 };
 
+/** Aggregator logos for the "Swap via" column. */
+const VIA_LOGO: Record<string, string> = { Jupiter: "/protocols/jupiter.png", Titan: "/protocols/titan.png" };
+
 /**
- * The wallet's swaps, newest first — every margin-account Jupiter swap, decoded from the program's
+ * The wallet's swaps, newest first — every margin-account Jupiter / Titan swap, decoded from the program's
  * own `MarginExecuted` events (spent / received per vault), so it is on-chain truth, not a cache.
  */
 export const SwapHistory = () => {
@@ -37,23 +40,24 @@ export const SwapHistory = () => {
     <div className={`w-full rounded-2xl border p-5 flex flex-col gap-3 ${isDark ? "bg-[#1A1A1A] border-[#2A2A2A]" : "bg-white border-[#E2E2E2]"}`}>
       <div className="flex items-center justify-between">
         <span className={`text-[16px] font-semibold ${strong}`}>Swap history</span>
-        <span className={`text-[11px] font-medium ${muted}`}>Margin account · via Jupiter</span>
+        <span className={`text-[11px] font-medium ${muted}`}>Margin account · via Jupiter / Titan</span>
       </div>
       {swaps.length === 0 ? (
         <div className={`py-8 text-center text-[13px] ${muted}`}>{isLoading ? "Loading swaps…" : "No swaps yet"}</div>
       ) : (
         <div className="flex flex-col">
-          <div className={`hidden sm:grid grid-cols-[1.1fr_1.6fr_1.6fr_0.8fr_0.7fr] gap-3 px-2 pb-2 text-[11px] font-medium ${muted}`}>
+          <div className={`hidden sm:grid grid-cols-[1.1fr_1.5fr_1.5fr_0.9fr_0.8fr_0.7fr] gap-3 px-2 pb-2 text-[11px] font-medium ${muted}`}>
             <span>Time</span>
             <span>Paid</span>
             <span>Received</span>
+            <span>Swap via</span>
             <span>Health after</span>
             <span className="text-right">Tx</span>
           </div>
           {swaps.map((r) => (
             <div
               key={r.signature}
-              className={`grid grid-cols-2 sm:grid-cols-[1.1fr_1.6fr_1.6fr_0.8fr_0.7fr] gap-3 items-center px-2 py-3 border-t text-[13px] ${
+              className={`grid grid-cols-2 sm:grid-cols-[1.1fr_1.5fr_1.5fr_0.9fr_0.8fr_0.7fr] gap-3 items-center px-2 py-3 border-t text-[13px] ${
                 isDark ? "border-[#2A2A2A]" : "border-[#EEEEEE]"
               } ${strong}`}
             >
@@ -65,6 +69,13 @@ export const SwapHistory = () => {
               <span className="flex items-center gap-2">
                 <Coin symbol={r.toSymbol ?? ""} />
                 <span className="text-[#24A0A9]">+{fmt(r.toAmount ?? "0")}</span> {r.toSymbol}
+              </span>
+              <span className="flex items-center gap-1.5">
+                {r.via && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={VIA_LOGO[r.via]} alt="" className="w-4 h-4 rounded-full" />
+                )}
+                {r.via ?? "—"}
               </span>
               <span className={muted}>{r.healthFactor === undefined ? "∞" : r.healthFactor.toFixed(3)}</span>
               <a href={explorerUrl("tx", r.signature)} target="_blank" rel="noopener noreferrer" className="text-right text-[#703AE6] underline">

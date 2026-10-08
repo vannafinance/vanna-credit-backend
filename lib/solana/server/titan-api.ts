@@ -1,8 +1,20 @@
-// Server-side only: Titan's swap API (https://portal.api.titan.exchange), which needs an API key from
-// the Titan Developers Portal (TITAN_API_KEY). Titan returns ready-to-sign instructions with its quote.
-const TITAN_API_URL = process.env.TITAN_API_URL ?? "https://portal.api.titan.exchange/api/v1";
+// Server-side only: Titan's swap API. Two ways to reach it:
+//  - Titan's own Developers Portal (https://portal.api.titan.exchange) with TITAN_API_KEY;
+//  - a QuickNode Solana endpoint with the Titan Swap add-on: TITAN_API_URL = that endpoint's URL (its
+//    token is in the URL, so no key is needed; with or without the trailing /api/v1).
+// Titan returns ready-to-sign instructions with its quote.
+const TITAN_API_URL = (() => {
+  const base = (process.env.TITAN_API_URL ?? "https://portal.api.titan.exchange/api/v1").replace(/\/+$/, "");
+  return base.endsWith("/api/v1") ? base : `${base}/api/v1`;
+})();
 
-export const titanConfigured = (): boolean => Boolean(process.env.TITAN_API_KEY);
+// This app targets a Surfpool mainnet fork: prop AMMs (AlphaQ, HumidiFi, SolFi, …) read state their
+// own keepers update every slot, which the fork's frozen clone doesn't have ("Invalid account
+// owner"), so Titan routes default to the same fork-safe pool AMMs as the Jupiter quote route
+// (app/api/jupiter/quote). Operators can override with TITAN_FORK_DEXES.
+const FORK_DEXES = process.env.TITAN_FORK_DEXES ?? "Raydium,Raydium CLMM,Raydium CP,Orca V2,Meteora DLMM,Whirlpool";
+
+export const titanConfigured = (): boolean => Boolean(process.env.TITAN_API_KEY || process.env.TITAN_API_URL);
 
 export interface TitanRouteInstruction {
   /** Program id. */
@@ -22,6 +34,15 @@ export interface TitanRouteResponse {
   addressLookupTables: string[];
   /** Venues the route goes through, when Titan names them. */
   labels: string[];
+  /** Each hop / split leg: venue, its input and output mint, and its share of the input (%). */
+  steps: TitanRouteStep[];
+}
+
+export interface TitanRouteStep {
+  label: string;
+  inputMint: string;
+  outputMint: string;
+  percent: number;
 }
 
 /**
@@ -38,8 +59,8 @@ export async function titanQuote(params: {
   mode: "wallet" | "margin";
   dexes?: string;
 }): Promise<TitanRouteResponse> {
+  if (!titanConfigured()) throw new Error("TITAN_API_KEY / TITAN_API_URL is not configured");
   const key = process.env.TITAN_API_KEY;
-  if (!key) throw new Error("TITAN_API_KEY is not configured");
   const qs = new URLSearchParams({
     inputMint: params.inputMint,
     outputMint: params.outputMint,
@@ -57,8 +78,8 @@ export async function titanQuote(params: {
   } else {
     qs.set("createOutputTokenAccount", "true");
   }
-  if (params.dexes) qs.set("dexes", params.dexes);
-  const response = await fetch(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { "x-api-key": key, Accept: "application/json" }, cache: "no-store" });
+  qs.set("dexes", params.dexes ?? FORK_DEXES);
+  const response = await fetch(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { Accept: "application/json", ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}) }, cache: "no-store" });
   const text = await response.text();
   if (!response.ok) throw new Error(`Titan quote failed (${response.status}): ${text.slice(0, 200)}`);
   const body = JSON.parse(text);
@@ -76,5 +97,12 @@ export async function titanQuote(params: {
     instructions: (route.instructions ?? []) as TitanRouteInstruction[],
     addressLookupTables: ((route.addressLookupTables ?? []) as string[]).map(String),
     labels: steps.map((s) => String(s.label ?? s.dex ?? s.amm ?? "")).filter(Boolean),
+    // allocPpb = the leg's share of the input in parts per billion.
+    steps: steps.map((s) => ({
+      label: String(s.label ?? s.dex ?? s.amm ?? "Titan"),
+      inputMint: String(s.inputMint ?? ""),
+      outputMint: String(s.outputMint ?? ""),
+      percent: s.allocPpb !== undefined ? Math.round(Number(s.allocPpb) / 1e7) : 100,
+    })),
   };
 }
