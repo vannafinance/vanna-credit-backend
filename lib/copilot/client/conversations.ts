@@ -16,6 +16,18 @@ export interface Turn {
   at: number;
   /** The server's structured reply for an assistant turn. */
   response?: ChatResponse;
+  /**
+   * How this turn's plan ended, once it did. A reopened chat shows it stopped instead of offering to resume it:
+   * the server may still list a plan as running when the user declined in the wallet and walked away.
+   */
+  run?: StoredRun;
+}
+
+export interface StoredRun {
+  /** `declined`: the wallet prompt was rejected and the user left without signing again. */
+  outcome: "completed" | "failed" | "cancelled" | "expired" | "declined";
+  message: string | null;
+  at: number;
 }
 
 export interface Conversation {
@@ -80,6 +92,30 @@ export function summarize(conversations: Conversation[]): ConversationSummary[] 
 export function titleFrom(text: string): string {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > 48 ? `${line.slice(0, 47)}…` : line || "New chat";
+}
+
+const ACTIVE_PREFIX = "vanna.copilot.active.v1:";
+
+/**
+ * The chat open in this browser tab, so leaving /copilot for another page and coming back reopens it rather than a
+ * blank chat. Per tab (sessionStorage) and per wallet; a closed tab starts fresh, Recents still hold everything.
+ */
+export function loadActiveId(wallet: string | null): string | null {
+  try {
+    return window.sessionStorage.getItem(`${ACTIVE_PREFIX}${wallet ?? "anonymous"}`);
+  } catch {
+    return null;
+  }
+}
+
+export function saveActiveId(wallet: string | null, id: string | null): void {
+  try {
+    const k = `${ACTIVE_PREFIX}${wallet ?? "anonymous"}`;
+    if (id) window.sessionStorage.setItem(k, id);
+    else window.sessionStorage.removeItem(k);
+  } catch {
+    /* storage blocked: the page opens a new chat, as before */
+  }
 }
 
 const LOCAL = "local-";

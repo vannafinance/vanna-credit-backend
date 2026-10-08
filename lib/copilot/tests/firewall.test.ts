@@ -32,7 +32,21 @@ const refused: Array<[string, string]> = [
   ["borrow 5 BONK", "refuse:unoffered_asset"],
   ["deposit 10 BONK", "refuse:unoffered_asset"],
   ["add liquidity to kamino", "refuse:other_liquidity"],
-  ["open a perp on SOL", "refuse:perps_short"],
+  ["short SOL", "refuse:short_options"],
+  ["I want options trading on SOL", "refuse:short_options"],
+];
+
+// Phoenix perps reads and previews (trading them is refused above until it is wired).
+const perpsReads = [
+  "show my perp positions",
+  "what perps markets are there",
+  "what's the price of the ETH perp",
+  "what would a 3x SOL long perp with 50 USDC look like?",
+  "how close is my BTC-PERP short to liquidation?",
+  // Trading perps is a product action now.
+  "open a perp on SOL",
+  "go long ETH perp 3x",
+  "close my BTC-PERP",
 ];
 
 const offDomain = [
@@ -59,6 +73,10 @@ describe("domain firewall", () => {
     }
   });
 
+  it.each(perpsReads)("allows the perps read %s", (m) => {
+    expect(evaluateFirewall(m).allow).toBe(true);
+  });
+
   it.each(offDomain)("keeps model tokens off %s", (m) => {
     const r = evaluateFirewall(m);
     expect(r.allow).toBe(false);
@@ -83,5 +101,20 @@ describe("domain firewall", () => {
   it("reading liquidation risk is allowed, executing is not", () => {
     expect(evaluateFirewall("am I at risk of liquidation").allow).toBe(true);
     expect(evaluateFirewall("liquidate").allow).toBe(false);
+  });
+});
+
+describe("perps markets named without a perps word", () => {
+  const m = "hwo would a short eth prep 2x with 20 usdc look llike";
+  it("reach Gemini when it decides, so it can ask what was meant", () => {
+    expect(evaluateFirewall(m, { modelDecides: true }).allow).toBe(true);
+  });
+  it("are still refused without the model", () => {
+    const r = evaluateFirewall(m);
+    expect(r.allow).toBe(false);
+    expect(r.allow === false && r.reason).toBe("refuse:unoffered_asset");
+  });
+  it("other unknown tokens are refused either way", () => {
+    expect(evaluateFirewall("buy 10 BONK", { modelDecides: true }).allow).toBe(false);
   });
 });

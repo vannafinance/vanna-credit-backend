@@ -43,6 +43,8 @@ export interface RailPosition {
   role: string;
   amount: string;
   usd: string;
+  /** An icon the symbol alone doesn't map to (a Phoenix perps market). */
+  icon?: string;
 }
 
 /** Down chevron for in-place sections (Margin Positions, Earn Positions, Recents). Open rotates it to point up. */
@@ -123,6 +125,7 @@ export function CopilotRailBody({
   noDebt = false,
   positions,
   earnPositions = [],
+  perpsPositions = [],
   conversations,
   activeId,
   onOpen,
@@ -138,6 +141,8 @@ export function CopilotRailBody({
   positions: RailPosition[];
   /** Earn pool deposits (redeemable amount), separate from the margin account. */
   earnPositions?: RailPosition[];
+  /** Phoenix perps positions (the margin's USDC on Phoenix, no Vanna loan). Shown only when there are any. */
+  perpsPositions?: RailPosition[];
   conversations: ConversationSummary[];
   activeId: string | null;
   onOpen: (id: string) => void;
@@ -146,6 +151,7 @@ export function CopilotRailBody({
 }) {
   const [positionsOpen, setPositionsOpen] = useState(true);
   const [earnOpen, setEarnOpen] = useState(true);
+  const [perpsOpen, setPerpsOpen] = useState(true);
   const [recentsOpen, setRecentsOpen] = useState(true);
 
   if (!hasWallet) {
@@ -187,6 +193,9 @@ export function CopilotRailBody({
 
       <PositionsSection title="Margin Positions" open={positionsOpen} onToggle={() => setPositionsOpen((v) => !v)} positions={positions} />
       <PositionsSection title="Earn Positions" open={earnOpen} onToggle={() => setEarnOpen((v) => !v)} positions={earnPositions} empty="Nothing supplied to the Earn pool." />
+      {perpsPositions.length > 0 && (
+        <PositionsSection title="Perps Positions" open={perpsOpen} onToggle={() => setPerpsOpen((v) => !v)} positions={perpsPositions} />
+      )}
 
       <RecentsList
         recentsOpen={recentsOpen}
@@ -237,7 +246,7 @@ function PositionsSection({
                     drawn from two sources that can disagree about what it looks like. */}
                 <div style={{ position: "relative", width: p.pairedSymbol ? 26 : 20, height: 20, flex: "none" }}>
                   <img
-                    src={positionIcon(p.symbol)}
+                    src={p.icon ?? positionIcon(p.symbol)}
                     alt=""
                     width={20}
                     height={20}

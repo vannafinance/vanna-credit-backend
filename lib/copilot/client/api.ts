@@ -172,3 +172,23 @@ export function submitStep(id: string, req: SubmitRequest, signal?: AbortSignal)
 export function confirmStep(id: string, req: ConfirmRequest, signal?: AbortSignal): Promise<ConfirmResponse> {
   return post<ConfirmResponse>(wf(id, "/confirm"), req, signal);
 }
+
+/** Ends a plan on the server, so a reopened chat (or another tab) sees it stopped. Refused while a transaction is in flight. */
+export function cancelPlan(id: string, signal?: AbortSignal): Promise<{ plan: PlanView }> {
+  return post<{ plan: PlanView }>(wf(id, "/cancel"), {}, signal);
+}
+
+// ── Status lines ─────────────────────────────────────────────────────────────
+
+/**
+ * Short progress lines for a prompt, worded by the model, shown while the real answer is being worked out. Purely
+ * cosmetic: any failure (signed out, limit, model down, slow) resolves to an empty list and the chat is unaffected.
+ */
+export async function getStatusLines(message: string, signal?: AbortSignal): Promise<string[]> {
+  try {
+    const body = await post<{ lines?: unknown }>("/status", { message }, signal);
+    return Array.isArray(body.lines) ? body.lines.filter((l): l is string => typeof l === "string" && l.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}

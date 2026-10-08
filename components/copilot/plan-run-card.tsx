@@ -55,11 +55,24 @@ export interface PlanRunCardProps {
 
 export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: PlanRunCardProps) {
   const { plan, phase, pending } = run;
-  const steps = plan.steps.map(toStepperStep);
   const readAnswers = plan.steps.filter((s) => s.kind === "read" && s.status === "done" && s.answer);
   const firstOpen = plan.steps.findIndex((s) => !["confirmed", "done", "skipped", "failed", "expired", "uncertain"].includes(s.status));
-  const currentStepIndex = firstOpen === -1 ? Math.max(0, steps.length - 1) : firstOpen;
+  const currentStepIndex = firstOpen === -1 ? Math.max(0, plan.steps.length - 1) : firstOpen;
   const busy = RUN_ACTIVE.has(phase);
+  // While the server approves the plan or builds and checks the next transaction, the plan it last sent still shows
+  // that step as pending, so nothing on the card moved until the wallet opened. Show the work: the step being
+  // prepared spins with "Checking it before it is sent…" until the server answers.
+  const preparing = (phase === "approving" || phase === "advancing") && firstOpen !== -1 && plan.steps[firstOpen]?.status === "pending";
+  // Spinners mean "something is happening right now". Once the run has stopped (cancelled, failed, expired, paused,
+  // an error), the server can still list a step as building or awaiting its signature: that step was never sent, so
+  // it reads as not sent instead of spinning forever. A transaction that was sent and never confirmed reads as unknown.
+  const stoppedRun = ["cancelled", "failed", "expired", "completed", "error", "paused"].includes(phase);
+  const settle = (s: StepperStep): StepperStep =>
+    !stoppedRun ? s
+      : s.status === "claiming" || s.status === "signing" ? { ...s, status: "pending" }
+        : s.status === "submitting" ? { ...s, status: "uncertain" }
+          : s;
+  const steps = plan.steps.map((s, i) => settle(preparing && i === firstOpen ? { ...toStepperStep(s), status: "claiming" as const } : toStepperStep(s)));
   const cancelled = phase === "cancelled";
   const hasSubmitted = plan.steps.some((s) => s.status === "submitted");
   const canContinue =

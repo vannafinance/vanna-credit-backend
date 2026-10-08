@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   submitStep: vi.fn(),
   confirmStep: vi.fn(),
   getWorkflow: vi.fn(),
+  cancelPlan: vi.fn(),
 }));
 const sign = vi.hoisted(() => ({ signUnsignedTx: vi.fn() }));
 
@@ -97,5 +98,27 @@ describe("a plan runs from one approval", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("cancel", () => {
+  beforeEach(() => Object.values(api).forEach((f) => f.mockReset()));
+
+  it("stops at once and ends the plan on the server, so a reopened chat cannot resume it", async () => {
+    api.cancelPlan.mockResolvedValue({ plan: plan("cancelled", [step(1, "confirmed"), step(2)]) });
+    const { ctl } = run();
+    const done = ctl.cancel();
+    expect(ctl.state().phase).toBe("cancelled");
+    await done;
+    expect(api.cancelPlan).toHaveBeenCalledWith("w");
+    expect(ctl.state().phase).toBe("cancelled");
+    expect(ctl.state().plan.state).toBe("cancelled");
+  });
+
+  it("stays stopped here when the server cannot be reached", async () => {
+    api.cancelPlan.mockRejectedValue(new Error("offline"));
+    const { ctl } = run();
+    await ctl.cancel();
+    expect(ctl.state().phase).toBe("cancelled");
   });
 });

@@ -8,7 +8,7 @@
  */
 
 import { copilotConfig } from "../config";
-import { LEND_BORROW_ASSETS, PRODUCT_ASSETS, normalizeAsset, parseDecimalString, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
+import { LEND_BORROW_ASSETS, PRODUCT_ASSETS, normalizeAsset, parseDecimalString, perpMarketOf, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts";
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
@@ -78,10 +78,25 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "get_swap_quote",
-    description: "A live Jupiter quote: output amount and minimum received at the default slippage.",
+    description: "A live swap quote (the better of Jupiter and Titan): output amount and minimum received at the default slippage.",
     parameters: obj({ from: { type: "STRING", enum: ASSETS }, to: { type: "STRING", enum: ASSETS }, amount: { type: "STRING", description: "Decimal amount of `from`." } }, ["from", "to", "amount"]),
   },
   { name: "get_history", description: "The user's recent Vanna transactions." },
+  { name: "get_perps_markets", description: "Phoenix perps markets (SOL, ETH, BTC, TSLA, META): index and mark price, max leverage, whether each is open, taker fee." },
+  { name: "get_perps_positions", description: "The user's Phoenix perps positions (side, size, entry, PnL, funding, liquidation price) and their Phoenix balance. Perps never borrow from Vanna." },
+  {
+    name: "preview_perp_order",
+    description: "What opening or adding to a Phoenix perps position would do: size, limit price, fee, health factor and liquidation price after. Nothing is built.",
+    parameters: obj(
+      {
+        market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"] },
+        side: { type: "STRING", enum: ["long", "short"] },
+        collateral_usdc: { type: "STRING", description: "USDC from the margin account backing the order; \"0\" = the Phoenix balance already there." },
+        leverage: { type: "NUMBER", description: "1 up to the market's max leverage." },
+      },
+      ["market", "side", "collateral_usdc", "leverage"],
+    ),
+  },
   { name: "get_protocol_info", description: "On-chain protocol configuration: operating mode, which assets can be lent, borrowed or used as collateral, integrations." },
   { name: "explain_concept", description: "The product's own explanation of a concept, for questions about how something works.", parameters: obj({ topic: { type: "STRING", enum: TOPICS } }, ["topic"]) },
 ];
@@ -187,6 +202,18 @@ export async function executeRead(tool: string, args: Record<string, unknown>, c
       return viaRead({ kind: "earn_position", assets: assetsArg(args.assets, LEND_ASSETS) }, ctx);
     case "get_kamino_markets":
       return viaRead({ kind: "farm_markets" }, ctx);
+    case "get_perps_markets":
+      return viaRead({ kind: "perps_markets" }, ctx);
+    case "get_perps_positions":
+      return viaRead({ kind: "perps_positions" }, ctx);
+    case "preview_perp_order": {
+      const market = perpMarketOf(args.market);
+      const side = args.side === "long" || args.side === "short" ? args.side : null;
+      const collateral = typeof args.collateral_usdc === "string" ? args.collateral_usdc.trim() : typeof args.collateral_usdc === "number" ? String(args.collateral_usdc) : null;
+      const leverage = typeof args.leverage === "number" ? args.leverage : Number(args.leverage);
+      if (!market || !side || !collateral || !(leverage >= 1)) return { ok: false, result: { error: "a preview needs market, side, collateral_usdc and leverage >= 1" } };
+      return viaRead({ kind: "perps_preview", market, side, collateral, leverage }, ctx);
+    }
     case "get_kamino_positions":
       return viaRead({ kind: "farm_positions" }, ctx);
     case "get_capacity":

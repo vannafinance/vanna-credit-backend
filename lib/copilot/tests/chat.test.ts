@@ -97,7 +97,7 @@ function installFake() {
   vi.spyOn(mcp, "maxBorrow").mockImplementation(async () => ({ max_amount: "500" }));
   vi.spyOn(mcp, "call").mockImplementation(async (tool: string, args: Record<string, unknown>) => {
     fake.calls.push({ fn: `call:${tool}:${String(args.action)}`, args: [args] });
-    if (tool === "vanna_earn_write" || tool === "vanna_margin_trade" || tool === "vanna_swap" || tool === "vanna_farm_kamino" || tool === "vanna_account") {
+    if (tool === "vanna_earn_write" || tool === "vanna_margin_trade" || tool === "vanna_swap" || tool === "vanna_farm_kamino" || tool === "vanna_account" || tool === "vanna_perps") {
       if (tool === "vanna_swap" && args.action === "quote") return { out_amount: "4.98", min_out_amount: "4.93" };
       return fake.buildEnvelope;
     }
@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 const chat = (message: string, extra: Partial<ChatRequest> = {}, user = USER): Promise<ChatResponse> => handleChat({ req: { message, ...extra }, user });
-const buildCalls = () => fake.calls.filter((c) => /^call:vanna_(earn_write|margin_trade|swap|farm_kamino|account):(?!quote)/.test(c.fn));
+const buildCalls = () => fake.calls.filter((c) => /^call:vanna_(earn_write|margin_trade|swap|farm_kamino|account|perps):(?!quote)/.test(c.fn));
 
 function fakeLlm(handler: (req: LlmRequest) => { text?: string | null; calls?: Array<{ name: string; args: Record<string, unknown> }>; tokens?: number }): LlmClient & { requests: LlmRequest[] } {
   const requests: LlmRequest[] = [];
@@ -514,5 +514,99 @@ describe("plan lane", () => {
     const res = await chat("lever 5 SOL 2x borrowing USDC keeping health factor above 1.5");
     expect(res.kind).toBe("plan_preview");
     expect(res.plan!.hf_floor).toBe(1.5);
+  });
+});
+
+describe("swap route: Jupiter or Titan", () => {
+  const quote = (providers: Array<{ provider: string; out_amount: string; min_out_amount: string; best: boolean }>, titan_status = "quoted") => ({
+    from: "USDC", to: "SOL", in_amount: "100", out_amount: providers[0]?.out_amount, min_out_amount: providers[0]?.min_out_amount,
+    provider: providers[0]?.provider, providers, titan_status,
+  });
+  const both = quote([
+    { provider: "titan", out_amount: "0.834", min_out_amount: "0.825", best: true },
+    { provider: "jupiter", out_amount: "0.831", min_out_amount: "0.822", best: false },
+  ]);
+
+  it("asks which route when both quote and the user named none, then plans through the pick", async () => {
+    vi.spyOn(mcp, "swapQuote").mockImplementation(async () => both);
+    const res = await chat("swap 100 USDC to SOL");
+    expect(res.kind).toBe("clarification");
+    expect(res.clarify_options?.map((o) => o.label)).toEqual([
+      "Titan: 0.834 SOL (min 0.825) · better",
+      "Jupiter: 0.831 SOL (min 0.822)",
+    ]);
+    const pick = await chat("", { conversation_id: res.conversation_id, clarify: { pending_id: res.pending_id as string, option_id: "opt-1" } });
+    expect(pick.plan?.steps[0].slots).toMatchObject({ provider: "titan", to_asset: "SOL" });
+    expect(pick.plan?.steps[0].label).toMatch(/via Titan/);
+  });
+
+  it("uses a route named in the request without asking", async () => {
+    vi.spyOn(mcp, "swapQuote").mockImplementation(async () => both);
+    const res = await chat("swap 100 USDC to SOL via jupiter");
+    expect(res.kind).not.toBe("clarification");
+    expect(res.plan?.steps[0].slots).toMatchObject({ provider: "jupiter" });
+  });
+
+  it("uses the only provider that quotes, saying why when Titan has no route", async () => {
+    vi.spyOn(mcp, "swapQuote").mockImplementation(async () => quote([{ provider: "jupiter", out_amount: "0.831", min_out_amount: "0.822", best: true }], "no-route"));
+    const res = await chat("swap 100 USDC to SOL");
+    expect(res.kind).not.toBe("clarification");
+    expect(res.plan?.steps[0].slots).toMatchObject({ provider: "jupiter" });
+    expect(JSON.stringify(res)).toMatch(/Titan has no route/);
+  });
+});
+
+describe("Phoenix perps reads", () => {
+  const position = { market: "SOL", name: "SOL-PERP", side: "long", size: "0.5", size_usd: "60", entry_price: "118", index_price: "120", pnl_usd: "1", liquidation_price: "80" };
+
+  it("answers positions from the MCP's perps read", async () => {
+    const spy = vi.spyOn(mcp, "perpsPositions").mockImplementation(async () => ({
+      has_margin_account: true, phoenix_value_usd: "25", withdrawable_now_usdc: "5", leverage: "2.4", health_factor: "3.1", positions: [position],
+    }));
+    const res = await chat("show my perp positions");
+    expect(spy).toHaveBeenCalled();
+    expect(res.kind).toBe("answer");
+    expect(res.answer?.venue).toBe("phoenix");
+    expect(res.answer?.headline).toMatch(/1 open Phoenix perps position/);
+    expect(JSON.stringify(res.answer?.tables)).toMatch(/SOL-PERP/);
+  });
+
+  it("lists the markets", async () => {
+    vi.spyOn(mcp, "perpsMarkets").mockImplementation(async () => ({
+      markets: [{ market: "SOL", name: "SOL-PERP", index_price: "120", mark_price: "120.1", max_leverage: 5, trading_enabled: true, taker_fee_pct: "0.0350" }],
+    }));
+    const res = await chat("what perps markets are there");
+    expect(res.answer?.headline).toMatch(/SOL/);
+  });
+
+  it("previews an order from the user's words without building anything", async () => {
+    const spy = vi.spyOn(mcp, "perpsPreview").mockImplementation(async () => ({
+      allowed: true, name: "SOL-PERP", size: "1.25", size_usd: "150", collateral_usdc: "50", limit_price: "121.2", open_fee_usd: "0.05",
+      projected_health_factor: null, liquidation_price_after: null, notes: [],
+    }));
+    const res = await chat("what would a 3x SOL long perp with 50 USDC look like?");
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ market: "SOL", side: "long", collateral_usdc: "50", leverage: 3 });
+    expect(res.answer?.headline).toMatch(/3x long on SOL-PERP/);
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("plans a perps open: tops the margin USDC up from the wallet and registers on Phoenix the first time", async () => {
+    vi.spyOn(mcp, "perpsPositions").mockImplementation(async () => ({ has_margin_account: true, has_phoenix_account: false, margin_usdc: "20", positions: [] }));
+    const res = await chat("open a 3x SOL long perp with 50 USDC");
+    expect(res.kind).toBe("plan_preview");
+    const steps = res.plan!.steps;
+    expect(steps.map((s) => s.op)).toEqual(["deposit", "perp_register", "perp_open"]);
+    expect(steps[0]).toMatchObject({ asset: "USDC", amount: "30" });
+    expect(steps[2].slots).toMatchObject({ market: "SOL", side: "long", leverage: 3 });
+    expect(steps.some((s) => s.op === "borrow")).toBe(false);
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("plans a close of half a position and moving the USDC back", async () => {
+    vi.spyOn(mcp, "perpsPositions").mockImplementation(async () => ({ has_margin_account: true, has_phoenix_account: true, margin_usdc: "0", phoenix_collateral_usdc: "25", positions: [position] }));
+    const close = await chat("close half my SOL perp");
+    expect(close.plan?.steps[0]).toMatchObject({ op: "perp_close", slots: { market: "SOL", fraction: 0.5 } });
+    const back = await chat("withdraw my USDC from phoenix perps");
+    expect(back.plan?.steps[0]).toMatchObject({ op: "perp_withdraw", amount: "all" });
   });
 });

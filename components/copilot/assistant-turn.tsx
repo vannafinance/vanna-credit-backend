@@ -1,5 +1,6 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
 import type { ChatResponse } from "@/lib/copilot/types";
 import type { RunState } from "@/lib/copilot/client/run";
 import { AnswerView } from "./answer-view";
@@ -56,8 +57,9 @@ function PlanArea({ response, run, plan, busy, onModify }: Pick<AssistantTurnPro
                 type="button"
                 onClick={() => plan.approve(id, run.plan.digest)}
                 disabled={busy || run.phase === "approving" || response.preview!.risk.decision === "block"}
-                className="rounded-r2 bg-gradient px-4 py-2.5 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-2 rounded-r2 bg-gradient px-4 py-2.5 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
               >
+                {run.phase === "approving" && <Loader2 size={14} className="animate-spin" aria-hidden />}
                 {run.phase === "approving" ? "Checking…" : "Approve and run"}
               </button>
               <button

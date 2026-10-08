@@ -203,7 +203,19 @@ export type WriteOp =
   | "repay"
   | "swap"
   | "farm_deposit"
-  | "farm_redeem";
+  | "farm_redeem"
+  /** Phoenix perps (the app's Perps page). Leverage is Phoenix's own: none of these borrows from Vanna. */
+  | "perp_open"
+  | "perp_close"
+  | "perp_withdraw"
+  /** The first Phoenix trade's extra step (creates the Phoenix trading account); added by the server, never asked for. */
+  | "perp_register";
+
+export const PERP_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["perp_open", "perp_close", "perp_withdraw", "perp_register"]);
+
+/** A swap's route: Jupiter or Titan, like the app's Spot page. */
+export type SwapProvider = "jupiter" | "titan";
+export const SWAP_PROVIDERS: readonly SwapProvider[] = ["jupiter", "titan"];
 
 export interface WriteIntent {
   op: WriteOp;
@@ -213,6 +225,32 @@ export interface WriteIntent {
   amount: AmountSpec | null;
   /** repay: which balance pays. swap: wallet swap vs swap of margin collateral. */
   source?: "wallet" | "margin" | null;
+  /** swap: the route the user chose or named; unset = ask them, showing both quotes. */
+  provider?: SwapProvider | null;
+  /** perps: the Phoenix market (perp_open, perp_close). */
+  market?: PerpMarket | null;
+  /** perp_open: long or short. */
+  side?: "long" | "short" | null;
+  /** perp_open: Phoenix leverage (1 up to the market's max). Collateral is `amount` in USDC. */
+  leverage?: number | null;
+}
+
+/** "via Titan", "using Jupiter", "on titan": the swap route named in the user's own words, if exactly one is. */
+export function providerFromText(message: string): SwapProvider | null {
+  const t = message.toLowerCase();
+  const titan = /\btitan\b/.test(t);
+  const jupiter = /\b(?:jupiter|jup)\b(?!\s*(?:sol|usd))/.test(t);
+  return titan === jupiter ? null : titan ? "titan" : "jupiter";
+}
+
+/** Sets a named route on every swap of a write or chain intent that has none (keyword and model routers alike). */
+export function withNamedProvider(intent: Intent, message: string): Intent {
+  const named = providerFromText(message);
+  if (!named) return intent;
+  const patch = (w: WriteIntent): WriteIntent => (w.op === "swap" && !w.provider ? { ...w, provider: named } : w);
+  if (intent.lane === "write") return { ...intent, write: patch(intent.write) };
+  if (intent.lane === "chain") return { ...intent, steps: intent.steps.map((s) => ("write" in s ? { write: patch(s.write) } : s)) };
+  return intent;
 }
 
 export type ReadIntent =
@@ -233,8 +271,23 @@ export type ReadIntent =
   | { kind: "history" }
   | { kind: "protocol" }
   | { kind: "quote"; from: Asset; to: Asset; amount: string }
+  /** Phoenix perps (the app's Perps page): markets, the user's positions, and an order preview (nothing is built). */
+  | { kind: "perps_markets" }
+  | { kind: "perps_positions" }
+  | { kind: "perps_preview"; market: PerpMarket; side: "long" | "short"; collateral: string; leverage: number }
   | { kind: "concept"; topic: ConceptTopic }
   | { kind: "help" };
+
+/** The Phoenix perps markets Vanna lists (the app's PERP_MARKETS). */
+export const PERP_MARKETS = ["SOL", "ETH", "BTC", "TSLA", "META"] as const;
+export type PerpMarket = (typeof PERP_MARKETS)[number];
+
+/** "sol", "SOL-PERP", "TSLAx" -> the listed market, else null. */
+export function perpMarketOf(x: unknown): PerpMarket | null {
+  if (typeof x !== "string") return null;
+  const key = x.trim().toUpperCase().replace(/-PERP$/, "").replace(/X$/, "");
+  return (PERP_MARKETS as readonly string[]).includes(key) ? (key as PerpMarket) : null;
+}
 
 export type ConceptTopic = "health_factor" | "liquidation" | "leverage" | "collateral" | "earn" | "farm" | "margin" | "general";
 
@@ -315,6 +368,10 @@ const OP_ASSETS: Record<WriteOp, "none" | "lend" | "any"> = {
   swap: "any",
   farm_deposit: "any",
   farm_redeem: "any",
+  perp_open: "none",
+  perp_close: "none",
+  perp_withdraw: "none",
+  perp_register: "none",
 };
 
 export function unofferedMessage(asset: string): string {
@@ -352,6 +409,19 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
         ? `The Kamino farm for ${w.asset} is closed to new supply. An existing ${w.asset} farm position can still be redeemed. Open farms: ${FARM_ASSETS.join(", ")}.`
         : `${w.asset} has no Kamino farm. Open farms: ${FARM_ASSETS.join(", ")}.`,
     );
+  }
+  if (w.op === "perp_open") {
+    if (!w.market || !(PERP_MARKETS as readonly string[]).includes(w.market)) return fail(`Which perps market? ${PERP_MARKETS.join(", ")}.`);
+    if (w.side !== "long" && w.side !== "short") return fail("Long or short?");
+    if (!(typeof w.leverage === "number" && w.leverage >= 1)) return fail("At what leverage? Phoenix markets go from 1x up to their own cap.");
+    if (!w.amount || (w.amount.kind !== "exact" && w.amount.kind !== "usd")) return fail("How much USDC should back the position?");
+  }
+  if (w.op === "perp_close") {
+    if (!w.market || !(PERP_MARKETS as readonly string[]).includes(w.market)) return fail(`Which perps position? ${PERP_MARKETS.join(", ")}.`);
+    if (w.amount && w.amount.kind !== "all" && w.amount.kind !== "pct") return fail("Close all of it, or a percentage (\"half\", \"25%\")?");
+  }
+  if (w.op === "perp_withdraw" && w.amount && w.amount.kind !== "all" && w.amount.kind !== "exact" && w.amount.kind !== "usd") {
+    return fail("How much USDC should come back from Phoenix (an amount, or all)?");
   }
   if (w.op === "swap") {
     if (!w.to_asset) return fail("Which asset do you want to swap into?");
@@ -430,6 +500,12 @@ export function validateRead(r: ReadIntent): GuardResult<ReadIntent> {
     }
     if (r.target_hf !== null && !(r.target_hf > 1.1 && r.target_hf <= 100)) return fail("A health factor target has to be above the 1.10 liquidation line.");
     if (r.amount === null && r.target_hf === null) return fail("Give me an amount or a health factor target.");
+  }
+  if (r.kind === "perps_preview") {
+    if (!(PERP_MARKETS as readonly string[]).includes(r.market)) return fail(`Perps markets: ${PERP_MARKETS.join(", ")}.`);
+    if (r.side !== "long" && r.side !== "short") return fail("Long or short?");
+    if (parseDecimalString(r.collateral) === null && r.collateral !== "0") return fail("How much USDC should back the position?");
+    if (!(r.leverage >= 1 && r.leverage <= 100)) return fail("Leverage starts at 1x.");
   }
   if (r.kind === "capacity" && r.asset) {
     if (r.what === "borrow" && !isLendBorrow(r.asset)) return fail(unofferedMessage(r.asset));

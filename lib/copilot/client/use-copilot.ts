@@ -11,16 +11,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWallet as useAdapterWallet } from "@solana/wallet-adapter-react";
 import type { ChatResponse, PlanStepView, PlanView } from "@/lib/copilot/types";
-import { getSession, logout, sendChat } from "./api";
+import { cancelPlan, getSession, getStatusLines, logout, sendChat } from "./api";
 import {
   isLocalId,
+  loadActiveId,
   loadConversations,
   newLocalId,
+  saveActiveId,
   saveConversations,
   summarize,
   titleFrom,
   type Conversation,
   type ConversationSummary,
+  type StoredRun,
   type Turn,
 } from "./conversations";
 import { createRunController, initialRunState, type RunController, type RunState } from "./run";
@@ -74,6 +77,23 @@ function planForSingleAction(res: ChatResponse): PlanView | null {
   };
 }
 
+/** How a run ended, for the stored chat; null while it can still go on. */
+function outcomeOf(state: RunState): StoredRun["outcome"] | null {
+  switch (state.phase) {
+    case "completed":
+    case "failed":
+    case "cancelled":
+    case "expired":
+      return state.phase;
+    case "awaiting_signature":
+      return state.rejected ? "declined" : null;
+    default:
+      return null;
+  }
+}
+
+const DECLINED_MESSAGE = "You declined this in your wallet, so the plan stopped. Nothing further will be sent; ask again for a fresh plan.";
+
 export function useCopilot() {
   const adapter = useAdapterWallet();
   const [session, setSession] = useState<SessionStatus>({ state: "loading" });
@@ -84,6 +104,9 @@ export function useCopilot() {
   const [signInBusy, setSignInBusy] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null | undefined>(undefined);
+  /** Progress lines the model worded for the prompt in flight; empty until they arrive (or if they never do). */
+  const [statusLines, setStatusLines] = useState<string[]>([]);
+  const statusSeq = useRef(0);
 
   const controllers = useRef(new Map<string, RunController>());
   const abortRef = useRef<AbortController | null>(null);
@@ -128,9 +151,18 @@ export function useCopilot() {
     const adopting = loadedFor === null && scope !== null;
     const stored = scope ? loadConversations(scope) : [];
     setItems((prev) => (adopting ? [...prev, ...stored.filter((s) => !prev.some((p) => p.id === s.id))] : stored));
-    if (!adopting) setActiveId(null);
+    if (!adopting) {
+      // Coming back to /copilot from another page reopens the chat that was open, not a blank one.
+      const remembered = scope ? loadActiveId(scope) : null;
+      setActiveId(remembered && stored.some((c) => c.id === remembered) ? remembered : null);
+    }
     setLoadedFor(scope);
   }, [session.state, sessionWallet, loadedFor]);
+
+  useEffect(() => {
+    if (!sessionWallet || loadedFor !== sessionWallet) return;
+    saveActiveId(sessionWallet, activeId);
+  }, [activeId, loadedFor, sessionWallet]);
 
   useEffect(() => {
     if (!sessionWallet || loadedFor !== sessionWallet) return;
@@ -150,13 +182,44 @@ export function useCopilot() {
     void refreshMarginAccount(wallet).catch(() => {});
   }, []);
 
+  /**
+   * Writes how a plan ended into the turn that proposed it (and the plan as last seen, so its steps read right), so
+   * a reopened chat shows it stopped instead of offering buttons for something already finished or abandoned.
+   */
+  const persisted = useRef(new Map<string, string>());
+  const persistOutcome = useCallback((workflowId: string, state: RunState) => {
+    const outcome = outcomeOf(state);
+    const key = outcome ? `${outcome}|${state.message ?? ""}|${state.plan.steps.map((st) => st.status).join(",")}` : "";
+    if ((persisted.current.get(workflowId) ?? "") === key) return;
+    persisted.current.set(workflowId, key);
+    const run: StoredRun | undefined = outcome ? { outcome, message: state.message, at: Date.now() } : undefined;
+    setItems((prev) =>
+      prev.map((c) =>
+        c.turns.some((t) => t.response?.workflow_id === workflowId)
+          ? {
+              ...c,
+              turns: c.turns.map((t) => {
+                if (t.response?.workflow_id !== workflowId) return t;
+                const { run: _old, ...rest } = t;
+                void _old;
+                return { ...rest, ...(run ? { run } : {}), response: { ...t.response, plan: state.plan } };
+              }),
+            }
+          : c,
+      ),
+    );
+  }, []);
+
   const register = useCallback(
     (workflowId: string, initial: RunState): RunController => {
       const existing = controllers.current.get(workflowId);
       if (existing) return existing;
       const controller = createRunController({
         initial,
-        onState: (state) => setRuns((prev) => ({ ...prev, [workflowId]: state })),
+        onState: (state) => {
+          setRuns((prev) => ({ ...prev, [workflowId]: state }));
+          persistOutcome(workflowId, state);
+        },
         onSettled: afterSettled,
         signTransaction: async (tx) => {
           const signer = getActiveSigner();
@@ -171,7 +234,7 @@ export function useCopilot() {
       setRuns((prev) => ({ ...prev, [workflowId]: initial }));
       return controller;
     },
-    [afterSettled],
+    [afterSettled, persistOutcome],
   );
 
   const adoptResponse = useCallback(
@@ -199,6 +262,17 @@ export function useCopilot() {
       const res = turn.response;
       if (!res?.workflow_id || !res.plan || controllers.current.has(res.workflow_id)) continue;
       const restored = initialRunState(res.workflow_id, res.plan);
+      const ended = turn.run;
+      if (ended) {
+        // It already ended in this browser: show that, with no buttons. Not re-read from the server, which may still
+        // list a plan the user declined in the wallet as running; that one is ended there now too.
+        const declined = ended.outcome === "declined";
+        persisted.current.set(res.workflow_id, `${declined ? "cancelled" : ended.outcome}|${declined ? DECLINED_MESSAGE : ended.message ?? ""}|${res.plan.steps.map((st) => st.status).join(",")}`);
+        const phase: RunState["phase"] = ended.outcome === "declined" ? "cancelled" : ended.outcome;
+        register(res.workflow_id, { ...restored, phase, message: declined ? DECLINED_MESSAGE : ended.message });
+        if (declined) void cancelPlan(res.workflow_id).catch(() => {});
+        continue;
+      }
       const controller = register(
         res.workflow_id,
         restored.phase === "paused" && !restored.message
@@ -220,6 +294,18 @@ export function useCopilot() {
       if (!message || busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
+      abortRef.current = new AbortController();
+
+      // While the answer is worked out, the model words a few lines about what it is doing for THIS prompt. Cosmetic
+      // and best effort: it runs beside the real request and never delays or changes it.
+      const seq = ++statusSeq.current;
+      setStatusLines([]);
+      if (sessionRef.current.state === "signed_in") {
+        const signal = abortRef.current.signal;
+        void getStatusLines(message, signal).then((lines) => {
+          if (statusSeq.current === seq && busyRef.current && lines.length) setStatusLines(lines);
+        });
+      }
 
       let convId = activeRef.current;
       const now = Date.now();
@@ -244,7 +330,6 @@ export function useCopilot() {
         .slice(-HISTORY_TURNS)
         .map((t) => ({ role: t.role, text: t.text }));
 
-      abortRef.current = new AbortController();
       let res: ChatResponse;
       try {
         res = await sendChat(
@@ -285,6 +370,7 @@ export function useCopilot() {
 
       busyRef.current = false;
       setBusy(false);
+      setStatusLines([]);
     },
     [adoptResponse, mutate, refreshSession],
   );
@@ -358,7 +444,7 @@ export function useCopilot() {
       sign: (id: string) => void controllers.current.get(id)?.sign(),
       advance: (id: string) => void controllers.current.get(id)?.advance(),
       recheck: (id: string) => void controllers.current.get(id)?.recheck(),
-      cancel: (id: string) => controllers.current.get(id)?.cancel(),
+      cancel: (id: string) => void controllers.current.get(id)?.cancel(),
     }),
     [],
   );
@@ -373,6 +459,7 @@ export function useCopilot() {
     activeId,
     turns,
     busy,
+    statusLines,
     send,
     stop,
     pickClarify,

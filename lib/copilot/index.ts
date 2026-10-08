@@ -23,13 +23,14 @@ import { answerToText } from "./answer-schema";
 import { copilotConfig } from "./config";
 import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
-import { fmtAmount, fmtUsd } from "./explain";
-import type { AmountSpec, Asset, ChainStep, Intent, WriteIntent } from "./intent";
-import { isDepositable } from "./intent";
+import { fmtAmount, fmtUsd, humanizeMcpError } from "./explain";
+import type { AmountSpec, AskOption, Asset, ChainStep, Intent, SwapProvider, WriteIntent } from "./intent";
+import { isDepositable, PERP_OPS, withNamedProvider } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
+import { mcp } from "./mcp-client";
 import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
-import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
+import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
 import { productRefusal } from "./domain-firewall";
 import { investigate } from "./investigation";
@@ -129,6 +130,8 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
         source = routed.source;
         tokens += routed.tokens;
       }
+      // "via Titan" / "using Jupiter" in the user's own words picks a swap's route, whichever router read the message.
+      intent = withNamedProvider(intent, message);
       debugNote("route", { source, lane: intent.lane, intent });
     }
 
@@ -222,6 +225,108 @@ async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
 
 // ── Write / plan lane ───────────────────────────────────────────────────────
 
+/**
+ * Before each perps open: a USDC deposit from the wallet when the margin account holds less than the order's collateral
+ * (never a borrow), and the Phoenix registration step the first time (the app's separate first transaction).
+ */
+async function preparePerps(steps: StepSpec[], t: Turn, extras: string[]): Promise<Reply | null> {
+  if (!steps.some((s) => s.op === "perp_open")) return null;
+  let pos: Record<string, unknown>;
+  try {
+    pos = await mcp.perpsPositions(t.user.wallet, t.ctx);
+  } catch (err) {
+    return { kind: "unavailable", message: `I couldn't read your Phoenix account just now (${humanizeMcpError(err).message}), so I won't plan a perps order.`, ...t.base };
+  }
+  let marginUsdc = Number(pos.margin_usdc ?? 0) || 0;
+  let registered = pos.has_phoenix_account === true;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]!;
+    if (s.op === "deposit" && s.asset === "USDC" && s.amount && s.amount !== "all") marginUsdc += Number(s.amount);
+    if (s.op === "perp_register") registered = true;
+    if (s.op !== "perp_open") continue;
+    const need = Number(s.amount ?? 0);
+    if (need > marginUsdc + 1e-9) {
+      const short = (Math.ceil((need - marginUsdc) * 1e6) / 1e6).toFixed(6).replace(/\.?0+$/, "");
+      steps.splice(i, 0, stepFromWrite({ op: "deposit", asset: "USDC", amount: { kind: "exact", value: short } }, short));
+      extras.push(`Your margin account holds ${marginUsdc} USDC, so the plan first deposits ${short} USDC from your wallet to back the order.`);
+      marginUsdc += Number(short);
+      i++;
+    }
+    if (!registered) {
+      steps.splice(i, 0, { kind: "write", op: "perp_register", asset: null, amount: null, slots: {} });
+      extras.push("This is your first Phoenix trade: one extra signature creates your Phoenix trading account.");
+      registered = true;
+      i++;
+    }
+    marginUsdc -= need;
+  }
+  return null;
+}
+
+/**
+ * The first swap of the request that names no route and has an exact amount: if both Jupiter and Titan quote it, ask
+ * which to use (each option re-runs the same request with that route). One provider quoting: use it. None: leave it to
+ * the build, which reports the error. Titan quotes only with a key on the server and for the user's own wallet.
+ */
+async function askSwapRoute(
+  items: Array<ChainStep | WriteIntent>,
+  writes: Array<WriteIntent | null>,
+  steps: StepSpec[],
+  t: Turn,
+  notes: string[],
+  extras: string[],
+): Promise<Reply | null> {
+  for (let i = 0; i < writes.length; i++) {
+    const w = writes[i];
+    const step = steps[i];
+    if (!w || w.op !== "swap" || w.provider || !step || step.op !== "swap" || step.slots.provider) continue;
+    if (!w.asset || !w.to_asset || !step.amount || !(Number(step.amount) > 0)) continue;
+    let quote: Record<string, unknown>;
+    try {
+      quote = await mcp.swapQuote(
+        {
+          from_asset: w.asset,
+          to_asset: w.to_asset,
+          amount: step.amount,
+          slippage_bps: Number(step.slots.slippage_bps) || 100,
+          authority: t.user.wallet,
+          mode: step.slots.mode === "margin" ? "margin" : "wallet",
+        },
+        t.ctx,
+      );
+    } catch {
+      continue; // the build reports the route problem
+    }
+    const quotes = (Array.isArray(quote.providers) ? quote.providers : []) as Array<Record<string, unknown>>;
+    const usable = quotes.filter((p) => p.provider === "jupiter" || p.provider === "titan");
+    if (usable.length === 1) {
+      step.slots.provider = String(usable[0]!.provider);
+      if (quote.titan_status === "no-route") extras.push(`Titan has no route for this swap, so it goes through Jupiter.`);
+      continue;
+    }
+    if (usable.length < 2) continue;
+    const patched = (provider: SwapProvider): Intent => {
+      const next = items.map((it, j) => (j !== i ? it : "write" in it ? { write: { ...it.write, provider } } : { ...(it as WriteIntent), provider }));
+      return items.some((it) => "write" in it || "read" in it || "report" in it)
+        ? { lane: "chain", steps: next as ChainStep[], notes }
+        : { lane: "write", write: next[0] as WriteIntent, notes };
+    };
+    const options: AskOption[] = usable.map((p) => ({
+      label: `${providerName(String(p.provider))}: ${p.out_amount} ${w.to_asset} (min ${p.min_out_amount})${p.best ? " · better" : ""}`,
+      apply: patched(p.provider as SwapProvider),
+    }));
+    const saved = await savePending(t.conversationId, t.user, options);
+    return {
+      kind: "clarification",
+      message: `Which route for swapping ${step.amount} ${w.asset} to ${w.to_asset}? Both quote it right now; the better output is marked.`,
+      clarify_options: saved.clarify_options,
+      pending_id: saved.pending_id,
+      ...t.base,
+    };
+  }
+  return null;
+}
+
 async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ ok: true; amount: string | null } | { ok: false; message: string }> {
   const a: AmountSpec | null = w.amount;
   if (!a) return { ok: true, amount: null };
@@ -251,6 +356,13 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
       const item = items[i];
       // Something the user asked to see at this point: it runs when the plan reaches it.
       steps.push("read" in item ? readLegStep(item.read) : reportStep());
+      continue;
+    }
+    if (PERP_OPS.has(w.op)) {
+      // Perps: collateral (perp_open) and USDC (perp_withdraw) are USDC amounts; a close is all of it or a fraction.
+      const amount = w.amount?.kind === "exact" || w.amount?.kind === "usd" ? w.amount.value : w.op === "perp_open" ? null : "all";
+      steps.push(stepFromWrite(w, amount));
+      k++;
       continue;
     }
     if (w.op !== "create_account" && w.op !== "close_account" && !w.amount) {
@@ -306,6 +418,15 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
     steps.push(stepFromWrite(w, r.amount));
     k++;
   }
+
+  // A swap with no route named: show both providers' quotes and let the user pick (only when the amount is exact - an
+  // "all" or exact-out swap is sized when it runs, and takes the better quote then).
+  const route = await askSwapRoute(items, writes, steps, t, notes, extras);
+  if (route) return route;
+
+  // A perps open needs the USDC in the margin account and, the first time, a Phoenix trading account: add those steps.
+  const perpPrep = await preparePerps(steps, t, extras);
+  if (perpPrep) return perpPrep;
 
   if (!steps.some((s) => s.kind === "write")) {
     const out = await runRead({ kind: "health" }, t.ctx);

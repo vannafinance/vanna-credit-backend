@@ -13,7 +13,7 @@ import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
 import { loadFreshPrice, loadHealth, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, sizeToHealth, type ReadCtx, type ReadOutcome } from "../mcp-facts";
-import { hfTarget, MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, readLegOf, RISK_INCREASING } from "../plan";
+import { hfTarget, MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, providerName, readLegOf, RISK_INCREASING } from "../plan";
 import { answerReadLeg } from "../investigation/plan-reads";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
@@ -109,6 +109,55 @@ export async function sizeExactOut(
   return { ok: false, message: `I couldn't find a quote that delivers at least ${target} ${to} right now. Try again in a moment.` };
 }
 
+/** A perps step: read the account's Phoenix state, then the exact `vanna_perps` call (or a skip / refusal). */
+async function preflightPerp(step: StoredStep, ctx: ReadCtx, notes: string[]): Promise<PreflightResult> {
+  const wallet = ctx.user.wallet;
+  const allow = { decision: "allow" as const, reasons: [] as string[] };
+  const done = (args: Record<string, unknown>, resolvedAmount: string | null = null): PreflightResult => ({
+    ok: true,
+    prepared: { usd: 0, call: { tool: "vanna_perps", args: { authority: wallet, ...args } }, risk: allow, simulation: null, resolvedAmount, notes },
+  });
+  let pos: Record<string, unknown>;
+  try {
+    pos = await mcp.perpsPositions(wallet, ctx);
+  } catch (err) {
+    return fail("unavailable", humanizeMcpError(err).message);
+  }
+  if (pos.has_margin_account === false) return fail("no_account", "You don't have a margin account yet. Open one first.");
+  const market = String(step.slots.market ?? "");
+  const positions = Array.isArray(pos.positions) ? (pos.positions as Array<Record<string, unknown>>) : [];
+
+  if (step.op === "perp_register") {
+    if (pos.has_phoenix_account === true) return { ok: true, skip: "Your Phoenix trading account already exists." };
+    return done({ action: "register" });
+  }
+  if (step.op === "perp_open") {
+    const collateral = String(step.amount ?? "0");
+    let preview: Record<string, unknown>;
+    try {
+      preview = await mcp.perpsPreview({ authority: wallet, market, side: step.slots.side === "short" ? "short" : "long", collateral_usdc: collateral, leverage: Number(step.slots.leverage) }, ctx);
+    } catch (err) {
+      return fail("unavailable", humanizeMcpError(err).message);
+    }
+    if (preview.allowed !== true) return fail("invalid", String(preview.reason ?? "This order was refused."));
+    notes.push(`About ${String(preview.size)} ${market} (~$${String(preview.size_usd)}) at a limit of $${String(preview.limit_price)}; open fee about $${String(preview.open_fee_usd)}.`);
+    if (preview.reduced_to_fit_cap === true) notes.push("Reduced to fit the market's leverage cap.");
+    if (preview.liquidation_price_after) notes.push(`Liquidation price of the whole margin account after this: $${String(preview.liquidation_price_after)}.`);
+    return done({ action: "open", market, side: step.slots.side, collateral_usdc: collateral, leverage: Number(step.slots.leverage) }, collateral);
+  }
+  if (step.op === "perp_close") {
+    const open = positions.find((p) => p.market === market);
+    if (!open) return { ok: true, skip: `There is no open ${market}-PERP position.` };
+    const fraction = typeof step.slots.fraction === "number" ? step.slots.fraction : null;
+    return done({ action: "close", market, ...(fraction !== null ? { fraction } : {}) });
+  }
+  // perp_withdraw
+  const inPhoenix = num(pos.phoenix_collateral_usdc) ?? 0;
+  if (!(inPhoenix > 0)) return { ok: true, skip: "There is no USDC in Phoenix to move back." };
+  const amount = step.amount && step.amount !== "all" ? step.amount : null;
+  return done({ action: "withdraw", ...(amount ? { amount_usdc: amount } : {}) }, amount ?? String(pos.phoenix_collateral_usdc));
+}
+
 /**
  * Fresh checks for one step against live MCP data. Returns the exact MCP call to make, or why not.
  * `checkSpend` runs here (before any write is built), never after.
@@ -147,6 +196,11 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
       return fail("invalid", "A margin account can only be closed when it holds no collateral and no debt. Repay and withdraw everything first.");
     }
     return { ok: true, prepared: { usd: 0, call: { tool: "vanna_account", args: { action: "close", authority: wallet } }, risk: { decision: "allow", reasons: [] }, simulation: null, resolvedAmount: null, notes } };
+  }
+
+  // ── Phoenix perps: the app's own checks (via the MCP); no Vanna loan, no USD cap, no extra health floor ──
+  if (op === "perp_register" || op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
+    return preflightPerp(step, ctx, notes);
   }
 
   if (!asset) return fail("invalid", "This step is missing its asset.");
@@ -319,25 +373,31 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
       usd = Number(amount) * price.usd;
       const slippage = num(step.slots.slippage_bps) ?? 100;
       const swapArgs = { from_asset: asset, to_asset: to, amount: amount as string, slippage_bps: slippage };
+      // The route the user chose (Jupiter or Titan); without one the build takes the better quote.
+      const provider = typeof step.slots.provider === "string" && step.slots.provider ? step.slots.provider : null;
+      const buildArgs = provider ? { ...swapArgs, provider } : swapArgs;
       try {
-        const q = await mcp.swapQuote(swapArgs, ctx);
-        if (num(q.out_amount) !== null) notes.push(`Quote: about ${q.out_amount} ${to} (minimum ${q.min_out_amount}).`);
+        const q = await mcp.swapQuote({ ...swapArgs, authority: wallet, mode: step.slots.mode === "margin" ? "margin" : "wallet" }, ctx);
+        const quotes = Array.isArray(q.providers) ? (q.providers as Record<string, unknown>[]) : [];
+        const shown = (provider ? quotes.find((p) => p.provider === provider) : null) ?? q;
+        const via = providerName(provider ?? (typeof q.provider === "string" ? q.provider : "jupiter"));
+        if (num(shown.out_amount) !== null) notes.push(`Quote via ${via}: about ${shown.out_amount} ${to} (minimum ${shown.min_out_amount}).`);
       } catch {
         /* the build below is the authoritative route check */
       }
       if (step.slots.mode === "margin") {
         let can;
         try {
-          can = readCan(await mcp.canSwap({ ...swapArgs, authority: wallet }, ctx));
+          can = readCan(await mcp.canSwap({ ...buildArgs, authority: wallet }, ctx));
         } catch (err) {
           return fail("unavailable", humanizeMcpError(err).message);
         }
         if (!can) return fail("unavailable", "I couldn't check this swap against your health factor.");
         if (!can.allowed) return fail("risk", humanizeFailure(can.reason));
         hfAfterValue = can.projectedHf;
-        call = { tool: "vanna_swap", args: { action: "margin_swap", authority: wallet, ...swapArgs } };
+        call = { tool: "vanna_swap", args: { action: "margin_swap", authority: wallet, ...buildArgs } };
       } else {
-        call = { tool: "vanna_swap", args: { action: "wallet_swap", authority: wallet, ...swapArgs } };
+        call = { tool: "vanna_swap", args: { action: "wallet_swap", authority: wallet, ...buildArgs } };
       }
       break;
     }

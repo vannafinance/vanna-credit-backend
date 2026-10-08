@@ -21,6 +21,7 @@ import {
   validateRead,
   validateWrite,
   unofferedMessage,
+  perpMarketOf,
   type Asset,
   type AskOption,
   type Intent,
@@ -49,6 +50,10 @@ const ask = (question: string, options?: AskOption[]): Intent => ({ lane: "ask",
 const refuse = (message: string): Intent => ({ lane: "refuse", reason: "guard", message });
 
 const FARM_HINT = /\b(?:kamino|farm|farming|farmed|unfarm)\b/;
+/** A perps message phrased as a question or a preview reads; anything else with a trade verb trades. */
+const PERP_QUESTION = /\b(?:what\s+(?:if|would|happens|are|is)|preview|simulate|look\s+like|how\s+(?:much|many|close|far)|would\s+(?:it|a|an|my|i)|show|list|tell\s+me|which|can\s+i|could\s+i)\b|\?\s*$/;
+/** Phoenix perps: "perp", "perps", "perpetuals", "SOL-PERP", "phoenix". */
+const PERP_HINT = /\b(?:perps?|perpetuals?|phoenix)\b|\b(?:sol|eth|btc|tsla|meta)-?perp\b/;
 const MARGIN_HINT = /\b(?:collateral|margin)\b/;
 const EARN_HINT = /\b(?:earn|pool|vault|lending|vtokens?)\b/;
 const LIQUIDATION_READ = /\bliquidat\w*\b/;
@@ -506,7 +511,46 @@ export function expandAmountList(message: string): string[] | null {
 }
 
 /** Keyword route for a whole message, including "A then B" chains. */
+/**
+ * Phoenix perps reads, checked before anything else: "long SOL 3x with 50 USDC" reads as spot leverage on its own, but
+ * with "perp" in the message it is a perps question. (Trading perps is answered by the domain firewall first.)
+ */
+function perpsRead(lower: string): Intent | null {
+  if (!PERP_HINT.test(lower)) return null;
+  const read = (r: ReadIntent): Intent => {
+    const v = validateRead(r);
+    return v.ok ? { lane: "read", read: v.value } : refuse(v.message);
+  };
+  const write = (w: WriteIntent): Intent => {
+    const v = validateWrite(w);
+    return v.ok ? { lane: "write", write: v.value } : ask(v.message);
+  };
+  const market = perpMarketOf((lower.match(/\b(sol|eth|btc|tsla|meta)(?:-?perp)?\b/) ?? [])[1]);
+  const side = /\blong\b/.test(lower) ? "long" : /\bshort\b/.test(lower) ? "short" : null;
+  const lev = lower.match(/(\d+(?:\.\d+)?)\s*x\b/);
+  const collateral = lower.match(/(\d+(?:\.\d+)?)\s*usdc\b/);
+  // A question or a preview reads; an instruction trades (this is the fallback when Gemini is unavailable).
+  const question = PERP_QUESTION.test(lower);
+  if (!question && /\b(?:close|exit)\b/.test(lower)) {
+    const pct = /\bhalf\b/.test(lower) ? 50 : Number((lower.match(/(\d+(?:\.\d+)?)\s*%/) ?? [])[1] ?? NaN);
+    return write({ op: "perp_close", asset: null, market, amount: Number.isFinite(pct) && pct < 100 ? { kind: "pct", pct } : { kind: "all" } });
+  }
+  if (!question && /\bwithdraw\b/.test(lower)) {
+    return write({ op: "perp_withdraw", asset: null, amount: collateral ? { kind: "exact", value: collateral[1]! } : { kind: "all" } });
+  }
+  if (!question && side && /\b(?:open|go|long|short|buy|sell|enter|place)\b/.test(lower)) {
+    return write({ op: "perp_open", asset: null, market, side, leverage: lev ? Number(lev[1]) : null, amount: collateral ? { kind: "exact", value: collateral[1]! } : null });
+  }
+  if (market && side && lev && collateral) {
+    return read({ kind: "perps_preview", market, side, collateral: collateral[1]!, leverage: Number(lev[1]) });
+  }
+  if (/\b(?:my|mine|i\s+have|do\s+i|open)\b/.test(lower)) return read({ kind: "perps_positions" });
+  return read({ kind: "perps_markets" });
+}
+
 export function keywordRoute(message: string): Intent {
+  const perps = perpsRead(message.toLowerCase());
+  if (perps) return perps;
   const clauses = expandAmountList(message) ?? splitClauses(message);
   if (clauses.length <= 1) return routeClause(message);
 
@@ -599,7 +643,7 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
 
 /** The keyword router is trusted when it resolved the request or refused it. A question it asked only because
  * its patterns could not read the sentence (an amount list, a missing amount in a chain) is given to the model. */
-const INFO_READS = new Set(["price", "pool", "earn_position", "farm_markets", "farm_positions", "positions", "wallet", "debt", "collateral", "history", "protocol"]);
+const INFO_READS = new Set(["price", "pool", "earn_position", "farm_markets", "farm_positions", "positions", "wallet", "debt", "collateral", "history", "protocol", "perps_markets", "perps_positions", "perps_preview"]);
 const AMOUNT_OF_ASSET = /\d[\d.,]*k?\s*(?:sol|usdc|usdt|jitosol|jupsol|ksol|kusdc|kusdt)\b/i;
 
 /**
