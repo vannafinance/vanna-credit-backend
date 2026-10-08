@@ -20,6 +20,8 @@ import {
   unofferedMessage,
   validateLever,
   validateWrite,
+  PERP_OPS,
+  perpMarketOf,
   type AmountSpec,
   type AskOption,
   type ChainStep,
@@ -36,10 +38,10 @@ import { READ_TOOLS, readArgsProblem } from "./catalog";
 import type { InvestigationOutcome, Observation } from "./types";
 
 const ASSETS = [...PRODUCT_ASSETS] as string[];
-const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem"];
+const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw"];
 export const SIZING_KINDS = ["literal", "usd", "fraction", "all", "max_safe", "health_target", "previous_leg", "leverage", "receive"] as const;
 type SizingKind = (typeof SIZING_KINDS)[number];
-const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "none"];
+const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "none"];
 
 /** A leg that is not a transaction: something the user asked to see at that point of the plan. */
 const REPORT_OP = "report";
@@ -47,10 +49,13 @@ const REPORT_OP = "report";
 const leg = {
   type: "OBJECT",
   properties: {
-    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter. farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
+    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. perp_open/perp_close/perp_withdraw = Phoenix perps (market, side, leverage; collateral is USDC from the margin account; NOT a Vanna loan; the server adds any USDC deposit and the first-trade registration itself). report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
     asset: { type: "STRING", enum: ASSETS, description: "Asset acted on. swap: the asset sold. farm ops: the underlying (SOL, not kSOL)." },
     to_asset: { type: "STRING", enum: ASSETS, description: "swap only: the asset bought." },
     source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays (default wallet). swap: margin = swap collateral inside the margin account." },
+    market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"], description: "perp_open / perp_close: the Phoenix perps market." },
+    side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
+    leverage: { type: "NUMBER", description: "perp_open only: Phoenix leverage the user gave (1 up to the market's cap). Never invent it; ask_user if missing." },
     sizing: {
       type: "OBJECT",
       description: "How much. Never compute a number yourself.",
@@ -180,7 +185,7 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
   },
   {
     name: "decline",
-    description: "Finish: the request is outside what this product may do (off-topic, other tokens, other wallets, liquidating someone, admin actions, perpetuals/options/shorts, conditional or scheduled orders, sending funds elsewhere).",
+    description: "Finish: the request is outside what this product may do (off-topic, other tokens, other wallets, liquidating someone, admin actions, options/futures/spot shorts, conditional or scheduled orders, sending funds elsewhere).",
     parameters: { type: "OBJECT", properties: { reason: { type: "STRING", description: "One or two sentences for the user, naming what you can do instead." } }, required: ["reason"] },
   },
 ];
@@ -236,7 +241,13 @@ function groundingSources(ctx: DecisionContext): string[] {
 }
 
 function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amount: AmountSpec | null } | { ok: false; reason: string } {
-  if (op === "create_account" || op === "close_account") return { ok: true, amount: null };
+  if (op === "create_account" || op === "close_account" || op === "perp_register") return { ok: true, amount: null };
+  if ((op === "perp_close" || op === "perp_withdraw") && (!s || typeof s !== "object")) return { ok: true, amount: { kind: "all" } };
+  if (op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
+    const kind = (s as Record<string, unknown>).kind;
+    const allowed = op === "perp_open" ? ["literal", "usd"] : op === "perp_close" ? ["all", "fraction"] : ["literal", "usd", "all"];
+    if (!allowed.includes(String(kind))) return { ok: false, reason: `action ${index + 1} (${op}): sizing must be one of ${allowed.join(", ")} (perps collateral and withdrawals are USDC amounts; a close is all or a fraction)` };
+  }
   if (!s || typeof s !== "object") return { ok: false, reason: `action ${index + 1} (${op}) has no sizing` };
   const o = s as Record<string, unknown>;
   const kind = o.kind as SizingKind;
@@ -390,6 +401,13 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
       to_asset: typeof r.to_asset === "string" ? normalizeAsset(r.to_asset) : null,
       amount: sized.amount,
       source: r.source === "margin" ? "margin" : r.source === "wallet" ? "wallet" : null,
+      ...(PERP_OPS.has(op)
+        ? {
+            market: perpMarketOf(r.market),
+            side: r.side === "long" || r.side === "short" ? r.side : null,
+            leverage: typeof r.leverage === "number" ? r.leverage : r.leverage !== undefined ? Number(r.leverage) : null,
+          }
+        : {}),
     };
     const v = validateWrite(w);
     // A guard message ("Pick two different assets") goes back to the model, which can ask the user or decline.

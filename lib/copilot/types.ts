@@ -56,7 +56,7 @@ export type ResponseKind =
   | "needs_login" // no valid session: show Sign-In-With-Solana
   | "plan_preview"; // a multi-step plan waiting for approval
 
-export type Venue = "earn" | "margin" | "farm" | "swap" | "wallet" | "other";
+export type Venue = "earn" | "margin" | "farm" | "swap" | "wallet" | "perps" | "other";
 
 export interface ClarifyOption {
   id: string;

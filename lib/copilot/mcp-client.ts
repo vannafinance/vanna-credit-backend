@@ -545,7 +545,12 @@ export interface SwapArgs {
   to_asset: string;
   amount: string;
   slippage_bps?: number;
+  /** "jupiter" | "titan"; omitted = the better quote at build time. */
+  provider?: string;
 }
+
+/** A quote can include Titan only for a wallet (Titan builds per address): the user's, and margin mode for its margin. */
+export type SwapQuoteArgs = Omit<SwapArgs, "provider"> & { authority?: string; mode?: "wallet" | "margin" };
 export interface MarginAmountArgs {
   authority: string;
   asset: string;
@@ -570,7 +575,7 @@ export const mcp = {
   earnPosition: (owner: string, symbol: string, ctx: McpCtx = {}) =>
     mcpCall("vanna_earn_position", { action: "deposited_balance", owner, asset: symbol }, ctx),
   farmMarkets: (ctx: McpCtx = {}) => mcpCall("vanna_farm_overview", { action: "markets" }, ctx),
-  swapQuote: (args: SwapArgs, ctx: McpCtx = {}) => mcpCall("vanna_swap", { action: "quote", ...args }, ctx),
+  swapQuote: (args: SwapQuoteArgs, ctx: McpCtx = {}) => mcpCall("vanna_swap", { action: "quote", ...args }, ctx),
   canBorrow: (args: MarginAmountArgs, ctx: McpCtx = {}) =>
     mcpCall("vanna_margin_status", { action: "can_borrow", ...args }, ctx),
   canWithdraw: (args: MarginAmountArgs, ctx: McpCtx = {}) =>
@@ -582,4 +587,11 @@ export const mcp = {
   canSwap: (args: SwapArgs & { authority: string }, ctx: McpCtx = {}) =>
     mcpCall("vanna_swap", { action: "can_swap", ...args }, ctx),
   txStatus: (signature: string, ctx: McpCtx = {}) => mcpCall("vanna_sign", { action: "tx_status", signature }, ctx),
+  perpsMarkets: (ctx: McpCtx = {}) => mcpCall("vanna_perps", { action: "markets" }, ctx),
+  perpsPositions: (owner: string, ctx: McpCtx = {}) => mcpCall("vanna_perps", { action: "positions", authority: owner }, ctx),
+  perpsWrite: (args: Record<string, unknown>, ctx: McpCtx = {}) => mcpCall("vanna_perps", args, ctx),
+  perpsPreview: (
+    args: { authority: string; market: string; side: "long" | "short"; collateral_usdc: string; leverage: number; slippage_bps?: number },
+    ctx: McpCtx = {},
+  ) => mcpCall("vanna_perps", { action: "preview", ...args }, ctx),
 };

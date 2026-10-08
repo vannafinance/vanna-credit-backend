@@ -8,6 +8,8 @@ import { NETWORK_LABEL } from "@/lib/solana/config";
 import { useCopilot } from "@/lib/copilot/client/use-copilot";
 import { useUserPositions } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
+import { usePerpsView } from "@/hooks/use-perps";
+import { PERP_MARKETS } from "@/lib/solana/phoenix";
 import type { BrainHealth } from "@/lib/copilot/types";
 import { CopilotShell } from "./copilot-shell";
 import {
@@ -130,6 +132,23 @@ export function CopilotWorkspace() {
     [lenderPositions, prices],
   );
 
+  // Phoenix perps positions: the same view the Perps page polls (size, side, leverage, PnL), shown in their own section.
+  const { view: perpsView } = usePerpsView();
+  const perpsPositions: RailPosition[] = useMemo(
+    () =>
+      (perpsView?.positions ?? []).map((p) => {
+        const pnl = `${p.pnlUsd < 0 ? "-" : "+"}${usd(Math.abs(p.pnlUsd))}`;
+        return {
+          symbol: p.marketName,
+          icon: PERP_MARKETS.find((m) => m.key === p.market)?.icon,
+          role: `Perp · ${p.side === "long" ? "Long" : "Short"} ${p.leverage.toFixed(1)}x`,
+          amount: p.sizeTokens.toLocaleString(undefined, { maximumFractionDigits: 4 }),
+          usd: `${usd(p.sizeUsd)} · ${pnl}`,
+        };
+      }),
+    [perpsView],
+  );
+
   const chips: RailStatusChip[] = useMemo(() => {
     const list: RailStatusChip[] = [{ label: NETWORK_LABEL, tone: "muted" }];
     if (server === "unreachable") list.push({ label: "Server unreachable", tone: "bad", title: "The Copilot API did not answer." });
@@ -198,6 +217,7 @@ export function CopilotWorkspace() {
             noDebt={noDebt}
             positions={positions}
             earnPositions={earnPositions}
+            perpsPositions={perpsPositions}
             conversations={copilot.conversations}
             activeId={copilot.activeId}
             onOpen={copilot.open}

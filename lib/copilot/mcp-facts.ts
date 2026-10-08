@@ -291,6 +291,12 @@ export async function runRead(intent: ReadIntent, ctx: ReadCtx): Promise<ReadOut
       return readProtocol(ctx);
     case "quote":
       return readQuote(intent.from, intent.to, intent.amount, ctx);
+    case "perps_markets":
+      return readPerpsMarkets(ctx);
+    case "perps_positions":
+      return readPerpsPositions(ctx);
+    case "perps_preview":
+      return readPerpsPreview(intent, ctx);
     case "concept":
       return concept(intent.topic);
     case "help":
@@ -401,6 +407,142 @@ async function readWallet(ctx: ReadCtx): Promise<ReadOutcome> {
   };
 }
 
+// ── Phoenix perps ────────────────────────────────────────────────────────────
+
+type PerpRow = Record<string, unknown>;
+
+/** The Phoenix venue's collateral row of a raw health read: its value and positions (null when the margin holds none). */
+function phoenixRows(raw: unknown): { valueUsd: number; positions: PerpRow[] } | null {
+  const collateral = raw && typeof raw === "object" ? (raw as Record<string, unknown>).collateral : null;
+  const row = Array.isArray(collateral) ? (collateral as PerpRow[]).find((r) => r.is_venue === true || r.symbol === "Phoenix") : null;
+  if (!row) return null;
+  const venue = (row.venue ?? {}) as Record<string, unknown>;
+  return { valueUsd: num(row.usd_value) ?? 0, positions: Array.isArray(venue.positions) ? (venue.positions as PerpRow[]) : [] };
+}
+
+const px = (v: unknown) => (num(v) === null ? "—" : fmtUsd(Number(v)));
+const signedUsd = (v: unknown) => {
+  const n = num(v);
+  return n === null ? "—" : `${n < 0 ? "-" : "+"}${fmtUsd(Math.abs(n))}`;
+};
+
+function perpsTable(caption: string, rows: PerpRow[]) {
+  return {
+    caption,
+    columns: ["Market", "Side", "Size", "Entry", "Price", "PnL", "Liquidation"],
+    rows: rows.map((p) => [
+      String(p.name ?? p.market ?? ""),
+      String(p.side ?? ""),
+      `${String(p.size ?? "—")} (${px(p.size_usd)})`,
+      px(p.entry_price),
+      px(p.index_price ?? p.mark_price),
+      signedUsd(p.pnl_usd),
+      p.liquidation_price === undefined ? "—" : p.liquidation_price === null ? "none" : px(p.liquidation_price),
+    ]),
+  };
+}
+
+async function readPerpsMarkets(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.perpsMarkets(ctx);
+  } catch (err) {
+    return unavailable(err, "the Phoenix perps markets");
+  }
+  const markets = Array.isArray(raw.markets) ? (raw.markets as PerpRow[]) : [];
+  if (!markets.length) return unavailable(new Error("no markets returned"), "the Phoenix perps markets");
+  return {
+    ok: true,
+    data: { markets: raw },
+    answer: {
+      headline: `Phoenix perps markets you can trade long or short: ${markets.map((m) => String(m.market)).join(", ")}.`,
+      facts: [],
+      tables: [
+        {
+          columns: ["Market", "Index price", "Mark price", "Max leverage", "Open", "Taker fee"],
+          rows: markets.map((m) => [
+            String(m.name ?? m.market),
+            px(m.index_price),
+            px(m.mark_price),
+            `${String(m.max_leverage)}x`,
+            m.trading_enabled === true ? "yes" : "closed",
+            m.taker_fee_pct === null || m.taker_fee_pct === undefined ? "—" : `${Number(m.taker_fee_pct).toFixed(3)}%`,
+          ]),
+        },
+      ],
+      note: "Perps use your margin account's USDC as collateral and Phoenix's own leverage; no Vanna loan is created.",
+      venue: "phoenix",
+    },
+  };
+}
+
+async function readPerpsPositions(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.perpsPositions(ctx.user.wallet, ctx);
+  } catch (err) {
+    return isNoAccount(err) ? noMargin("perps position") : unavailable(err, "your perps positions");
+  }
+  if (raw.has_margin_account === false) return noMargin("perps position");
+  const positions = Array.isArray(raw.positions) ? (raw.positions as PerpRow[]) : [];
+  const facts: AnswerFact[] = [
+    fact("Phoenix balance", px(raw.phoenix_value_usd)),
+    fact("withdrawable to margin now", `${String(raw.withdrawable_now_usdc ?? "0")} USDC`),
+    fact("perps leverage", `${String(raw.leverage ?? "0")}x`),
+    fact("health factor", raw.health_factor ? String(raw.health_factor) : "no debt"),
+  ];
+  return {
+    ok: true,
+    data: { perps: raw },
+    answer: {
+      headline: positions.length
+        ? `You have ${positions.length} open Phoenix perps position${positions.length === 1 ? "" : "s"}.`
+        : "You have no open Phoenix perps positions.",
+      facts,
+      ...(positions.length ? { tables: [perpsTable("Positions", positions)] } : {}),
+      note: "Liquidation is the price at which your whole margin account would fall to the 1.10 health factor with only that market moving; \"none\" means it can't get there.",
+      venue: "phoenix",
+    },
+  };
+}
+
+async function readPerpsPreview(r: Extract<ReadIntent, { kind: "perps_preview" }>, ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.perpsPreview({ authority: ctx.user.wallet, market: r.market, side: r.side, collateral_usdc: r.collateral, leverage: r.leverage }, ctx);
+  } catch (err) {
+    return isNoAccount(err) ? noMargin("perps position") : unavailable(err, "a preview of that order");
+  }
+  const name = String(raw.name ?? `${r.market}-PERP`);
+  if (raw.allowed !== true) {
+    return {
+      ok: true,
+      fixedWording: true,
+      data: { preview: raw },
+      answer: { headline: `That ${r.side} on ${name} wouldn't go through: ${String(raw.reason ?? "it was refused")}.`, facts: [], venue: "phoenix" },
+    };
+  }
+  const facts: AnswerFact[] = [
+    fact("size", `${String(raw.size)} ${r.market} (${px(raw.size_usd)})`),
+    fact("collateral moved to Phoenix", raw.uses_existing_phoenix_balance === true ? "none (uses your Phoenix balance)" : `${String(raw.collateral_usdc)} USDC`),
+    fact("limit price", px(raw.limit_price)),
+    fact("open fee", px(raw.open_fee_usd)),
+    fact("health factor after", raw.projected_health_factor ? String(raw.projected_health_factor) : "no debt"),
+    fact("liquidation price after", raw.liquidation_price_after ? px(raw.liquidation_price_after) : "none"),
+  ];
+  const notes = Array.isArray(raw.notes) ? (raw.notes as unknown[]).map(String) : [];
+  return {
+    ok: true,
+    data: { preview: raw },
+    answer: {
+      headline: `A ${r.leverage}x ${r.side} on ${name} with ${r.collateral} USDC would be about ${String(raw.size)} ${r.market} (${px(raw.size_usd)})${raw.reduced_to_fit_cap === true ? ", reduced to fit the market's leverage cap" : ""}.`,
+      facts,
+      note: [...notes, "Opening it here isn't available yet: place it on the Perps page."].join(" "),
+      venue: "phoenix",
+    },
+  };
+}
+
 async function readPositions(ctx: ReadCtx): Promise<ReadOutcome> {
   const [healthR, walletR, farmR] = await Promise.allSettled([loadHealth(ctx), mcp.wallet(ctx.user.wallet, ctx), mcp.call("vanna_farm_overview", { action: "positions", authority: ctx.user.wallet }, ctx)]);
   const tables: NonNullable<StructuredAnswer["tables"]> = [];
@@ -412,7 +554,14 @@ async function readPositions(ctx: ReadCtx): Promise<ReadOutcome> {
     const h = healthR.value.health;
     data.health = healthR.value.raw;
     facts.push(fact("health factor", fmtHf(h.hf), hfTone(h.hf)), fact("margin collateral", fmtUsd(h.collateralUsd)), fact("margin debt", fmtUsd(h.debtUsd)));
-    if (h.collateral.length) tables.push(rowsTable("Margin collateral", h.collateral));
+    // The Phoenix venue is one collateral holding of the margin, but it has no token amount: show it as its own card.
+    const venueRows = phoenixRows(healthR.value.raw);
+    const tokens = venueRows ? h.collateral.filter((r) => r.symbol !== "Phoenix") : h.collateral;
+    if (tokens.length) tables.push(rowsTable("Margin collateral", tokens));
+    if (venueRows) {
+      facts.push(fact("Phoenix perps balance", fmtUsd(venueRows.valueUsd)));
+      if (venueRows.positions.length) tables.push(perpsTable("Phoenix perps", venueRows.positions));
+    }
     if (h.debt.length) tables.push(rowsTable("Debt", h.debt));
   } else if (healthR.status === "fulfilled" && healthR.value.kind === "no_account") {
     facts.push(fact("margin account", "not opened"));

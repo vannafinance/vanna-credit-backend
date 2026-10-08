@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import type { Venue } from "./types";
 import type { ReadCall, ReadLeg, WriteIntent, WriteOp } from "./intent";
+import { PERP_OPS } from "./intent";
 
 export type Op = WriteOp | "report";
 export type SlotValue = string | number | boolean | null;
@@ -47,14 +48,18 @@ export const VENUE_BY_OP: Record<Op, Venue> = {
   swap: "swap",
   farm_deposit: "farm",
   farm_redeem: "farm",
+  perp_open: "perps",
+  perp_close: "perps",
+  perp_withdraw: "perps",
+  perp_register: "perps",
   report: "other",
 };
 
 /** Ops that lower (or can lower) the health factor: gated by the risk floor. */
-export const RISK_INCREASING: ReadonlySet<Op> = new Set<Op>(["borrow", "withdraw", "swap"]);
+export const RISK_INCREASING: ReadonlySet<Op> = new Set<Op>(["borrow", "withdraw", "swap", "perp_open"]);
 
 /** Ops that touch the margin account (need one, and a health read before/after). */
-export const MARGIN_OPS: ReadonlySet<Op> = new Set<Op>(["deposit", "withdraw", "borrow", "repay", "farm_deposit", "farm_redeem", "close_account"]);
+export const MARGIN_OPS: ReadonlySet<Op> = new Set<Op>(["deposit", "withdraw", "borrow", "repay", "farm_deposit", "farm_redeem", "close_account", "perp_open", "perp_close", "perp_withdraw", "perp_register"]);
 
 function canonicalSlots(slots: Slots): Array<[string, SlotValue]> {
   return Object.entries(slots)
@@ -121,6 +126,16 @@ export function labelFor(s: StepSpec): string {
     if (s.op === "deposit") return `Deposit ${s.asset} as margin collateral up to a health factor of ${t}`;
   }
   switch (s.op) {
+    case "perp_register":
+      return "Create your Phoenix trading account (first perps trade only)";
+    case "perp_open":
+      return `Open a ${String(s.slots.leverage)}x ${String(s.slots.side)} on ${String(s.slots.market)}-PERP with ${s.amount ?? ""} USDC (Phoenix)`;
+    case "perp_close":
+      return typeof s.slots.fraction === "number" && s.slots.fraction < 1
+        ? `Close ${Math.round(s.slots.fraction * 100)}% of your ${String(s.slots.market)}-PERP position`
+        : `Close your ${String(s.slots.market)}-PERP position`;
+    case "perp_withdraw":
+      return s.amount && s.amount !== "all" ? `Move ${s.amount} USDC from Phoenix back to your margin account` : "Move your USDC from Phoenix back to your margin account";
     case "create_account":
       return "Open your margin account";
     case "close_account":
@@ -144,9 +159,10 @@ export function labelFor(s: StepSpec): string {
         const where = s.slots.mode === "margin" ? "inside your margin account" : "in your wallet";
         return `Swap ${s.asset ?? ""} to receive at least ${target} ${to} ${where}`;
       }
+      const via = s.slots.provider === "titan" ? " via Titan" : s.slots.provider === "jupiter" ? " via Jupiter" : "";
       return s.slots.mode === "margin"
-        ? `Swap ${q} to ${to} inside your margin account`
-        : `Swap ${q} to ${to} in your wallet`;
+        ? `Swap ${q} to ${to}${via} inside your margin account`
+        : `Swap ${q} to ${to}${via} in your wallet`;
     }
     case "farm_deposit":
       return `Supply ${q} to Kamino (farm) from your margin balance`;
@@ -176,14 +192,31 @@ export function planWarnings(steps: StepSpec[], extra: string[] = []): string[] 
   return w;
 }
 
+/** "Titan" / "Jupiter" for a swap route as users read it. */
+export function providerName(provider: string | null | undefined): string {
+  return provider === "titan" ? "Titan" : "Jupiter";
+}
+
 export function stepFromWrite(w: WriteIntent, amount: string | null): StepSpec {
   const slots: Slots = {};
   if (w.op === "swap") {
     slots.to_asset = w.to_asset ?? null;
     slots.mode = w.source === "margin" ? "margin" : "wallet";
     slots.slippage_bps = 100;
+    if (w.provider) slots.provider = w.provider;
   }
   if (w.op === "repay") slots.source = w.source === "margin" ? "margin" : "wallet";
+  if (w.op === "perp_open") {
+    slots.market = w.market ?? null;
+    slots.side = w.side ?? null;
+    slots.leverage = w.leverage ?? null;
+  }
+  if (w.op === "perp_close") {
+    slots.market = w.market ?? null;
+    if (w.amount?.kind === "pct" && w.amount.pct < 100) slots.fraction = w.amount.pct / 100;
+    return { kind: "write", op: w.op, asset: null, amount: null, slots };
+  }
+  if (w.op === "perp_register") return { kind: "write", op: w.op, asset: null, amount: null, slots };
   return { kind: "write", op: w.op, asset: w.asset, amount, slots };
 }
 
@@ -218,6 +251,12 @@ export function validateSteps(steps: StepSpec[]): string | null {
     if (s.kind === "read" && s.op !== "report") return "Unsupported read step.";
     if (s.kind === "read" && s.slots.report === "reads" && !readLegOf(s)) return "A step that shows information is malformed.";
     if (s.kind === "write" && s.op === "report") return "A report is not a write.";
+    if (s.kind === "write" && PERP_OPS.has(s.op as WriteOp)) {
+      // Perps name a market, not an asset; a close and the registration carry no amount.
+      if ((s.op === "perp_open" || s.op === "perp_close") && !s.slots.market) return "A perps step is missing its market.";
+      if (s.op === "perp_open" && !s.amount) return "A perps order is missing its USDC collateral.";
+      continue;
+    }
     if (s.kind === "write" && s.op !== "create_account" && s.op !== "close_account" && !s.asset) return "A step is missing its asset.";
     if (s.kind === "write" && s.op !== "create_account" && s.op !== "close_account" && !s.amount) return "A step is missing its amount.";
   }

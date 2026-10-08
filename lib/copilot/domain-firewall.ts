@@ -26,6 +26,13 @@ const OFF_DOMAIN_MESSAGE = `I only help with Vanna on Solana: Earn, margin, swap
 
 const B58 = "[1-9A-HJ-NP-Za-km-z]";
 
+/** Phoenix perps words: "perp(s)", "perpetual(s)", "phoenix", "SOL-PERP". */
+const PERP_WORDS = /\b(?:perps?|perpetuals?|phoenix|(?:sol|eth|btc|tsla|meta)-?perp)\b/i;
+/** A perps message phrased as a question or a preview is a read, not a trade. */
+const PERP_QUESTION = /\b(?:what\s+(?:if|would|happens|are|is)|preview|simulate|look\s+like|how\s+(?:much|many|close|far)|would\s+(?:it|a|an|my|i)|show|list|tell\s+me|which|can\s+i|could\s+i)\b|\?\s*$/i;
+/** The Phoenix markets Vanna lists (the app's PERP_MARKETS). */
+const PERP_MARKET_NAMES = new Set(["SOL", "ETH", "BTC", "TSLA", "META"]);
+
 const REFUSALS: Array<{ id: string; re: RegExp; message: string }> = [
   {
     id: "liquidation_execution",
@@ -66,10 +73,14 @@ const REFUSALS: Array<{ id: string; re: RegExp; message: string }> = [
       "Kamino multi-asset liquidity is not supported. I can supply a single asset to Kamino lend (farm) from your margin balance, or use the Vanna Earn pools.",
   },
   {
-    id: "perps_short",
-    re: new RegExp(`\\b(?:perps?|perpetuals?|futures|options\\s+trading|short(?:ing)?\\s+(?:${PRODUCT_ASSETS.map((a) => a.toLowerCase()).join("|")}|the\\s+market))\\b`, "i"),
+    // Options, futures and shorting outside perps (a spot short) are not products at all.
+    id: "short_options",
+    re: new RegExp(
+      `^(?!.*${PERP_WORDS.source}).*(?:\\b(?:futures|options\\s+trading)\\b|\\bshort(?:ing)?\\s+(?:${PRODUCT_ASSETS.map((a) => a.toLowerCase()).join("|")}|the\\s+market)\\b)`,
+      "is",
+    ),
     message:
-      "Perpetuals, options and short positions are not offered. I can help with lending, borrowing, swaps, Kamino farm and leveraged long exposure through margin.",
+      "Options, futures and spot short positions are not offered. Shorting is possible as a Phoenix perp (SOL, ETH, BTC, TSLA, META); I can show those markets and preview an order. I can also help with lending, borrowing, swaps, Kamino farm and leveraged long exposure through margin.",
   },
 ];
 
@@ -79,7 +90,7 @@ const REFUSALS: Array<{ id: string; re: RegExp; message: string }> = [
  * short or a multi-asset LP anyway. Liquidating others, admin actions, other programs and the faucet always refuse the
  * whole message. Without the model (`productRefusal`), the whole message is refused as before.
  */
-const PARTIAL_REFUSALS = new Set(["perps_short", "other_liquidity"]);
+const PARTIAL_REFUSALS = new Set(["short_options", "other_liquidity"]);
 
 /** The product's refusal when the message asks for something the product does not offer, else null. */
 export function productRefusal(message: string): string | null {
@@ -127,11 +138,11 @@ const DOMAIN_WORDS = [
   ...PRODUCT_ASSETS.map((a) => a.toLowerCase()),
   ...Object.keys(RECEIPT_TO_UNDERLYING),
   "vanna", "solana", "wsol", "xstock", "xstocks",
-  "kamino", "jupiter", "protocol", "earn", "earns", "earning", "earned", "farm", "farms", "farmed", "farming",
+  "kamino", "jupiter", "titan", "protocol", "earn", "earns", "earning", "earned", "farm", "farms", "farmed", "farming",
   "lend", "lends", "lent", "lending", "borrow", "borrows", "borrowed", "borrowing", "borrowable",
   "repay", "repays", "repaid", "repaying", "repayment", "deposit", "deposits", "deposited", "depositing",
   "redeem", "redeems", "redeemed", "redeeming", "withdraw", "withdraws", "withdrew", "withdrawing", "withdrawal",
-  "swap", "swaps", "swapped", "swapping", "supply", "supplies", "supplied", "supplying", "stake", "staked", "staking",
+  "swap", "swaps", "swapped", "swapping", "perp", "perps", "perpetual", "perpetuals", "phoenix", "supply", "supplies", "supplied", "supplying", "stake", "staked", "staking",
   "position", "positions", "portfolio", "holdings", "balance", "balances", "collateral", "debt", "debts", "owe", "owed",
   "leverage", "leveraged", "lever", "levered", "liquidate", "liquidated", "liquidation", "liquidations", "liquidatable",
   "margin", "hf", "health", "pool", "pools", "reserve", "reserves", "liquidity", "apy", "apr", "yield", "yields", "interest",
@@ -214,7 +225,15 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
   }
 
   const tokens = extractAssets(m);
-  const capsTicker = tokenAfterAmount(m);
+  let capsTicker = tokenAfterAmount(m);
+  // ETH, BTC, TSLA and META are Phoenix perps markets, not tokens the product holds. In a message that says "perp" they
+  // are markets; when Gemini decides they always reach it, so it can read a misspelt or implied perps request ("short
+  // eth prep") and ask what was meant, instead of the message being refused here. Without the model the deterministic
+  // refusal below stands unless the message says perps.
+  if (PERP_WORDS.test(m) || opts.modelDecides) {
+    tokens.unknown = tokens.unknown.filter((u) => !PERP_MARKET_NAMES.has(u.toUpperCase().replace(/-?PERP$/, "")));
+    if (capsTicker && PERP_MARKET_NAMES.has(capsTicker.toUpperCase())) capsTicker = null;
+  }
   if (tokens.unknown.length || capsTicker) {
     const name = tokens.unknown[0] ?? capsTicker ?? "That token";
     return {

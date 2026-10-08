@@ -26,6 +26,8 @@ import {
   validateLever,
   validateRead,
   validateWrite,
+  PERP_MARKETS,
+  perpMarketOf,
   type AmountSpec,
   type Intent,
   type ReadIntent,
@@ -152,16 +154,18 @@ export async function vertexPing(): Promise<{ ok: boolean; model: string; error?
 // ── Routing by function calling ─────────────────────────────────────────────
 
 const ASSET_ENUM = [...PRODUCT_ASSETS];
-const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem"];
-const READ_KINDS = ["health", "positions", "debt", "collateral", "wallet", "price", "pool", "earn_position", "farm_markets", "farm_positions", "capacity", "liquidation_risk", "history", "protocol", "quote", "concept", "help"];
+const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw"];
+const READ_KINDS = ["health", "positions", "debt", "collateral", "wallet", "price", "pool", "earn_position", "farm_markets", "farm_positions", "capacity", "liquidation_risk", "history", "protocol", "quote", "perps_markets", "perps_positions", "perps_preview", "concept", "help"];
 
 const stepProps = {
-  op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter. farm_deposit/farm_redeem = Kamino." },
+  op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino. perp_open/perp_close/perp_withdraw = Phoenix perps (not a Vanna loan)." },
+  market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"], description: "perp_open / perp_close: the Phoenix perps market." },
+  side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
   asset: { type: "STRING", enum: ASSET_ENUM, description: "The asset acted on (for swap: the asset sold; for farm_redeem: the underlying, not the receipt)." },
   to_asset: { type: "STRING", enum: ASSET_ENUM, description: "swap only: the asset bought." },
   amount: { type: "STRING", description: 'A positive decimal number as text ("1.5"), or "all", or a percentage like "50%". Omit if the user gave none.' },
   source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays. swap: margin = swap collateral inside the margin account; default wallet." },
-  leverage: { type: "NUMBER", description: 'borrow only. Set this INSTEAD of amount when the user asks to borrow "to reach Nx leverage" / "Nx against that deposit" without giving a borrow amount. N is the multiple of equity (3 = collateral three times equity). The server sizes the amount; never compute it.' },
+  leverage: { type: "NUMBER", description: 'perp_open: the Phoenix leverage the user gave (amount is then the USDC collateral). borrow: set this INSTEAD of amount when the user asks to borrow "to reach Nx leverage" / "Nx against that deposit" without giving a borrow amount. N is the multiple of equity (3 = collateral three times equity). The server sizes the amount; never compute it.' },
 };
 
 export const ROUTER_TOOLS: LlmFunctionDecl[] = [
@@ -179,6 +183,10 @@ export const ROUTER_TOOLS: LlmFunctionDecl[] = [
         to: { type: "STRING", enum: ASSET_ENUM, description: "quote only." },
         amount: { type: "STRING", description: "quote only: positive decimal." },
         topic: { type: "STRING", enum: ["health_factor", "liquidation", "leverage", "collateral", "earn", "farm", "margin", "general"], description: "concept only." },
+        market: { type: "STRING", enum: [...PERP_MARKETS], description: "perps_preview only: the Phoenix perps market." },
+        side: { type: "STRING", enum: ["long", "short"], description: "perps_preview only." },
+        collateral_usdc: { type: "STRING", description: "perps_preview only: USDC from the margin account backing the order; \"0\" = the Phoenix balance already there." },
+        leverage: { type: "NUMBER", description: "perps_preview only: 1 up to the market's max." },
       },
       required: ["kind"],
     },
@@ -232,7 +240,7 @@ export const ROUTER_TOOLS: LlmFunctionDecl[] = [
 export const ROUTER_SYSTEM = `You route messages for the Vanna Finance Copilot on Solana by calling exactly one function. You never answer in text.
 ${DOMAIN_FIREWALL_SYSTEM}
 
-Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borrow, repay), Jupiter swaps, Kamino farm, health factor.
+Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borrow, repay), swaps through Jupiter or Titan, Kamino farm, health factor, and Phoenix perps (SOL, ETH, BTC, TSLA, META: markets, positions, previews, opening and closing positions; perps never borrow from Vanna).
 - "supply", "lend", "put into earn" = earn_supply. "redeem", "withdraw from earn" = earn_redeem.
 - "deposit ... as collateral", "add collateral" = deposit. "withdraw collateral" = withdraw.
 - A bare "deposit" or "withdraw" with no venue is ambiguous: call ask_user.
@@ -283,6 +291,16 @@ function writeFromArgs(a: Record<string, unknown>): WriteIntent | null {
   if (typeof op !== "string" || !(WRITE_OPS as string[]).includes(op)) return null;
   const lev = typeof a.leverage === "number" ? a.leverage : typeof a.leverage === "string" ? Number(a.leverage) : null;
   const sizedToLeverage = op === "borrow" && lev !== null && Number.isFinite(lev) && !amountSpecOf(a.amount);
+  if (op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
+    return {
+      op,
+      asset: null,
+      amount: amountSpecOf(a.amount) ?? (op === "perp_open" ? null : { kind: "all" }),
+      market: perpMarketOf(a.market),
+      side: a.side === "long" || a.side === "short" ? a.side : null,
+      leverage: lev !== null && Number.isFinite(lev) ? lev : null,
+    };
+  }
   return {
     op: op as WriteOp,
     asset: assetOf(a.asset),
@@ -315,6 +333,17 @@ export function intentFromCall(name: string, a: Record<string, unknown>): Intent
           const amount = typeof a.amount === "string" ? parseDecimalString(a.amount) : typeof a.amount === "number" ? parseDecimalString(String(a.amount)) : null;
           if (!from || !to || !amount) return { lane: "ask", question: "Which assets and how much would you like a swap quote for?" };
           read = { kind: "quote", from, to, amount };
+          break;
+        }
+        case "perps_preview": {
+          const market = perpMarketOf(a.market);
+          const side = a.side === "long" || a.side === "short" ? a.side : null;
+          const collateral = typeof a.collateral_usdc === "string" ? a.collateral_usdc.trim() : typeof a.collateral_usdc === "number" ? String(a.collateral_usdc) : null;
+          const leverage = typeof a.leverage === "number" ? a.leverage : Number(a.leverage);
+          if (!market || !side || !collateral || !(leverage >= 1)) {
+            return { lane: "ask", question: "Which perps market, long or short, how much USDC and at what leverage?" };
+          }
+          read = { kind: "perps_preview", market, side, collateral, leverage };
           break;
         }
         case "concept":

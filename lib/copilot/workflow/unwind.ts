@@ -55,6 +55,24 @@ export async function planUnwind(intent: UnwindIntent, ctx: ReadCtx): Promise<St
   const isReceipt = (symbol: string) => RECEIPT_TO_UNDERLYING[symbol.toLowerCase()] !== undefined;
   for (const r of health?.collateral ?? []) if (!isReceipt(r.symbol) && r.units > 0) margin.set(r.symbol, r.units);
 
+  // 0. Phoenix perps: close every position, then bring the USDC back into the margin account (it then repays like any
+  // other margin USDC).
+  if (wantMargin && health?.collateral.some((r) => r.symbol === "Phoenix")) {
+    try {
+      const perps = await mcp.perpsPositions(ctx.user.wallet, ctx);
+      const open = Array.isArray(perps.positions) ? (perps.positions as Array<Record<string, unknown>>) : [];
+      for (const p of open) {
+        steps.push({ kind: "write", op: "perp_close", asset: null, amount: null, slots: { market: String(p.market) } });
+      }
+      steps.push({ kind: "write", op: "perp_withdraw", asset: null, amount: "all", slots: {} });
+      const back = Number(perps.phoenix_value_usd ?? 0);
+      if (back > 0) margin.set("USDC", (margin.get("USDC") ?? 0) + back);
+      notes.push("Your Phoenix perps are closed first and their USDC comes back to the margin account.");
+    } catch {
+      return { ok: false, message: "I couldn't read your Phoenix perps, so I won't draw up an exit plan from partial data. Try again in a moment." };
+    }
+  }
+
   // 1. Kamino
   if (wantFarm && health && farmR && !(farmR instanceof Error) && typeof farmR === "object") {
     const list = Array.isArray((farmR as Record<string, unknown>).positions) ? ((farmR as Record<string, unknown>).positions as Array<Record<string, unknown>>) : [];
