@@ -10,9 +10,9 @@
  * borrows only; without a margin account the CTA opens the create-account agreement.
  *
  * Limits come from the program-exact account model (./mg-sim): the safe borrow limit is the largest
- * borrow that keeps HF ≥ 1.15 after the deposit, the slider max = 1 + limit / deposit (floored to
- * 2 dp, capped at 20x; 7.66x for a fresh account before anything is entered), and Max = deposit ×
- * (leverage − 1). Borrowed tokens land in the vault and count as collateral.
+ * borrow that keeps HF ≥ 1.15 after the deposit. Selectable leverage is limited to 1 + limit /
+ * deposit (floored to 2 dp, capped at 10x); the displayed slider scale always stays 1x–10x.
+ * Max = deposit × (leverage − 1). Borrowed tokens land in the vault and count as collateral.
  */
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -472,7 +472,7 @@ export function LeverageTab({ m, connectWallet }: { m: MarginScreen; connectWall
             </button>
           </div>
           <div className="mg-slw">
-            <LevSlider lev={st.levE} max={st.max} onChange={changeLev} />
+            <LevSlider lev={st.levE} max={LEVERAGE_SLIDER_CAP} onChange={changeLev} />
           </div>
         </div>
       </div>

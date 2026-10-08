@@ -26,10 +26,10 @@ export const REPAY_ALL_BUFFER = 0.002; // 0.2% — matches REPAY_ALL_BUFFER_BPS 
 export const SOL_FEE_RESERVE_UI = 0.05;
 
 /**
- * Hard ceiling for the leverage slider when an existing account has lots of spare collateral
- * (the account-wide max can then exceed the fresh-account 7.67x). Keeps the slider usable.
+ * Fixed display ceiling for the margin leverage slider. The account's safe selectable
+ * leverage may be lower, but deposits must never change the displayed 1x–10x scale.
  */
-export const LEVERAGE_SLIDER_CAP = 20;
+export const LEVERAGE_SLIDER_CAP = 10;
 
 /** Max leverage for a brand-new deposit at the UI safety buffer: h / (h − 1) ≈ 7.67x at 1.15. */
 export const FRESH_ACCOUNT_MAX_LEVERAGE = maxLeverage(SAFE_HEALTH_FACTOR);
