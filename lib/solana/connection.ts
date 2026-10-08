@@ -17,11 +17,43 @@ let shared: Connection | null = null;
  */
 const RETRY_DELAYS_MS = [250, 600, 1200, 2400];
 
+/**
+ * Network errors where the connection never opened (nothing reached the RPC), so any request —
+ * even `sendTransaction` — is safe to retry. The deployed server reaches the fork through Cloud
+ * NAT, and when its NAT ports run out new connections fail with EHOSTUNREACH until one frees up.
+ */
+const CONNECT_ERROR = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|ConnectTimeoutError/;
+/** Errors that may have cut a request mid-flight: retried for reads only. */
+const MIDFLIGHT_ERROR = /ECONNRESET|EPIPE|UND_ERR_SOCKET|other side closed|fetch failed|terminated/i;
+
+/** The error text plus its `cause` chain (Node's fetch wraps the socket error as `cause`). */
+function errorText(error: unknown): string {
+  const parts: string[] = [];
+  let e: unknown = error;
+  for (let i = 0; e && i < 4; i++) {
+    const x = e as { message?: string; code?: string; cause?: unknown };
+    parts.push(String(x.code ?? ""), String(x.message ?? e));
+    e = x.cause;
+  }
+  return parts.join(" ");
+}
+
 export const forkFetch: typeof fetch = async (input, init) => {
   const body = typeof init?.body === "string" ? init.body : "";
   const retriable = !body.includes('"sendTransaction"');
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(input, init);
+    let response: Response;
+    try {
+      response = await fetch(input, init);
+    } catch (error) {
+      // The request threw before any response: retry when it never left (connect errors), or when
+      // it was a read that a dropped socket cut short.
+      const text = errorText(error);
+      const again = CONNECT_ERROR.test(text) || (retriable && MIDFLIGHT_ERROR.test(text));
+      if (!again || attempt >= RETRY_DELAYS_MS.length) throw error;
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      continue;
+    }
     if (!retriable || attempt >= RETRY_DELAYS_MS.length) return response;
     let transient = response.status === 429 || response.status >= 500;
     if (!transient && response.ok) {
