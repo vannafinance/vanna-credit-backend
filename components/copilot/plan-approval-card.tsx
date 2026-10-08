@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
 import type { PlanStepView, PlanView, Venue } from "@/lib/copilot/types";
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
@@ -481,7 +482,12 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
             color: unusable ? "var(--pc-btn-off-fg)" : "var(--pc-btn-fg)",
           }}
         >
-          {approveLabel}
+          {busy && !unusable ? (
+            <span className="inline-flex items-center justify-center gap-2">
+              <Loader2 size={15} className="animate-spin" aria-hidden />
+              {approveLabel}
+            </span>
+          ) : approveLabel}
         </button>
         <button
           type="button"

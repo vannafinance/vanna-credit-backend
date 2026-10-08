@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 
 /**
  * Thread chrome: user on the right, copilot on the left.
@@ -288,7 +290,32 @@ export function AssistantRow({ children }: { children: React.ReactNode }) {
 }
 
 /** The in-flight reply: shown from send until the server answers. */
-export function WorkingRow({ label = "Working…" }: { label?: string }) {
+/** How long each progress line stays before the next one; the last line holds until the reply lands. */
+const STATUS_LINE_MS = 2200;
+
+/**
+ * The row under a sent message while the reply is worked out: a spinner and a line about what is happening. The
+ * lines come from the model, worded for this prompt (`/api/copilot/status`); until they arrive, or if they never do,
+ * it reads "Thinking…". They step through in order and stop on the last one.
+ */
+export function WorkingRow({ lines = [] }: { lines?: string[] }) {
+  // A new set of lines remounts the ticker, which restarts it from the first line.
+  return <StatusTicker key={lines.join("|")} lines={lines} />;
+}
+
+function StatusTicker({ lines }: { lines: string[] }) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (lines.length < 2) return;
+    const timer = window.setInterval(() => {
+      setIndex((i) => {
+        if (i + 1 >= lines.length - 1) window.clearInterval(timer);
+        return Math.min(i + 1, lines.length - 1);
+      });
+    }, STATUS_LINE_MS);
+    return () => window.clearInterval(timer);
+  }, [lines]);
+  const label = lines[index] ?? "Thinking…";
   return (
     <div className="flex items-start gap-2.5 max-w-[85%]">
       <img
@@ -298,7 +325,10 @@ export function WorkingRow({ label = "Working…" }: { label?: string }) {
         height={18}
         className="h-[18px] w-[18px] shrink-0 mt-0.5 rounded-full"
       />
-      <p role="status" aria-live="polite" className="text-[13px] leading-[20px] text-violet-500">{label}</p>
+      <p role="status" aria-live="polite" className="flex items-center gap-2 text-[13px] leading-[20px] text-violet-500">
+        <Loader2 size={14} className="shrink-0 animate-spin" aria-hidden />
+        <span key={label} className="cp-status-line">{label}</span>
+      </p>
     </div>
   );
 }

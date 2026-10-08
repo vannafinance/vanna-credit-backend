@@ -242,7 +242,7 @@ export function CopilotWorkspace() {
                             login={login}
                           />
                         ) : index === turns.length - 1 && busy ? (
-                          <WorkingRow />
+                          <WorkingRow lines={copilot.statusLines} />
                         ) : null}
                       </section>
                     );

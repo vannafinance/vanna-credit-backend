@@ -7,14 +7,14 @@
  * Rules it keeps, mirrored from the server contract:
  *  - A step is never reported done until `confirm` says `confirmed` (the chain, not the wallet).
  *  - A wallet rejection reports NOTHING to the server. The step stays awaiting its signature and the
- *    user decides: sign again, or cancel here (the plan then simply lapses on the server).
+ *    user decides: sign again, or cancel here (which ends the plan on the server too).
  *  - `uncertain` is never retried. `expired` is rebuilt only by an explicit `advance` the user asks for.
  *  - No transaction is ever signed without the wallet's own prompt. After approval the wallet prompt for each
  *    next step opens by itself; a rejected prompt stops the run until the user retries or cancels.
  */
 
 import type { PlanStepView, PlanView, StructuredAnswer, UnsignedTx } from "@/lib/copilot/types";
-import { advancePlan, approvePlan, confirmStep, CopilotApiError, getWorkflow, submitStep } from "./api";
+import { advancePlan, approvePlan, cancelPlan, confirmStep, CopilotApiError, getWorkflow, submitStep } from "./api";
 import { signUnsignedTx, WalletRejectedError, type SignTransaction } from "./sign";
 
 export type RunPhase =
@@ -86,8 +86,8 @@ export interface RunController {
   sign(): Promise<void>;
   /** Poll the chain again for a step that was sent but not yet seen confirmed. */
   recheck(): Promise<void>;
-  /** Stop here. The plan lapses on the server; nothing is reported to it. */
-  cancel(): void;
+  /** Stop here, and end the plan on the server so a reopened chat shows it stopped. */
+  cancel(): Promise<void>;
   /** Re-read the plan from the server (used when a stored conversation is reopened). */
   refresh(): Promise<void>;
   state(): RunState;
@@ -315,9 +315,17 @@ export function createRunController(opts: RunOptions): RunController {
         }
       }),
 
-    cancel: () => {
+    cancel: async () => {
       cancelled = true;
       set({ phase: "cancelled", pending: null, message: "Stopped here. Steps already confirmed stay on chain; nothing further will be sent." });
+      // The card stops at once; the server is told so the plan cannot be resumed from a reopened chat. If it can't be
+      // reached the plan still lapses there on its own, and the stored chat remembers it was stopped.
+      try {
+        const res = await cancelPlan(current.workflowId);
+        setPlan(res.plan);
+      } catch (error) {
+        if (error instanceof CopilotApiError && error.status === 409) set({ message: error.message });
+      }
     },
 
     refresh: async () => {
