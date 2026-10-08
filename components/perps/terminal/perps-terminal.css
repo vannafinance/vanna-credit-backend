@@ -458,3 +458,24 @@ html.dark .px-root{
 @media (min-width:640px){.px-page{padding-inline:40px;padding-block:24px 64px}}
 @media (min-width:1024px){.px-page{padding-inline:120px}}
 .px-err{border:1px solid rgba(252,84,87,.4);background:rgba(252,84,87,.1);color:var(--px-short);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:500}
+
+/* Never let a hidden tooltip (opacity 0, still laid out) widen the page: no sideways scroll / shake. */
+.px-root{overflow-x:clip}
+
+/*
+ * Account strip on the same columns as the terminal body: the margin-account group spreads across
+ * the chart + book column, and the Perps · Phoenix group (with its divider) starts exactly where the
+ * order panel (Long / Short) starts.
+ */
+@media (min-width:768px){
+  .px-acs{display:grid;grid-template-columns:minmax(0,1fr) 340px;column-gap:8px;padding:8px 0 8px 14px}
+  .px-acs > .px-ag:first-child{justify-content:space-between;padding-right:18px;column-gap:16px}
+  .px-acs > .px-ag + .px-ag{margin:0;padding:0 14px 0 18px;border-top:0;border-left:1px solid var(--px-bd);flex-basis:auto;gap:24px}
+}
+@media (min-width:1280px){.px-acs{grid-template-columns:minmax(0,1fr) 380px}}
+
+/* Market bar: the stats spread across the space up to the Venue selector (no empty gap on the right). */
+@media (min-width:1280px){
+  .px-mkt .px-stats{flex:1;justify-content:space-between;gap:20px}
+  .px-ven{margin-left:0}
+}

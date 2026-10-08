@@ -1,8 +1,13 @@
 import { DEPOSIT_SYMBOLS, LENDING_SYMBOLS, TOKENS, TOKEN_SYMBOLS } from "@/lib/solana/tokens";
 
+/**
+ * Nav entries. `group`: "primary" (standalone), "lend" (the LEND box: supply to Vanna's pools or
+ * back an outcome), "bordered" (the BORROW & TRADE box), "secondary" (after the boxes).
+ */
 export const navbarItems = [
   { title: "Portfolio", link: "/portfolio", group: "primary" },
-  { title: "Earn", link: "/earn", group: "primary" },
+  { title: "Earn", link: "/earn", group: "lend" },
+  { title: "Predict", link: "/predict", group: "lend" },
   { title: "Margin", link: "/", group: "bordered" },
   { title: "Trade", link: "/trade", group: "bordered" },
   { title: "Farm", link: "/farm", group: "bordered" },

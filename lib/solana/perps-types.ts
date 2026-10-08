@@ -92,6 +92,8 @@ export interface PerpsAccount {
   collateralRows: { symbol: string; usd: number }[];
   /** Every debt line, USD. */
   debtRows: { symbol: string; usd: number }[];
+  /** On-chain (oracle) USD price per registry symbol, as the health factor uses them. */
+  prices: Record<string, number>;
 }
 
 export interface PerpsView {

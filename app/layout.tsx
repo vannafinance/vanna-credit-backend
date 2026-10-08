@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import "./v3.css";
 import { Navbar } from "@/components/navbar";
 import { navbarItems } from "@/lib/constants";
 import { ThemeProvider } from "@/contexts/theme-context";
@@ -11,6 +12,7 @@ import { SolanaProvider } from "@/contexts/solana-provider";
 import { ScaleWrapper } from "@/components/ui/scale-wrapper";
 import { AppToaster } from "@/components/ui/app-toaster";
 import { TransactionProgressModal } from "@/components/ui/transaction-progress-modal";
+import { FlashRepayHost } from "@/components/v3/flash-repay";
 import { MarginAccountHydrator } from "@/components/margin-account-hydrator";
 
 // Self-hosted, preloaded by next/font (no render-blocking external request, so
@@ -105,6 +107,7 @@ export default function RootLayout({
                   <ScaleWrapper>{children}</ScaleWrapper>
                   <AppToaster />
                   <TransactionProgressModal />
+                  <FlashRepayHost />
                 </PriceProvider>
               </LedgerSubscriberProvider>
             </SolanaProvider>
