@@ -1,35 +1,28 @@
 "use client";
 
 import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { useUserStore } from "@/store/user";
-import { checkUserMarginAccount } from "@/store/margin-account-info-store";
-import { prefetchAccountSnapshot } from "@/hooks/use-account-snapshot";
-import { useLedgerTick } from "@/contexts/ledger-subscriber";
-import { refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
+import { applyMarginSnapshot } from "@/store/margin-account-info-store";
+import { useAccountSnapshot } from "@/hooks/use-account-snapshot";
 
-/**
- * Hydrates the margin store and wallet balances whenever the wallet connects (so any page can
- * read them on first render) and re-reads them on every slot tick.
- */
+/** One shared account query hydrates stores and page consumers on connect and ledger ticks. */
 export function MarginAccountHydrator() {
   const address = useUserStore((s) => s.address);
   const isConnected = useUserStore((s) => s.isConnected);
-  const qc = useQueryClient();
-  const { tick } = useLedgerTick();
+  const { snapshot } = useAccountSnapshot(isConnected ? address : null);
 
   useEffect(() => {
-    if (address && isConnected) {
-      checkUserMarginAccount(address).catch(console.error);
-      prefetchAccountSnapshot(qc, address);
-    }
-  }, [address, isConnected, qc]);
-
-  useEffect(() => {
-    if (!address || !isConnected || tick === 0) return;
-    checkUserMarginAccount(address).catch(() => {});
-    refreshWalletBalancesOnChain(address).catch(() => {});
-  }, [tick, address, isConnected]);
+    if (!snapshot || !address || !isConnected) return;
+    const { api } = snapshot;
+    // Drop late responses from a wallet that disconnected or changed during the read.
+    if (api.margin.owner !== address || useUserStore.getState().address !== address) return;
+    applyMarginSnapshot(api.margin);
+    useUserStore.setState({
+      balance: api.wallet.ui.SOL ?? "0",
+      tokenBalances: { ...api.wallet.ui },
+      depositedBalances: Object.fromEntries(Object.values(api.lender).map((p) => [p.symbol, String(p.assets)])),
+    });
+  }, [snapshot, address, isConnected]);
 
   return null;
 }

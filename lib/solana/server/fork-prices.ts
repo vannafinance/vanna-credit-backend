@@ -154,7 +154,7 @@ async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigS
   let result: "mainnet" | "restamped" | "none" = "none";
   for (const [address, entries] of byAccount) {
     const key = new PublicKey(address);
-    let source = await new Connection(MAINNET_RPC_URL, "confirmed").getAccountInfo(key).catch(() => null);
+    let source = await new Connection(MAINNET_RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch }).getAccountInfo(key).catch(() => null);
     result = "mainnet";
     if (!source?.owner.equals(SCOPE_PROGRAM_ID)) {
       source = await connection.getAccountInfo(key);
@@ -182,7 +182,7 @@ async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigS
  * reference table (flagged `source: "reference"`).
  */
 export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promise<RefreshedPrice[]> {
-  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   // Independent reads run together (each is a round trip to the hosted fork or an API).
   const [perps, assetMap, now, tokenPrices] = await Promise.all([
     listedPerpIndexes(connection).catch(() => []),
@@ -210,8 +210,8 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     ...perps.map((p) => ({ token: { symbol: p.symbol, mint: p.mint }, oracle: p.oracle })),
   ];
   // The Scope copy, the Phoenix exchange alignment and the Pyth writes below all go out together.
-  const background: Promise<unknown>[] = [refreshScopeOnFork(connection, configs.flatMap((c) => (c.oracle ? [c.oracle] : [])), now)];
-  if (perps.length) background.push(alignPhoenixExchangeOnFork(connection));
+  const background: (() => Promise<unknown>)[] = [() => refreshScopeOnFork(connection, configs.flatMap((c) => (c.oracle ? [c.oracle] : [])), now)];
+  if (perps.length) background.push(() => alignPhoenixExchangeOnFork(connection));
 
   // USD per token for the fallback feeds (live → reference), and which token each Pyth account prices.
   const usdOf = (symbol: string) => live[symbol] ?? REFERENCE_PRICE_USD[symbol];
@@ -255,14 +255,20 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     const feedIdHex = Buffer.from(current.data.subarray(PRICE_FEED_ID_OFFSET, PRICE_FEED_ID_OFFSET + 32)).toString("hex");
     const data = buildForkPriceAccountData(current.data, feedIdHex, value, now);
     background.push(
-      callCheatcode("surfnet_setAccount", [
+      () => callCheatcode("surfnet_setAccount", [
         address.toBase58(),
         { lamports: current.lamports, data: data.toString("hex"), owner: PYTH_RECEIVER_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
       ]),
     );
     results.push({ symbol: token.symbol, account: address.toBase58(), usd, source, publishTime: Number(now) });
   }
-  await Promise.all(background);
+  // Four writes at a time; wait for all started work even when one write fails.
+  let failure: PromiseRejectedResult | undefined;
+  for (let i = 0; i < background.length; i += 4) {
+    const batch = await Promise.allSettled(background.slice(i, i + 4).map((run) => run()));
+    failure ??= batch.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failure) throw failure.reason;
+  }
   return results;
 }
 

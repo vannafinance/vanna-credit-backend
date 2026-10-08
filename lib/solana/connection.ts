@@ -1,3 +1,4 @@
+import { singleFlight } from "../async";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { CLOCK_SYSVAR, SOLANA_RPC_URL, SOLANA_WS_URL } from "./config";
 
@@ -8,25 +9,11 @@ import { CLOCK_SYSVAR, SOLANA_RPC_URL, SOLANA_WS_URL } from "./config";
  */
 let shared: Connection | null = null;
 
-/**
- * The hosted fork answers a read of an account it doesn't hold by asking its upstream mainnet RPC,
- * and that upstream rate-limits bursts: the fork then returns HTTP 429/5xx or a JSON-RPC
- * `"Internal error"` for a request that is otherwise fine. This fetch retries those (reads and
- * simulations only — a `sendTransaction` is never re-sent) with a short backoff, so one throttled
- * upstream call doesn't fail a whole page load.
- */
-const RETRY_DELAYS_MS = [250, 600, 1200, 2400];
+/** One retry layer, bounded to 20 seconds total. Writes/cheatcodes are never replayed. */
+const RETRY_DELAYS_MS = [300, 900];
+const READ_METHOD = /^(get[A-Z]|isBlockhashValid$|simulateTransaction$)/;
+const TRANSIENT = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|ENOTFOUND|ECONNRESET|EPIPE|UND_ERR|fetch failed|terminated|timeout/i;
 
-/**
- * Network errors where the connection never opened (nothing reached the RPC), so any request —
- * even `sendTransaction` — is safe to retry. The deployed server reaches the fork through Cloud
- * NAT, and when its NAT ports run out new connections fail with EHOSTUNREACH until one frees up.
- */
-const CONNECT_ERROR = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|ConnectTimeoutError/;
-/** Errors that may have cut a request mid-flight: retried for reads only. */
-const MIDFLIGHT_ERROR = /ECONNRESET|EPIPE|UND_ERR_SOCKET|other side closed|fetch failed|terminated/i;
-
-/** The error text plus its `cause` chain (Node's fetch wraps the socket error as `cause`). */
 function errorText(error: unknown): string {
   const parts: string[] = [];
   let e: unknown = error;
@@ -39,29 +26,33 @@ function errorText(error: unknown): string {
 }
 
 export const forkFetch: typeof fetch = async (input, init) => {
-  const body = typeof init?.body === "string" ? init.body : "";
-  const retriable = !body.includes('"sendTransaction"');
+  let retriable = false;
+  try {
+    const body = JSON.parse(typeof init?.body === "string" ? init.body : "null");
+    const calls = Array.isArray(body) ? body : [body];
+    retriable = calls.length > 0 && calls.every((call) => typeof call?.method === "string" && READ_METHOD.test(call.method));
+  } catch { /* Unknown requests are never retried. */ }
+  const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  const deadline = AbortSignal.timeout(20_000);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
   for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
     let response: Response;
     try {
-      response = await fetch(input, init);
+      response = await fetch(input, { ...init, signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) });
+      if (!retriable || attempt >= RETRY_DELAYS_MS.length) return response;
+      let transient = response.status === 429 || response.status >= 500;
+      if (!transient && response.ok) {
+        const body = await response.clone().json().catch(() => null);
+        const replies = Array.isArray(body) ? body : [body];
+        transient = replies.some((reply) => reply?.error && /Internal error|Too Many Requests/i.test(reply.error.message ?? ""));
+      }
+      if (!transient) return response;
+      await response.body?.cancel();
     } catch (error) {
-      // The request threw before any response: retry when it never left (connect errors), or when
-      // it was a read that a dropped socket cut short.
-      const text = errorText(error);
-      const again = CONNECT_ERROR.test(text) || (retriable && MIDFLIGHT_ERROR.test(text));
-      if (!again || attempt >= RETRY_DELAYS_MS.length) throw error;
-      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
-      continue;
+      if (signal.aborted || !retriable || attempt >= RETRY_DELAYS_MS.length || !TRANSIENT.test(errorText(error))) throw error;
     }
-    if (!retriable || attempt >= RETRY_DELAYS_MS.length) return response;
-    let transient = response.status === 429 || response.status >= 500;
-    if (!transient && response.ok) {
-      const text = await response.clone().text();
-      transient = /"Internal error"|Too Many Requests/i.test(text);
-    }
-    if (!transient) return response;
-    await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
   }
 };
 
@@ -82,37 +73,22 @@ export function getConnection(): Connection {
  * wall time and the program checks price age / accrues interest against THIS clock, so every
  * client-side projection uses it too — never Date.now().
  */
-export async function forkUnixTimestamp(connection: Connection = getConnection()): Promise<bigint> {
+const forkUnixTimestampReads = singleFlight<Connection, bigint>();
+export function forkUnixTimestamp(connection: Connection = getConnection()): Promise<bigint> {
+  return forkUnixTimestampReads(connection, () => readForkUnixTimestamp(connection));
+}
+
+async function readForkUnixTimestamp(connection: Connection = getConnection()): Promise<bigint> {
   const clock = await connection.getAccountInfo(CLOCK_SYSVAR, "confirmed");
   if (!clock) return BigInt(Math.floor(Date.now() / 1000));
   return clock.data.readBigInt64LE(32);
 }
 
-/**
- * The hosted fork answers a read of an account it doesn't hold by asking its upstream mainnet RPC,
- * and that upstream rate-limits bursts — the fork then returns a bare "Internal error" (or 429). The
- * request itself is fine, so retry it a few times with backoff before failing.
- */
-const TRANSIENT_RPC_ERROR = /Internal error|429|Too Many Requests|fetch failed|ECONNRESET|timed out/i;
-
-async function withRetry<T>(run: () => Promise<T>, attempts = 4): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (attempt >= attempts || !TRANSIENT_RPC_ERROR.test(message)) throw error;
-      await new Promise((r) => setTimeout(r, 300 * 2 ** (attempt - 1)));
-    }
-  }
-}
-
-/** Reads many accounts, chunked at the RPC's 100-key limit, retrying the fork's transient errors. */
+/** Read accounts in RPC-sized chunks. The transport owns retries; do not multiply them here. */
 export async function getMultipleAccountsChunked(connection: Connection, keys: PublicKey[]) {
   const out = [];
   for (let i = 0; i < keys.length; i += 100) {
-    const chunk = keys.slice(i, i + 100);
-    out.push(...(await withRetry(() => connection.getMultipleAccountsInfo(chunk, "confirmed"))));
+    out.push(...await connection.getMultipleAccountsInfo(keys.slice(i, i + 100), "confirmed"));
   }
   return out;
 }

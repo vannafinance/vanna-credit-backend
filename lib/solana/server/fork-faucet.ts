@@ -20,7 +20,7 @@ export interface FaucetResult {
 export async function fundOnFork(symbol: string, recipient: string, rpcUrl: string = SOLANA_RPC_URL): Promise<FaucetResult> {
   const token = getToken(symbol);
   const owner = new PublicKey(recipient);
-  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const addRaw = BigInt(token.faucetAmount) * 10n ** BigInt(token.decimals);
 
   if (token.isNative) {

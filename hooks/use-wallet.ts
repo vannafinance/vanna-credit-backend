@@ -74,7 +74,7 @@ export function useWallet() {
         manuallyDisconnected: false,
         isLoading: false,
       });
-      void refreshBalances(address);
+      // The root MarginAccountHydrator loads one shared account snapshot on connect.
       return;
     }
     if (!wallet.connecting && storedAddress) {
@@ -89,7 +89,7 @@ export function useWallet() {
       });
       clearMarginAccount();
     }
-  }, [wallet.connected, wallet.connecting, wallet.wallet, address, storedAddress, refreshBalances]);
+  }, [wallet.connected, wallet.connecting, wallet.wallet, address, storedAddress]);
 
   const connectWallet = useCallback(async () => {
     setVisible(true);

@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../../../lib/async";
 import { NextRequest, NextResponse } from "next/server";
 import { jupiterBaseUrl, jupiterHeaders } from "@/lib/solana/server/jupiter-api";
 
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
   try {
-    const response = await fetch(`${jupiterBaseUrl()}/swap/v1/swap-instructions`, {
+    const response = await fetchWithTimeout(`${jupiterBaseUrl()}/swap/v1/swap-instructions`, {
       method: "POST",
       headers: jupiterHeaders({ "Content-Type": "application/json", Accept: "application/json" }),
       body: JSON.stringify(payload),

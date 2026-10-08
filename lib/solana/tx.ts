@@ -11,7 +11,7 @@ import {
 } from "@solana/web3.js";
 import { getConnection } from "./connection";
 import { VANNA_PROGRAM_ID } from "./config";
-import { confirmSignatureHttp } from "./confirmation";
+import { broadcastSignedTransaction } from "./broadcast";
 import { decodeProgramError, VannaTxError } from "./errors";
 import { healStaleDexPools } from "./fork-heal";
 import type { TxSigner } from "./wallet-bridge";
@@ -88,7 +88,7 @@ async function sendV0(
   tables: AddressLookupTableAccount[],
 ): Promise<string> {
   const connection = getConnection();
-  const latest = await connection.getLatestBlockhash("confirmed");
+  let latest = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: opts.signer.publicKey,
     recentBlockhash: latest.blockhash,
@@ -99,7 +99,7 @@ async function sendV0(
   if (size > MAX_TX_BYTES) throw new Error(`Transaction too large: ${size} > ${MAX_TX_BYTES}`);
 
   opts.onStatus?.("simulating");
-  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, commitment: "confirmed" });
+  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
   let simulation = await simulate();
   if (simulation.value.err) {
     const healed = await healStaleDexPools(connection, tx);
@@ -107,16 +107,16 @@ async function sendV0(
   }
   if (simulation.value.err) throw simulationError(opts.label, simulation.value.err, simulation.value.logs);
 
+  // Simulation/healing may take seconds. Give the wallet a full blockhash lifetime.
+  latest = await connection.getLatestBlockhash("confirmed");
+  tx.message.recentBlockhash = latest.blockhash;
   opts.onStatus?.("signing");
   const signed = await opts.signer.signTransaction(tx);
   opts.onStatus?.("sending");
-  const signature = await connection.sendRawTransaction(signed.serialize(), {
-    skipPreflight: true, // already simulated above against the same blockhash
+  return broadcastSignedTransaction(connection, signed, latest.lastValidBlockHeight, {
+    skipPreflight: true, // instructions already simulated; only the lifetime was refreshed
     maxRetries: 3,
-  });
-  opts.onStatus?.("confirming");
-  await confirmSignatureHttp(connection, signature, latest.lastValidBlockHeight);
-  return signature;
+  }, () => opts.onStatus?.("confirming"));
 }
 
 /**
@@ -160,15 +160,18 @@ async function sendWithTemporaryLookupTable(instructions: TransactionInstruction
   opts.onStatus?.("signing");
   const signedPrep = await opts.signer.signAllTransactions(prep);
   for (const signed of signedPrep) {
-    const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, preflightCommitment: "confirmed" });
-    await confirmSignatureHttp(connection, sig, latest.lastValidBlockHeight);
+    opts.onStatus?.("sending");
+    await broadcastSignedTransaction(connection, signed, latest.lastValidBlockHeight,
+      { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }, () => opts.onStatus?.("confirming"));
   }
   // A lookup table is only usable from the slot after its last extension.
   const extendedAt = await connection.getSlot("confirmed");
+  let activated = false;
   for (let i = 0; i < 40; i++) {
-    if ((await connection.getSlot("confirmed")) > extendedAt) break;
+    if ((await connection.getSlot("confirmed")) > extendedAt) { activated = true; break; }
     await new Promise((r) => setTimeout(r, 350));
   }
+  if (!activated) throw new Error(`${opts.label}: lookup table activation timed out`);
   const table = (await connection.getAddressLookupTable(lutAddress)).value;
   if (!table) throw new Error(`${opts.label}: lookup table was not activated`);
   return sendV0(instructions, opts, [...(opts.lookupTables ?? []), table]);

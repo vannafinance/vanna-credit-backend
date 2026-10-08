@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * `margin_execute` — the margin account calling a whitelisted outside program (Jupiter / Titan
  * swaps, Kamino Lend supply / redeem, Ember USDC ↔ phUSD, Phoenix perps). The integration's VALIDATOR reviews the call (which
@@ -227,7 +228,7 @@ export async function executeMarginSwap(req: MarginSwapRequest, quote: JupiterQu
   if (amount <= 0n) throw new Error("Enter an amount");
   if (amount > held) throw new Error(`Your margin account holds only ${fromRaw(held, from.decimals)} ${from.symbol}`);
 
-  const res = await fetch(`${apiBase}/api/jupiter/swap-instructions`, {
+  const res = await fetchWithTimeout(`${apiBase}/api/jupiter/swap-instructions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

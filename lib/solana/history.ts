@@ -1,3 +1,4 @@
+import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Transaction history, decoded from the program's own Anchor events (no indexer — the fork has
@@ -107,24 +108,46 @@ interface RawTx {
 const MAX_SIGNATURES = 200;
 const CONCURRENCY = 6;
 
-async function recentVannaTransactions(address: PublicKey, limit = MAX_SIGNATURES): Promise<{ txs: RawTx[]; complete: boolean; scanned: number }> {
+// Finalized transaction logs are immutable. Bound memory and lifetime (the fork can restart).
+const transactionCache = new Map<string, { at: number; tx: RawTx | null }>();
+const HISTORY_CACHE_MS = 5 * 60_000;
+const HISTORY_CACHE_LIMIT = 1_000;
+const historyReads = singleFlight<string, { txs: RawTx[]; complete: boolean; scanned: number }>();
+
+function recentVannaTransactions(address: PublicKey, limit = MAX_SIGNATURES): Promise<{ txs: RawTx[]; complete: boolean; scanned: number }> {
+  return historyReads(`${address.toBase58()}:${limit}`, () => readRecentVannaTransactions(address, limit));
+}
+
+async function readRecentVannaTransactions(address: PublicKey, limit: number) {
   const connection = getConnection();
   const signatures = await connection.getSignaturesForAddress(address, { limit }, "confirmed");
   const ok = signatures.filter((s) => !s.err);
   const txs: RawTx[] = [];
+  let complete = signatures.length < limit;
   for (let i = 0; i < ok.length; i += CONCURRENCY) {
     const batch = await Promise.all(
       ok.slice(i, i + CONCURRENCY).map(async (s) => {
+        const cached = transactionCache.get(s.signature);
+        if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) return cached.tx;
+        transactionCache.delete(s.signature);
         const tx = await connection.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-        const logs = tx?.meta?.logMessages ?? [];
-        if (!logs.some((l) => l.includes(VANNA_PROGRAM_ID.toBase58()))) return null;
-        // Surfpool quirk: getTransaction's blockTime can be wrong; the signature list's is reliable.
-        return { signature: s.signature, blockTime: s.blockTime ?? tx?.blockTime ?? null, logs } as RawTx;
+        // RPC indexing may lag confirmation. Retry missing transactions next refresh and do
+        // not report a complete cost basis while any transaction is unavailable.
+        if (!tx) { complete = false; return null; }
+        const logs = tx.meta?.logMessages ?? [];
+        const result = logs.some((l) => l.includes(VANNA_PROGRAM_ID.toBase58()))
+          ? { signature: s.signature, blockTime: s.blockTime ?? tx.blockTime ?? null, logs } as RawTx
+          : null;
+        if (s.confirmationStatus === "finalized") {
+          transactionCache.set(s.signature, { at: Date.now(), tx: result });
+          if (transactionCache.size > HISTORY_CACHE_LIMIT) transactionCache.delete(transactionCache.keys().next().value!);
+        }
+        return result;
       }),
     );
     for (const t of batch) if (t) txs.push(t);
   }
-  return { txs, complete: signatures.length < limit, scanned: signatures.length };
+  return { txs, complete, scanned: signatures.length };
 }
 
 function* events(tx: RawTx) {

@@ -193,8 +193,8 @@ export const createMarginAccount = async (userAddress: string): Promise<boolean>
     showTxStep("Creating your Vanna margin account on Solana");
     const result = await createMarginAccountTx({ onStatus: onTxStatus });
     useMarginAccountInfoStore.getState().set({ hasMarginAccount: true, marginAccountAddress: result.address, isCreatingAccount: false });
-    await refreshMarginAccount(userAddress);
     showTxSuccess("Margin account created!");
+    void refreshMarginAccount(userAddress).catch(() => {});
     return true;
   } catch (error) {
     const message = describeError(error, "Could not create the margin account");

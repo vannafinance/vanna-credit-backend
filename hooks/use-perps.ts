@@ -1,9 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
 import { useAfterMarginTx } from '@/hooks/use-margin';
 import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView, withdrawPerpCollateral } from '@/lib/solana/perps';
@@ -15,24 +13,16 @@ import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-pro
 /**
  * The Perps page's on-chain state: listed Phoenix markets (index / mark price, leverage cap), the
  * connected wallet's positions and its margin account. Polled every few seconds so PnL
- * follows the index price, and refetched on every ledger tick. Works without a wallet (markets only).
+ * follows the index price, with a single polling schedule. Works without a wallet (markets only).
  */
 export const usePerpsView = () => {
   const address = useUserStore((s) => s.address);
-  const qc = useQueryClient();
-  const { tick } = useLedgerTick();
-  const last = useRef(tick);
   const query = useQuery({
     queryKey: ['perps', 'view', address ?? 'none'],
     queryFn: () => fetchPerpsView(address ? new PublicKey(address) : null),
     refetchInterval: 6_000,
     staleTime: 3_000,
   });
-  useEffect(() => {
-    if (tick === last.current) return;
-    last.current = tick;
-    qc.invalidateQueries({ queryKey: ['perps'] });
-  }, [tick, qc]);
   return {
     view: query.data as PerpsView | undefined,
     isLoading: query.isLoading,
@@ -69,7 +59,7 @@ function useTx<T>(label: (req: T) => string, run: (req: T) => Promise<{ summary:
       try {
         const result = await run(req);
         showTxSuccess(result.summary);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, failure));

@@ -65,13 +65,17 @@ export function LedgerSubscriberProvider({ children }: { children: React.ReactNo
       subscriptionId = null;
     }
 
+    let polling = false;
     const poll = async () => {
-      if (cancelled || document.visibilityState === "hidden") return;
+      if (cancelled || polling || document.visibilityState === "hidden") return;
       if (Date.now() - lastNotificationAt < POLL_INTERVAL_MS) return; // WS is healthy
+      polling = true;
       try {
         observe(await connection.getSlot("confirmed"));
       } catch {
         // transient RPC failure — keep the last good state
+      } finally {
+        polling = false;
       }
     };
     void poll();

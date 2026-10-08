@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * Farm service — single-asset Kamino Lend vaults, farmed from the margin account.
  *
@@ -54,7 +55,7 @@ export const poolIdOf = (r: KaminoReceipt) => r.underlying.toLowerCase();
 
 /** Every single-asset vault with live Kamino metrics (GET /api/farm/pools). */
 export async function listFarmPools(): Promise<FarmPool[]> {
-  const res = await fetch(`${apiBase}/api/farm/pools`, { cache: "no-store" });
+  const res = await fetchWithTimeout(`${apiBase}/api/farm/pools`, { cache: "no-store" });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error ?? `farm pools failed (${res.status})`);
   return body.pools as FarmPool[];

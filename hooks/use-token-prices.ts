@@ -1,5 +1,7 @@
 'use client';
 
+import { fetchWithTimeout } from "../lib/async";
+
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
@@ -19,7 +21,7 @@ export const PRICES_QUERY_KEY = ['oracle', 'prices'] as const;
 
 /** Fetches every registry token's on-chain (fork Pyth) price from GET /api/prices. */
 export async function fetchPrices(): Promise<Record<string, PriceEntry>> {
-  const res = await fetch('/api/prices', { cache: 'no-store' });
+  const res = await fetchWithTimeout('/api/prices', { cache: 'no-store' });
   if (!res.ok) throw new Error(`prices failed (${res.status})`);
   const body = (await res.json()) as { prices: Record<string, PriceEntry> };
   return body.prices;
@@ -34,7 +36,7 @@ export function usePriceEntries() {
   useEffect(() => {
     if (tick === lastTick.current) return;
     lastTick.current = tick;
-    qc.invalidateQueries({ queryKey: PRICES_QUERY_KEY });
+    qc.invalidateQueries({ queryKey: PRICES_QUERY_KEY }, { cancelRefetch: false });
   }, [tick, qc]);
   return query;
 }

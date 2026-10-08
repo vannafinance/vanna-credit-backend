@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
+import { forkFetch } from "@/lib/solana/connection";
 import { SOLANA_RPC_URL, SOLANA_WS_URL } from "@/lib/solana/config";
 import { onWalletUnlockPrompt, setActiveSolanaWallet } from "@/lib/solana/wallet-bridge";
 import { showTxStep } from "@/lib/tx-progress";
@@ -38,10 +39,12 @@ function WalletBridge({ children }: { children: React.ReactNode }) {
  * Solana connection + wallet-adapter. `wallets = []` means Wallet Standard autodetect only
  * (Phantom, Backpack, Solflare all register themselves), no legacy adapters bundled.
  */
+const connectionConfig = { commitment: "confirmed" as const, disableRetryOnRateLimit: true, wsEndpoint: SOLANA_WS_URL, fetch: forkFetch };
+
 export function SolanaProvider({ children }: { children: React.ReactNode }) {
   const wallets = useMemo(() => [], []);
   return (
-    <ConnectionProvider endpoint={SOLANA_RPC_URL} config={{ commitment: "confirmed", disableRetryOnRateLimit: true, wsEndpoint: SOLANA_WS_URL }}>
+    <ConnectionProvider endpoint={SOLANA_RPC_URL} config={connectionConfig}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
           <WalletBridge>{children}</WalletBridge>

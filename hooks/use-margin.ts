@@ -37,7 +37,7 @@ export const useMarginHistory = () => {
   useEffect(() => {
     if (tick === last.current) return;
     last.current = tick;
-    qc.invalidateQueries({ queryKey: ['margin', 'history'] });
+    qc.invalidateQueries({ queryKey: ['margin', 'history'] }, { cancelRefetch: false });
   }, [tick, qc]);
   return {
     history: query.data as HistoryPage<MarginHistoryRow> | undefined,
@@ -81,7 +81,7 @@ export const useDepositAndBorrow = () => {
       try {
         const result = await depositAndBorrow(input, { onStatus: onTxStatus });
         showTxSuccess(label.replace('Depositing', 'Deposited').replace('Borrowing', 'borrowed'));
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Transaction failed'));
@@ -100,7 +100,7 @@ export const useRepay = () => {
       try {
         const result = await repay(req, { onStatus: onTxStatus });
         showTxSuccess(req.all ? `Repaid all ${req.symbol} debt` : `Repaid ${req.amount} ${req.symbol}`);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Repay failed'));
@@ -119,7 +119,7 @@ export const useWithdrawCollateral = () => {
       try {
         const result = await withdrawCollateral(req, { onStatus: onTxStatus });
         showTxSuccess(req.all ? `Withdrew all ${req.symbol}` : `Withdrew ${req.amount} ${req.symbol}`);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Withdraw failed'));
@@ -138,7 +138,7 @@ export const useCloseCollateralPosition = () => {
       try {
         const result = await closeCollateralPosition(symbol, { onStatus: onTxStatus });
         showTxSuccess(`Closed ${symbol} vault`);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Close failed'));

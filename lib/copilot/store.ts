@@ -191,7 +191,8 @@ export function durableStore<T>(
     return new FirestoreRecordStore<T>(project, copilotConfig.firestoreDatabase, secret, collection, idRule);
   }
   if (copilotConfig.isProduction) throw new Error("durable_store_not_configured");
-  return new LocalRecordStore<T>(resolve(process.cwd(), localDir), secret, idRule);
+  // Runtime development data, never a build asset. Do not trace the entire repository.
+  return new LocalRecordStore<T>(resolve(/* turbopackIgnore: true */ process.cwd(), localDir), secret, idRule);
 }
 
 const collectionName = (suffix: string) => `${copilotConfig.collectionPrefix}${suffix}`;

@@ -29,12 +29,14 @@ export const PriceProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     let cancelled = false;
-    const run = () =>
-      ensureFreshPrices(true)
+    const run = () => {
+      if (document.visibilityState === "hidden") return;
+      return ensureFreshPrices()
         .then(() => {
           if (!cancelled) qc.invalidateQueries({ queryKey: PRICES_QUERY_KEY });
         })
         .catch((e) => console.warn("fork price refresh failed", e));
+    };
     void run();
     const id = window.setInterval(run, KEEPER_INTERVAL_MS);
     return () => {

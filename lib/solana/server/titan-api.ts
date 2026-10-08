@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../async";
 // Server-side only: Titan's swap API. Two ways to reach it:
 //  - Titan's own Developers Portal (https://portal.api.titan.exchange) with TITAN_API_KEY;
 //  - a QuickNode Solana endpoint with the Titan Swap add-on: TITAN_API_URL = that endpoint's URL (its
@@ -79,7 +80,7 @@ export async function titanQuote(params: {
     qs.set("createOutputTokenAccount", "true");
   }
   qs.set("dexes", params.dexes ?? FORK_DEXES);
-  const response = await fetch(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { Accept: "application/json", ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}) }, cache: "no-store" });
+  const response = await fetchWithTimeout(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { Accept: "application/json", ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}) }, cache: "no-store" });
   const text = await response.text();
   if (!response.ok) throw new Error(`Titan quote failed (${response.status}): ${text.slice(0, 200)}`);
   const body = JSON.parse(text);

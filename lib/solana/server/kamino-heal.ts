@@ -26,7 +26,7 @@ export interface HealedReserve {
  * left untouched.
  */
 export async function healKaminoReserves(rpcUrl: string = SOLANA_RPC_URL): Promise<HealedReserve[]> {
-  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const [slot, infos] = await Promise.all([
     connection.getSlot("confirmed"),
     connection.getMultipleAccountsInfo(KAMINO_RECEIPTS.map((r) => r.reserve), "confirmed"),

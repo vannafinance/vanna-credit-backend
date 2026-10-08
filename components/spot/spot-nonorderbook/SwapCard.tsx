@@ -26,7 +26,7 @@ import { SWAP_TOKENS, routeTokenForMint } from "./registry-tokens";
 
 /** Quick-pick chips in the token picker: the majors, JupUSD and the xStocks. */
 const POPULAR_SYMBOLS = ["SOL", "USDC", "USDT", "JupUSD", "NVDAx", "GOOGLx", "AAPLx", "TSLAx"];
-import { showTxStep, showTxSuccess, showTxError } from "@/lib/tx-progress";
+import { onTxStatus, showTxStep, showTxSuccess, showTxError } from "@/lib/tx-progress";
 import { amountFromBalancePercent, getMaxSwappableBalance } from "@/lib/utils/swap-amount";
 
 type SwapMode = "wallet" | "margin";
@@ -153,7 +153,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
 
   // Margin mode reads the margin vault — make sure the store has the account loaded.
   useEffect(() => {
-    if (swapMode === "margin" && userAddress) void refreshMarginAccount(userAddress);
+    if (swapMode === "margin" && userAddress) void refreshMarginAccount(userAddress).catch(() => {});
   }, [swapMode, userAddress]);
 
   // ---------------------------------------------------------------------------------------------
@@ -413,7 +413,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
         toSymbol: tokenOut.symbol,
         amountUi: amountIn,
         slippageBps,
-      });
+      }, { onStatus: onTxStatus });
     },
     onMutate: () => {
       setTxError("");
@@ -424,8 +424,8 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
       showTxSuccess(`Swapped ${amountIn} ${tokenIn?.symbol} for ${tokenOut?.symbol}`);
       setAmountIn("");
       if (userAddress) {
-        void refreshWalletBalancesOnChain(userAddress);
-        void refreshMarginAccount(userAddress);
+        void refreshWalletBalancesOnChain(userAddress).catch(() => {});
+        void refreshMarginAccount(userAddress).catch(() => {});
       }
       // New swap row in the Swap history (and every other margin view).
       void queryClient.invalidateQueries({ queryKey: ["margin"] });

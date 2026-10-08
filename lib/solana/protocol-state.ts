@@ -1,3 +1,4 @@
+import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Buffer } from "buffer";
 import { AccountLayout, MintLayout } from "@solana/spl-token";
@@ -176,7 +177,12 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
  * index outside it, `buildHealthRemainingAccounts` throws a clear error (and the program would
  * reject an incomplete scan anyway), so this fails closed rather than hiding a position.
  */
-export async function fetchAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
+const fetchAllAssetConfigsReads = singleFlight<Connection, Map<number, AssetConfigState>>();
+export function fetchAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
+  return fetchAllAssetConfigsReads(connection, () => readAllAssetConfigs(connection));
+}
+
+async function readAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
   // phUSD (Phoenix collateral in transit through the margin) is registered too, outside the registry.
   const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), PHUSD_MINT, ...VENUE_KEYS];
   const addresses = mints.map((m) => assetConfigPda(m));
@@ -220,7 +226,12 @@ function buildPoolState(token: TokenInfo, asset: AssetConfigState | null, reserv
  * Reads every registry token's AssetConfig + Reserve + share mint and the fork clock in one
  * batched account read, and projects accrued interest to the fork's `now`.
  */
-export async function fetchPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
+const fetchPoolStatesReads = singleFlight<Connection, Record<string, PoolState>>();
+export function fetchPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
+  return fetchPoolStatesReads(connection, () => readPoolStates(connection));
+}
+
+async function readPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
   const keys: PublicKey[] = [];
   for (const t of TOKENS) keys.push(assetConfigPda(t.mint), reservePda(t.mint), shareMintPda(t.mint));
   const [[book, ...infos], now] = await Promise.all([

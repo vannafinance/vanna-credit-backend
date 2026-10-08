@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 import { Connection, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { SOLANA_RPC_URL } from "./config";
@@ -67,16 +68,16 @@ export async function healStaleDexPools(connection: Connection, tx: VersionedTra
     });
     const stale = [...new Set([...dexOwned, ...poolVaults, ...staleTables])];
     if (stale.length === 0) return 0;
-    await Promise.all(
+    const resets = await Promise.all(
       stale.map((address) =>
-        fetch(SOLANA_RPC_URL, {
+        fetchWithTimeout(SOLANA_RPC_URL, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "surfnet_resetAccount", params: [address] }),
-        }).catch(() => null),
+        }).then(async (response) => response.ok && !(await response.json()).error).catch(() => false),
       ),
     );
-    return stale.length;
+    return resets.filter(Boolean).length;
   } catch {
     return 0;
   }

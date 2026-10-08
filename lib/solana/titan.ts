@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * Titan (aggregator) swaps for the Spot page — from the WALLET and from the MARGIN account.
  *
@@ -23,7 +24,7 @@ import {
   type AddressLookupTableAccount,
 } from "@solana/web3.js";
 import { getConnection } from "./connection";
-import { confirmSignatureHttp } from "./confirmation";
+import { broadcastSignedTransaction } from "./broadcast";
 import { decodeProgramError, VannaTxError } from "./errors";
 import { healStaleDexPools } from "./fork-heal";
 import { appApiBase, EXEC_COMPUTE_UNITS, marginExecuteIx, type MarginSwapRequest } from "./exec";
@@ -84,7 +85,7 @@ export async function fetchTitanQuote(params: {
     slippageBps: String(params.slippageBps ?? 50),
     mode: params.mode,
   });
-  const res = await fetch(`${appApiBase()}/api/titan/quote?${qs}`);
+  const res = await fetchWithTimeout(`${appApiBase()}/api/titan/quote?${qs}`);
   const body = await res.json().catch(() => ({}));
   if (res.status === 503) throw new TitanUnavailableError(body?.error ?? "Titan is not configured");
   if (!res.ok || body?.error) throw new Error(body?.error ?? "Titan quote failed");
@@ -105,14 +106,15 @@ async function loadLookupTables(addresses: string[]): Promise<AddressLookupTable
 }
 
 /** Execute a Titan swap from the user's WALLET. */
-export async function executeWalletTitanSwap(quote: TitanQuote, opts: { signer?: TxSigner } = {}): Promise<string> {
+export async function executeWalletTitanSwap(quote: TitanQuote, opts: { signer?: TxSigner; onStatus?: (status: string) => void } = {}): Promise<string> {
   const signer = opts.signer ?? getActiveSigner();
   const connection = getConnection();
   const tables = await loadLookupTables(quote.addressLookupTables);
-  const latest = await connection.getLatestBlockhash("confirmed");
+  let latest = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({ payerKey: signer.publicKey, recentBlockhash: latest.blockhash, instructions: quote.instructions.map(toInstruction) }).compileToV0Message(tables);
   const tx = new VersionedTransaction(message);
-  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, commitment: "confirmed" });
+  opts.onStatus?.("simulating");
+  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
   let simulation = await simulate();
   if (simulation.value.err) {
     const healed = await healStaleDexPools(connection, tx);
@@ -124,10 +126,13 @@ export async function executeWalletTitanSwap(quote: TitanQuote, opts: { signer?:
     const decoded = decodeProgramError(raw);
     throw new VannaTxError(decoded?.message ?? raw.split("\n")[0], { logs, raw, code: decoded?.name });
   }
+  latest = await connection.getLatestBlockhash("confirmed");
+  tx.message.recentBlockhash = latest.blockhash;
+  opts.onStatus?.("signing");
   const signed = await signer.signTransaction(tx);
-  const signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 3 });
-  await confirmSignatureHttp(connection, signature, latest.lastValidBlockHeight);
-  return signature;
+  opts.onStatus?.("sending");
+  return broadcastSignedTransaction(connection, signed, latest.lastValidBlockHeight,
+    { skipPreflight: true, maxRetries: 3 }, () => opts.onStatus?.("confirming"));
 }
 
 /** Exact-input Titan quote for a margin swap (built for the margin PDA, Titan's router only). */

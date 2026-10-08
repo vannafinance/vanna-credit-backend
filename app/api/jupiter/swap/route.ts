@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../../../lib/async";
 import { NextRequest, NextResponse } from "next/server";
 import { jupiterBaseUrl, jupiterHeaders } from "@/lib/solana/server/jupiter-api";
 
@@ -11,7 +12,7 @@ export async function POST(request: NextRequest) {
     if (!body?.quoteResponse || !body?.userPublicKey) {
       return NextResponse.json({ error: "quoteResponse and userPublicKey are required" }, { status: 400 });
     }
-    const response = await fetch(`${jupiterBaseUrl()}/swap/v1/swap`, {
+    const response = await fetchWithTimeout(`${jupiterBaseUrl()}/swap/v1/swap`, {
       method: "POST",
       headers: jupiterHeaders({ "Content-Type": "application/json", Accept: "application/json" }),
       body: JSON.stringify({

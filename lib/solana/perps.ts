@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * Perps on Phoenix from the margin account — the Perps page's service layer.
  *
@@ -166,7 +167,7 @@ export async function fetchPerpsView(owner: PublicKey | null): Promise<PerpsView
 // ---------------------------------------------------------------------------------------------
 
 async function postApi<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${appApiBase()}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const res = await fetchWithTimeout(`${appApiBase()}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((json as { error?: string }).error ?? `${path} failed (${res.status})`);
   return json as T;

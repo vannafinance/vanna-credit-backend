@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../../../../lib/async";
 import { NextRequest, NextResponse } from "next/server";
 import { jupiterBaseUrl, jupiterHeaders } from "@/lib/solana/server/jupiter-api";
 
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
   if (!url.searchParams.has("slippageBps")) url.searchParams.set("slippageBps", "100");
   if (!url.searchParams.has("dexes")) url.searchParams.set("dexes", FORK_DEXES);
   try {
-    const response = await fetch(url.toString(), { headers: jupiterHeaders({ Accept: "application/json" }), cache: "no-store" });
+    const response = await fetchWithTimeout(url.toString(), { headers: jupiterHeaders({ Accept: "application/json" }), cache: "no-store" });
     const body = await response.json();
     return NextResponse.json(body, { status: response.status });
   } catch (error) {

@@ -22,13 +22,15 @@ import { TxToastProgressIcon } from "@/components/ui/tx-toast-progress-icon";
 // place by the eventual success/error toast, instead of stacking a second,
 // duplicate toast once the flow finishes.
 const TX_BACKGROUND_TOAST_ID = "tx-progress-background";
+let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function showTxStep(message: string): void {
+  clearTimeout(completionTimer);
   // Every new step needs its own wallet approval first — reset to "signing"
   // (no forward progress shown) even if the previous step had already
   // reached "confirming". See markTxSubmitted's doc comment for why the two
   // phases are visually different.
-  useTxProgressStore.getState().set({ isOpen: true, message, phase: "signing", submittedAt: null });
+  useTxProgressStore.getState().set({ isOpen: true, message, phase: "signing", submittedAt: null, forceComplete: false });
 }
 
 /**
@@ -42,16 +44,18 @@ export function showTxStep(message: string): void {
  * we're now waiting on the NETWORK — a bounded, genuinely "in progress" wait.
  */
 export function markTxSubmitted(): void {
-  useTxProgressStore.getState().set({ phase: "confirming", submittedAt: Date.now() });
+  const state = useTxProgressStore.getState();
+  if (state.phase !== "confirming") state.set({ phase: "confirming", submittedAt: Date.now() });
 }
 
 export function showTxSuccess(message: string): void {
+  clearTimeout(completionTimer);
   // Briefly force the bar to its full width before closing, instead of
   // vanishing mid-fill (the asymptotic "confirming" curve never actually
   // reaches 100% on its own — see the modal's doc comment) — the bar should
   // visibly finish, THEN the popup goes away, not disappear at ~90%.
   useTxProgressStore.getState().set({ forceComplete: true });
-  setTimeout(() => {
+  completionTimer = setTimeout(() => {
     useTxProgressStore.getState().set({ isOpen: false, phase: "signing", submittedAt: null, forceComplete: false });
     // Same id as dismissTxProgressToBackground: if the user dismissed the
     // modal earlier and a background "in progress" toast is still up, this
@@ -68,7 +72,8 @@ export function showTxSuccess(message: string): void {
 }
 
 export function showTxError(message: string): void {
-  useTxProgressStore.getState().set({ isOpen: false, phase: "signing", submittedAt: null });
+  clearTimeout(completionTimer);
+  useTxProgressStore.getState().set({ isOpen: false, phase: "signing", submittedAt: null, forceComplete: false });
   // icon: undefined — see showTxSuccess's comment; same reset needed here so
   // the default error icon renders instead of a lingering progress ring.
   toast.error(message, { id: TX_BACKGROUND_TOAST_ID, icon: undefined });

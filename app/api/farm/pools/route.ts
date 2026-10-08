@@ -1,3 +1,4 @@
+import { singleFlight } from "@/lib/async";
 import { jsonResponse } from "@/lib/solana/server/json";
 import { FARM_CATALOGUE, type FarmPool } from "@/lib/solana/farm";
 
@@ -20,7 +21,12 @@ interface KaminoReserveMetrics {
 
 let cache: { at: number; byReserve: Map<string, KaminoReserveMetrics> } | null = null;
 
+const metricReads = singleFlight<string, Map<string, KaminoReserveMetrics>>();
 async function metrics(): Promise<Map<string, KaminoReserveMetrics>> {
+  return metricReads("metrics", readMetrics);
+}
+
+async function readMetrics(): Promise<Map<string, KaminoReserveMetrics>> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.byReserve;
   const res = await fetch(METRICS_URL, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Kamino metrics ${res.status}`);

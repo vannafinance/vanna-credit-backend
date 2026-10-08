@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * Swap service.
  *
@@ -12,7 +13,7 @@
 import { Buffer } from "buffer";
 import { VersionedTransaction } from "@solana/web3.js";
 import { getConnection } from "./connection";
-import { confirmSignatureHttp } from "./confirmation";
+import { broadcastSignedTransaction } from "./broadcast";
 import { healStaleDexPools } from "./fork-heal";
 import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { decodeProgramError, VannaTxError } from "./errors";
@@ -50,7 +51,7 @@ export async function fetchJupiterQuote(params: {
     slippageBps: String(params.slippageBps ?? 100),
   });
   if (params.maxAccounts) qs.set("maxAccounts", String(params.maxAccounts));
-  const response = await fetch(`${apiBase}/api/jupiter/quote?${qs.toString()}`);
+  const response = await fetchWithTimeout(`${apiBase}/api/jupiter/quote?${qs.toString()}`);
   const body = await response.json();
   if (!response.ok || body?.error) throw new Error(body?.error ?? body?.message ?? "Quote failed");
   return body as JupiterQuote;
@@ -63,9 +64,9 @@ export function isStaleForkPoolError(error: unknown): boolean {
 }
 
 /** Execute a Jupiter swap from the user's WALLET (not the margin account). */
-export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: TxSigner } = {}): Promise<string> {
+export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: TxSigner; onStatus?: (status: string) => void } = {}): Promise<string> {
   const signer = opts.signer ?? getActiveSigner();
-  const res = await fetch(`${apiBase}/api/jupiter/swap`, {
+  const res = await fetchWithTimeout(`${apiBase}/api/jupiter/swap`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ quoteResponse: quote, userPublicKey: signer.publicKey.toBase58() }),
@@ -76,9 +77,10 @@ export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: Tx
   const connection = getConnection();
   const tx = VersionedTransaction.deserialize(Buffer.from(body.swapTransaction, "base64"));
   // Jupiter builds on mainnet; the fork has its own blockhash queue.
-  const latest = await connection.getLatestBlockhash("confirmed");
+  let latest = await connection.getLatestBlockhash("confirmed");
   tx.message.recentBlockhash = latest.blockhash;
-  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, commitment: "confirmed" });
+  opts.onStatus?.("simulating");
+  const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
   let simulation = await simulate();
   if (simulation.value.err) {
     const healed = await healStaleDexPools(connection, tx);
@@ -90,8 +92,11 @@ export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: Tx
     const decoded = decodeProgramError(raw);
     throw new VannaTxError(decoded?.message ?? raw.split("\n")[0], { logs, raw, code: decoded?.name });
   }
+  latest = await connection.getLatestBlockhash("confirmed");
+  tx.message.recentBlockhash = latest.blockhash;
+  opts.onStatus?.("signing");
   const signed = await signer.signTransaction(tx);
-  const signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 3 });
-  await confirmSignatureHttp(connection, signature, latest.lastValidBlockHeight);
-  return signature;
+  opts.onStatus?.("sending");
+  return broadcastSignedTransaction(connection, signed, latest.lastValidBlockHeight,
+    { skipPreflight: true, maxRetries: 3 }, () => opts.onStatus?.("confirming"));
 }

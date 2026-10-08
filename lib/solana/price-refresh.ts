@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from "../async";
 /**
  * Keeps the fork's Pyth PriceUpdateV2 accounts fresh before risk-checked transactions.
  *
@@ -12,7 +13,7 @@
 type Refresher = () => Promise<unknown>;
 
 let refresher: Refresher = async () => {
-  const res = await fetch("/api/prices/refresh", { method: "POST" });
+  const res = await fetchWithTimeout("/api/prices/refresh", { method: "POST" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.error ?? `Price refresh failed (${res.status})`);

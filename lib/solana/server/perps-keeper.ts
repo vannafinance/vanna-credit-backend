@@ -1,3 +1,4 @@
+import { singleFlight } from "../../async";
 // Server-side only, FORK ONLY (the guide's "fork-only helpers" — never port to production).
 //
 // Phoenix gates trading: a freshly registered trader may only place orders; depositing and
@@ -117,7 +118,7 @@ const tableWrittenAt = new Map<string, number>();
 export async function ensurePerpsLookupTable(owner: PublicKey, rpcUrl: string = SOLANA_RPC_URL): Promise<PublicKey> {
   const address = await perpsLookupTableAddress(owner);
   if (Date.now() - (tableWrittenAt.get(address.toBase58()) ?? 0) < TABLE_TTL_MS) return address;
-  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const addresses = await lookupTableAddresses(connection, owner);
   const data = Buffer.alloc(56 + 32 * addresses.length);
   data.writeUInt32LE(1, 0);
@@ -145,7 +146,7 @@ export async function ensurePerpsLookupTable(owner: PublicKey, rpcUrl: string = 
  * false when the trader doesn't exist yet (the wallet registers it first).
  */
 export async function grantPhoenixCapabilitiesOnFork(owner: PublicKey, rpcUrl: string = SOLANA_RPC_URL): Promise<boolean> {
-  const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+  const connection = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const trader = phoenixTraderPda(marginPda(owner));
   const info = await connection.getAccountInfo(trader);
   if (!info || info.data.length < TRADER_FLAGS_OFFSET + 4 || !info.owner.equals(PHOENIX_PROGRAM_ID)) return false;
@@ -169,8 +170,8 @@ export async function grantPhoenixCapabilitiesOnFork(owner: PublicKey, rpcUrl: s
  * a Phoenix position (scripts/fork-phoenix-resync.ts). Token accounts (vaults) are left alone.
  */
 export async function resyncPhoenixOnFork(rpcUrl: string = SOLANA_RPC_URL, mainnetUrl = process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com"): Promise<string[]> {
-  const fork = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
-  const mainnet = new Connection(mainnetUrl, "confirmed");
+  const fork = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
+  const mainnet = new Connection(mainnetUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const bookInfo = await fork.getAccountInfo(phoenixMarketBook());
   if (!bookInfo) throw new Error("No Phoenix market book on the fork");
   const book = decodeMarketBook(Buffer.from(bookInfo.data));
@@ -212,7 +213,7 @@ export async function resyncPhoenixOnFork(rpcUrl: string = SOLANA_RPC_URL, mainn
  */
 export async function liveMainnetPhoenixMark(market: string, mainnetUrl = process.env.MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com"): Promise<number | null> {
   try {
-    const main = new Connection(mainnetUrl, "confirmed");
+    const main = new Connection(mainnetUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
     const ex = await readPhoenixExchange(main);
     const m = (await fetchPerpAssetMap(main, ex.perpAssetMap)).find((x) => x.symbol === market.toUpperCase());
     const usd = m ? ticksToUsd(m, m.markTicks) : 0;
@@ -226,17 +227,24 @@ export async function liveMainnetPhoenixMark(market: string, mainnetUrl = proces
 const BOOK_REFRESH_MIN_MS = 10_000;
 const lastBookRefresh = new Map<string, number>();
 
-export async function refreshPhoenixBookOnFork(market: string, rpcUrl: string = SOLANA_RPC_URL): Promise<number> {
-  const key = market.toUpperCase();
-  if (Date.now() - (lastBookRefresh.get(key) ?? 0) < BOOK_REFRESH_MIN_MS) return 0;
-  lastBookRefresh.set(key, Date.now());
-  const fork = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
+const bookRefreshes = singleFlight<string, number>();
+export function refreshPhoenixBookOnFork(market: string, rpcUrl: string = SOLANA_RPC_URL): Promise<number> {
+  return bookRefreshes(`${rpcUrl}:${market.toUpperCase()}`, () => refreshBook(market.toUpperCase(), rpcUrl));
+}
+
+async function refreshBook(key: string, rpcUrl: string): Promise<number> {
+  const cacheKey = `${rpcUrl}:${key}`;
+  if (Date.now() - (lastBookRefresh.get(cacheKey) ?? 0) < BOOK_REFRESH_MIN_MS) return 0;
+  const fork = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const bookInfo = await fork.getAccountInfo(phoenixMarketBook());
   if (!bookInfo) return 0;
   const listed = decodeMarketBook(Buffer.from(bookInfo.data)).markets.map((m) => m.market.toBase58());
   const ex = await readPhoenixExchange(fork);
   const m = (await fetchPerpAssetMap(fork, ex.perpAssetMap)).find((x) => x.symbol === key && listed.includes(x.orderbook.toBase58()));
   if (!m) return 0;
-  await Promise.all([m.orderbook, m.spline].map((k) => callCheatcode("surfnet_resetAccount", [k.toBase58()])));
+  const resets = await Promise.allSettled([m.orderbook, m.spline].map((k) => callCheatcode("surfnet_resetAccount", [k.toBase58()])));
+  const failure = resets.find((r) => r.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+  lastBookRefresh.set(cacheKey, Date.now());
   return 2;
 }

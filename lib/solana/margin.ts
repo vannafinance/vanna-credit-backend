@@ -1,3 +1,4 @@
+import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Margin-account service layer for the core program `vanna_credit_layer` (Frontend Integration
@@ -181,7 +182,12 @@ function valueOf(amount: bigint, price: OnchainPrice | null, decimals: number, r
  * Full margin snapshot for `owner`: every collateral vault (registry tokens + any other active
  * on-chain asset), every debt position accrued to fork-now, on-chain prices and the exact HF.
  */
-export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
+const fetchMarginSnapshotReads = singleFlight<string, MarginSnapshot>();
+export function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
+  return fetchMarginSnapshotReads(owner.toBase58(), () => readMarginSnapshot(owner));
+}
+
+async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
   const connection = getConnection();
   const margin = marginPda(owner);
   const [raw, assetMap, pools, now] = await Promise.all([

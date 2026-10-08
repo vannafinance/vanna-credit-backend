@@ -1,3 +1,4 @@
+import { withTimeout } from "../async";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import type { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
 
@@ -54,18 +55,24 @@ function isLockedError(error: unknown): boolean {
  * it stops failing as locked. A user rejection or any other failure is rethrown untouched.
  */
 async function withUnlockRetry<T>(wallet: WalletContextState, run: (w: WalletContextState) => Promise<T>): Promise<T> {
+  const deadline = Date.now() + UNLOCK_TIMEOUT_MS;
+  const sign = (w: WalletContextState) => {
+    if (!w.connected || !w.publicKey?.equals(wallet.publicKey!)) throw new Error("Wallet changed during signing. Reconnect and retry.");
+    return withTimeout(run(w), deadline - Date.now(), "Wallet approval timed out. Close the old wallet request before retrying.");
+  };
   try {
-    return await run(wallet);
+    return await sign(wallet);
   } catch (error) {
     if (!isLockedError(error)) throw error;
     const name = wallet.wallet?.adapter.name ?? "Your wallet";
     unlockPromptListener?.(`${name} is locked: click the ${name} icon in your browser toolbar and enter your password to continue`);
     try {
-      const deadline = Date.now() + UNLOCK_TIMEOUT_MS;
       while (Date.now() < deadline) {
-        await sleep(UNLOCK_POLL_MS);
+        await sleep(Math.min(UNLOCK_POLL_MS, deadline - Date.now()));
+        if (Date.now() >= deadline) break;
         try {
-          return await run(externalWallet ?? wallet);
+          if (!externalWallet) throw new Error("Wallet disconnected during signing. Reconnect and retry.");
+          return await sign(externalWallet);
         } catch (retryError) {
           if (!isLockedError(retryError)) throw retryError;
         }

@@ -68,7 +68,7 @@ export function useFarmDeposit() {
       try {
         const result = await farmDeposit(req, { onStatus: onTxStatus });
         showTxSuccess(`Supplied ${req.symbol} to Kamino`);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, "Farm deposit failed"));
@@ -87,7 +87,7 @@ export function useFarmWithdraw() {
       try {
         const result = await farmWithdraw(req, { onStatus: onTxStatus });
         showTxSuccess(`Withdrew ≈${Number(result.underlying).toFixed(4)} ${req.symbol} to your margin account`);
-        await after();
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, "Farm withdraw failed"));

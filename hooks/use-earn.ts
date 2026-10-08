@@ -1,5 +1,7 @@
 'use client';
 
+import { fetchWithTimeout } from "../lib/async";
+
 import { useEffect, useMemo, useRef } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -23,7 +25,7 @@ function useTickInvalidate(key: readonly unknown[]) {
   useEffect(() => {
     if (tick === last.current) return;
     last.current = tick;
-    qc.invalidateQueries({ queryKey: JSON.parse(k) });
+    qc.invalidateQueries({ queryKey: JSON.parse(k) }, { cancelRefetch: false });
   }, [tick, qc, k]);
 }
 
@@ -37,7 +39,7 @@ export const usePoolData = () => {
   const query = useQuery({
     queryKey: EARN_POOLS_KEY,
     queryFn: async (): Promise<Record<string, SerializedPoolState>> => {
-      const res = await fetch('/api/pools', { cache: 'no-store' });
+      const res = await fetchWithTimeout('/api/pools', { cache: 'no-store' });
       if (!res.ok) throw new Error(`pool stats failed (${res.status})`);
       return ((await res.json()) as { pools: Record<string, SerializedPoolState> }).pools;
     },
@@ -149,7 +151,7 @@ export const useSupplyLiquidity = () => {
       try {
         const result = await supply(symbol, amount, { onStatus: onTxStatus });
         showTxSuccess(`Supplied ${amount} ${symbol}`);
-        await after(address);
+        void after(address).catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Supply failed'));
@@ -170,7 +172,7 @@ export const useWithdrawLiquidity = () => {
       try {
         const result = await redeem(symbol, all ? { all: true } : { assetsUi: amount }, { onStatus: onTxStatus });
         showTxSuccess(all ? `Withdrew all ${symbol}` : `Withdrew ${amount} ${symbol}`);
-        await after(address);
+        void after(address).catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Withdraw failed'));

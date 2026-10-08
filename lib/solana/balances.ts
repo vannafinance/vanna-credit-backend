@@ -1,3 +1,4 @@
+import { singleFlight } from "../async";
 import { PublicKey, type AccountInfo, type Connection } from "@solana/web3.js";
 import { getConnection, getMultipleAccountsChunked } from "./connection";
 import { lenderShareAccount, walletAta } from "./pdas";
@@ -28,7 +29,14 @@ export interface WalletBalances {
  * One batched read of the wallet's native SOL, every registry token ATA and every lender
  * share ATA.
  */
-export async function fetchWalletBalances(owner: PublicKey, connection: Connection = getConnection()): Promise<WalletBalances> {
+const balanceReads = new WeakMap<Connection, ReturnType<typeof singleFlight<string, WalletBalances>>>();
+export function fetchWalletBalances(owner: PublicKey, connection: Connection = getConnection()): Promise<WalletBalances> {
+  let read = balanceReads.get(connection);
+  if (!read) { read = singleFlight<string, WalletBalances>(); balanceReads.set(connection, read); }
+  return read(owner.toBase58(), () => readWalletBalances(owner, connection));
+}
+
+async function readWalletBalances(owner: PublicKey, connection: Connection = getConnection()): Promise<WalletBalances> {
   const keys: PublicKey[] = [owner];
   for (const t of TOKENS) keys.push(walletAta(owner, t.mint, t.tokenProgram), lenderShareAccount(owner, t.mint));
   const infos = await getMultipleAccountsChunked(connection, keys);

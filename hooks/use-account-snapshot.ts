@@ -1,7 +1,9 @@
 "use client";
 
+import { fetchWithTimeout } from "../lib/async";
+
 import { useEffect, useRef } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLedgerTick } from "@/contexts/ledger-subscriber";
 import type { SerializedMarginSnapshot } from "@/lib/solana/margin";
 import type { LenderPosition } from "@/lib/solana/lend";
@@ -29,19 +31,11 @@ export type AccountSnapshot = Partial<MarginAccountInfoStateType> & {
 export const ACCOUNT_SNAPSHOT_KEY = ["margin", "account-snapshot"] as const;
 
 async function fetchSnapshot(userAddress: string): Promise<AccountSnapshot> {
-  const res = await fetch(`/api/account/${userAddress}`, { cache: "no-store" });
+  const res = await fetchWithTimeout(`/api/account/${userAddress}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`account snapshot failed (${res.status})`);
   const api = (await res.json()) as AccountApiResponse;
   const fields = marginFieldsFromSnapshot(api.margin);
   return { ...fields, hasMarginAccount: api.margin.exists, marginAccountAddress: api.margin.exists ? api.margin.address : undefined, api };
-}
-
-/** Warm the snapshot as soon as the wallet connects (best effort). */
-export async function prefetchAccountSnapshot(qc: QueryClient, userAddress: string | null): Promise<void> {
-  if (!userAddress) return;
-  await qc
-    .prefetchQuery({ queryKey: [...ACCOUNT_SNAPSHOT_KEY, userAddress], queryFn: () => fetchSnapshot(userAddress), staleTime: 5_000 })
-    .catch(() => {});
 }
 
 /**
@@ -61,7 +55,7 @@ export function useAccountSnapshot(userAddress: string | null) {
   useEffect(() => {
     if (tick === lastTickRef.current) return;
     lastTickRef.current = tick;
-    qc.invalidateQueries({ queryKey: ACCOUNT_SNAPSHOT_KEY });
+    qc.invalidateQueries({ queryKey: ACCOUNT_SNAPSHOT_KEY }, { cancelRefetch: false });
   }, [tick, qc]);
   return {
     snapshot: query.data,
