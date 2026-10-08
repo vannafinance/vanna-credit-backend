@@ -115,8 +115,9 @@ export async function fetchPerpsView(owner: PublicKey | null): Promise<PerpsView
         // The venue's own line is valued from `positions` + `idleUsdc` by the account model.
         collateralRows: snapshot.collateral.filter((c) => c.active && c.token !== null && c.usd > 0).map((c) => ({ symbol: c.symbol, usd: c.usd })),
         debtRows: snapshot.debts.filter((d) => d.usd > 0).map((d) => ({ symbol: d.symbol, usd: d.usd })),
+        prices: Object.fromEntries(Object.entries(snapshot.prices).flatMap(([k, p]) => (p && p.usd > 0 ? [[k, p.usd]] : []))),
       }
-    : { hasMargin: false, marginUsdc: 0, venueValueUsd: 0, idleUsdc: 0, withdrawableNowUsdc: 0, totalCollateralUsd: 0, totalDebtUsd: 0, healthFactor: null, collateralRows: [], debtRows: [] };
+    : { hasMargin: false, marginUsdc: 0, venueValueUsd: 0, idleUsdc: 0, withdrawableNowUsdc: 0, totalCollateralUsd: 0, totalDebtUsd: 0, healthFactor: null, collateralRows: [], debtRows: [], prices: {} };
   if (!venue) return { markets: [], positions: [], orders: [], account };
   const markets = venue.markets.map(toMarketInfo);
   if (!owner || !snapshot?.exists) return { markets, positions: [], orders: [], account };

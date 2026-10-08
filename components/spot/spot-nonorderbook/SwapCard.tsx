@@ -1,6 +1,5 @@
 "use client";
 
-import { useTheme } from "@/contexts/theme-context";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/shallow";
@@ -8,21 +7,20 @@ import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
 import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { useTokenPrices } from "@/hooks/use-token-prices";
+import { useV3Account } from "@/hooks/use-v3-account";
 import { PublicKey } from "@solana/web3.js";
-import { bestSwapQuote, executeSwapQuote, providerLabel, providerLogo, type AggregatedQuote, type SwapProvider } from "@/lib/solana/aggregator";
+import { bestSwapQuote, executeSwapQuote, providerLabel, type AggregatedQuote, type SwapProvider } from "@/lib/solana/aggregator";
 import { TitanUnavailableError } from "@/lib/solana/titan";
 import { fromRaw, toRaw } from "@/lib/solana/math";
 import { spendableLamports } from "@/lib/solana/balances";
-import { projectHealthFactor } from "@/lib/solana/margin";
-import { LIQUIDATION_HEALTH_FACTOR, explorerUrl } from "@/lib/solana/config";
+import { explorerUrl } from "@/lib/solana/config";
 import { describeError } from "@/lib/solana/errors";
-import { SwapInput } from "./SwapInput";
-import { SwapDirectionButton } from "./SwapDirectionButton";
-import { SwapDetails } from "./SwapDetails";
-import { SwapButton } from "./SwapButton";
-import { TokenSearchModal } from "./TokenSearchModal";
-import { SwapSettings, AUTO_SLIPPAGE_PERCENT } from "./SwapSettings";
-import { RouteInfo } from "./RouteInfo";
+import { LIQ_HF, SAFE_HF, WARN_HF, accountNumbers, hfZone } from "@/lib/account-model";
+import { IC, Icon, VMark } from "@/components/v3/icons";
+import { Info } from "@/components/v3/ui";
+import { hfFmt, nf, usd } from "@/components/v3/format";
+import { SwapSettingsModal, TokenPickerModal, AUTO_SLIPPAGE_PERCENT } from "../v3/swap-modals";
+import { withSwap, type SwapPreview } from "../v3/swap-model";
 import { Token, SwapButtonState, RouteStep } from "./types";
 import { SWAP_TOKENS, routeTokenForMint } from "./registry-tokens";
 
@@ -82,10 +80,16 @@ type RoutePlanStep = { swapInfo?: { label?: string; inputMint?: string; outputMi
 
 interface SwapCardProps {
   baseSymbol?: string;
+  /** Called with the pair and the quoted values, so the page's account panel can show "now → after". */
+  onPreview?: (p: SwapPreview) => void;
 }
 
-export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
-  const { isDark } = useTheme();
+/**
+ * The Spot swap card (V3 design): swaps collateral inside the margin account through the picked
+ * aggregator (Jupiter / Titan), with percent chips, quote details, route card, the "after this swap"
+ * health factor and the safety floor.
+ */
+export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
   const tokenList = SWAP_TOKENS;
   const initialToken = baseSymbol
     ? tokenList.find((t) => t.symbol.toLowerCase() === baseSymbol.toLowerCase()) ?? tokenList[0]
@@ -130,21 +134,22 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
 
   // Modal state
   const [tokenModalTarget, setTokenModalTarget] = useState<"in" | "out" | null>(null);
-  const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
+  // Quote details open/closed; null = follow the default (open when the swap changes the health factor).
+  const [isDetailsExpanded, setIsDetailsExpanded] = useState<boolean | null>(null);
 
   // Wallet + margin account
   const { address: userAddress, connectWallet } = useWallet();
   const isWalletConnected = Boolean(userAddress);
   const walletBalances = useUserStore((s) => s.tokenBalances);
-  const { hasMarginAccount, collateralBalances, grossCollateralValue, totalBorrowedValue } =
+  const { hasMarginAccount, collateralBalances } =
     useMarginAccountInfoStore(
       useShallow((s) => ({
         hasMarginAccount: s.hasMarginAccount,
         collateralBalances: s.collateralBalances,
-        grossCollateralValue: s.grossCollateralValue,
-        totalBorrowedValue: s.totalBorrowedValue,
       })),
     );
+  // Program-exact account model (same health factor as every V3 page).
+  const { state: modelState } = useV3Account();
 
   // Margin mode reads the margin vault — make sure the store has the account loaded.
   useEffect(() => {
@@ -318,18 +323,57 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   }, [quote]);
   const routeLabel = route ? [...new Set(route.map((r) => r.protocol))].join(", ") : null;
 
-  // Project post-swap health factor for margin-mode swaps: collateral changes by (out − in) USD
-  // at oracle prices, debt is unchanged. Warning banner only when after ≤ liquidation threshold.
-  const futureHealthFactor = useMemo<{ before: number; after: number; showWarning: boolean } | null>(() => {
-    if (swapMode !== "margin" || !hasMarginAccount || !quote || !tokenIn || !tokenOut) return null;
-    if (!(tokenInPrice > 0) || !(tokenOutPrice > 0) || totalBorrowedValue <= 0) return null;
-    const inUsd = Number(fromRaw(BigInt(quote.inAmount), tokenIn.decimals)) * tokenInPrice;
-    const outUsd = Number(fromRaw(BigInt(quote.outAmount), tokenOut.decimals)) * tokenOutPrice;
-    const before = projectHealthFactor(grossCollateralValue, totalBorrowedValue);
-    const after = projectHealthFactor(Math.max(0, grossCollateralValue - inUsd + outUsd), totalBorrowedValue);
-    if (before === null || after === null) return null;
-    return { before, after, showWarning: after <= LIQUIDATION_HEALTH_FACTOR };
-  }, [swapMode, hasMarginAccount, quote, tokenIn, tokenOut, tokenInPrice, tokenOutPrice, grossCollateralValue, totalBorrowedValue]);
+  // Route card path: the tokens in hop order and, per leg, the AMMs (with split %) that carry it.
+  // Falls back to a single tokenIn → tokenOut leg when the plan's legs don't chain.
+  const routePath = useMemo<{ tokens: Token[]; legs: string[] } | null>(() => {
+    if (!route || !tokenIn || !tokenOut) return null;
+    const tokens: Token[] = [tokenIn];
+    const legs: string[] = [];
+    let cur = tokenIn.id;
+    for (let guard = 0; guard < 6 && cur !== tokenOut.id; guard++) {
+      const steps = route.filter((r) => r.tokenIn.id === cur);
+      if (!steps.length) break;
+      const next = steps[0].tokenOut;
+      legs.push(
+        steps
+          .filter((r) => r.tokenOut.id === next.id)
+          .map((r) => (r.poolFee ? `${r.protocol} ${r.poolFee}` : r.protocol))
+          .join(" · "),
+      );
+      tokens.push(next.id === tokenOut.id ? tokenOut : next);
+      cur = next.id;
+    }
+    if (cur !== tokenOut.id) return { tokens: [tokenIn, tokenOut], legs: [routeLabel ?? ""] };
+    return { tokens, legs };
+  }, [route, tokenIn, tokenOut, routeLabel]);
+
+  // Project the post-swap health factor for margin-mode swaps on the account model: the paid
+  // token's collateral line falls by its USD value, the received one rises by the quote's, debt is
+  // unchanged. Blocked below SAFE_HF (when it lowers the HF), amber below WARN_HF.
+  const quoteUsd = useMemo(() => {
+    if (!quote || !tokenIn || !tokenOut || !(tokenInPrice > 0) || !(tokenOutPrice > 0)) return null;
+    return {
+      inUsd: Number(fromRaw(BigInt(quote.inAmount), tokenIn.decimals)) * tokenInPrice,
+      outUsd: Number(fromRaw(BigInt(quote.outAmount), tokenOut.decimals)) * tokenOutPrice,
+    };
+  }, [quote, tokenIn, tokenOut, tokenInPrice, tokenOutPrice]);
+  const futureHealthFactor = useMemo<{ before: number; after: number; showWarning: boolean; blocked: boolean; amber: boolean } | null>(() => {
+    if (swapMode !== "margin" || !hasMarginAccount || !modelState || !quoteUsd || !tokenIn || !tokenOut) return null;
+    const before = withSwap(modelState, tokenIn.symbol, 0, tokenOut.symbol, 0);
+    const after = withSwap(modelState, tokenIn.symbol, quoteUsd.inUsd, tokenOut.symbol, quoteUsd.outUsd);
+    const h0 = accountNumbers(before).hf;
+    const h1 = accountNumbers(after).hf;
+    if (!Number.isFinite(h0) && !Number.isFinite(h1)) return null;
+    const lowers = h1 < h0 - 1e-9;
+    const blocked = lowers && h1 < SAFE_HF;
+    return { before: h0, after: h1, showWarning: h1 <= LIQ_HF, blocked, amber: !blocked && lowers && h1 < WARN_HF };
+  }, [swapMode, hasMarginAccount, modelState, quoteUsd, tokenIn, tokenOut]);
+
+  // Tell the page what is about to happen (pair + quoted USD), for its account panel.
+  useEffect(() => {
+    if (!onPreview || !tokenIn || !tokenOut) return;
+    onPreview({ from: tokenIn.symbol, to: tokenOut.symbol, inUsd: quoteUsd?.inUsd ?? 0, outUsd: quoteUsd?.outUsd ?? 0, quoted: Boolean(quoteUsd) && !isQuoteLoading });
+  }, [onPreview, tokenIn, tokenOut, quoteUsd, isQuoteLoading]);
 
   const formatHfLabel = (hf: number): string => {
     if (!Number.isFinite(hf) || hf <= 0) return "—";
@@ -462,285 +506,411 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
     swapMutation.mutate();
   }, [buttonState, connectWallet, swapMutation]);
 
-  const bannerBase = "mt-2 px-3 py-2 rounded-xl text-[12px] font-medium flex items-start gap-2";
-  const warnIcon = (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 mt-0.5">
-      <path d="M7 1.5L13 12.5H1L7 1.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M7 5.5V8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="7" cy="10" r="0.7" fill="currentColor" />
-    </svg>
-  );
+  // Quote details default open when the swap moves the health factor (design behaviour).
+  const detailsOpen = isDetailsExpanded ?? Boolean(futureHealthFactor);
+  const balanceNum = (b: string | null) => (b === null ? 0 : parseFloat(b) || 0);
+  const tokFmtSwap = (b: string | null, sym: string) =>
+    balanceNum(b).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: /^(USDC|USDT|JupUSD)$/.test(sym) ? 2 : 4 });
+  const swappableTip = (sym: string) =>
+    `${sym} in your margin account. In Vanna every token in the margin account is collateral and swappable at the same time: a swap trades it inside the account and the health check runs after the swap.`;
+
+  // CTA label / style per state (the live states plus the safety floor).
+  const cta: { label: string; kind: "g" | "off" | "danger" } = (() => {
+    if (isSwapping) return { label: "Swapping…", kind: "off" };
+    switch (buttonState) {
+      case "connect_wallet":
+        return { label: "Connect Wallet", kind: "g" };
+      case "select_token":
+        return { label: "Select a token", kind: "off" };
+      case "enter_amount":
+        return { label: "Enter an Amount", kind: "off" };
+      case "loading_quote":
+        return { label: "Fetching the best price…", kind: "off" };
+      case "no_margin_account":
+        return { label: "Create a margin account first", kind: "off" };
+      case "insufficient_balance":
+        return { label: "Insufficient Balance", kind: "danger" };
+      case "no_route":
+        return { label: "No route", kind: "danger" };
+      case "ready":
+        return futureHealthFactor?.blocked ? { label: `Health factor would fall below ${nf(SAFE_HF, 2)}`, kind: "danger" } : { label: "Swap", kind: "g" };
+      default:
+        return { label: "Swap", kind: "off" };
+    }
+  })();
+  const ctaEnabled = cta.kind === "g" && !isSwapping;
+  const dexOption = AGGREGATORS.find((a) => a.id === aggregator) ?? AGGREGATORS[0];
+  const DEX_SYM: Record<SwapProvider, string> = { jupiter: "JUP", titan: "TITAN" };
+  const hfAfter = futureHealthFactor;
 
   return (
     <>
-      <div
-        className={`w-full max-w-[480px] rounded-2xl sm:rounded-3xl overflow-hidden flex flex-col transition-colors ${
-          isDark
-            ? "bg-[#1A1A1A] border border-[#2A2A2A]"
-            : "bg-white border border-[#E8E8E8]"
-        }`}
-        style={{
-          boxShadow: isDark
-            ? "0 8px 32px rgba(0,0,0,0.3)"
-            : "0 4px 20px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)",
-        }}
-      >
-        {/* Card body */}
-        <div className="p-3 sm:p-4 flex flex-col gap-1">
-          {/* Swap heading + aggregator label + Settings */}
-          <div className="flex items-center justify-between px-0.5 pb-2">
-            <div className="relative flex items-center">
-              <span
-                className={`text-[14px] sm:text-[16px] font-semibold ${isDark ? "text-white" : "text-[#111111]"}`}
+      <section className="sp-card" aria-label="Swap">
+        {/* Swap heading + aggregator picker + Settings */}
+        <div className="sp-hd">
+          <div className="sp-hdl">
+            <span className="sp-ttl">Swap</span>
+            {/* Aggregator picker: the quote and the swap both go through the picked one. */}
+            <span className="sp-dexw" ref={aggregatorMenuRef} style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="sp-dex"
+                onClick={() => setIsAggregatorMenuOpen((v) => !v)}
+                aria-haspopup="listbox"
+                aria-expanded={isAggregatorMenuOpen}
+                title={routeLabel ? `Current route: ${routeLabel}` : undefined}
               >
-                Swap
+                <span className="sp-via">via</span>
+                <Icon sym={DEX_SYM[aggregator]} className="sp-ico s16" />
+                <b>{dexOption.label}</b>
+                <span className={`sp-chev ${isAggregatorMenuOpen ? "up" : ""}`}>{IC.chev}</span>
+              </button>
+              {isAggregatorMenuOpen && (
+                <div className="pop sp-dexm" role="listbox">
+                  {AGGREGATORS.map((a) => {
+                    const selected = a.id === aggregator;
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`sp-dexo ${selected ? "on" : ""}`}
+                        onClick={() => {
+                          setAggregator(a.id);
+                          setIsAggregatorMenuOpen(false);
+                          setTxHash("");
+                        }}
+                      >
+                        <Icon sym={DEX_SYM[a.id]} className="sp-ico s28" />
+                        <span>
+                          <b>{a.label}</b>
+                          <small>{a.hint}</small>
+                        </span>
+                        {selected && <span className="sp-ok">{IC.check}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </span>
+          </div>
+          <button type="button" className="sp-gear" aria-label="Swap settings" onClick={() => setIsSettingsOpen(true)}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M6.5 2.5L7.2 1.2C7.3 1.1 7.5 1 7.6 1H8.4C8.5 1 8.7 1.1 8.8 1.2L9.5 2.5L11 3.1L12.3 2.7C12.5 2.6 12.7 2.7 12.8 2.8L13.4 3.4C13.5 3.5 13.6 3.7 13.5 3.9L13.1 5.2L13.7 6.7L15 7.4C15.1 7.5 15.2 7.7 15.2 7.8V8.6C15.2 8.7 15.1 8.9 15 9L13.7 9.7L13.1 11.2L13.5 12.5C13.6 12.7 13.5 12.9 13.4 13L12.8 13.6C12.7 13.7 12.5 13.8 12.3 13.7L11 13.3L9.5 13.9L8.8 15.2C8.7 15.3 8.5 15.4 8.4 15.4H7.6C7.5 15.4 7.3 15.3 7.2 15.2L6.5 13.9L5 13.3L3.7 13.7C3.5 13.8 3.3 13.7 3.2 13.6L2.6 13C2.5 12.9 2.4 12.7 2.5 12.5L2.9 11.2L2.3 9.7L1 9C0.9 8.9 0.8 8.7 0.8 8.6V7.8C0.8 7.7 0.9 7.5 1 7.4L2.3 6.7L2.9 5.2L2.5 3.9C2.4 3.7 2.5 3.5 2.6 3.4L3.2 2.8C3.3 2.7 3.5 2.6 3.7 2.7L5 3.1L6.5 2.5Z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="8" cy="8.2" r="2.2" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </button>
+        </div>
+
+        {/* You Pay */}
+        <div className="sp-in">
+          <div className="sp-lr">
+            <span className="sp-lbl">You Pay</span>
+            {isWalletConnected && (
+              <span className="sp-pcs">
+                {[25, 50, 75, 100].map((p) => (
+                  <button key={p} type="button" className={`sp-pc p${p} ${activePercent === p ? "on" : ""}`} onClick={() => handlePercentClick(p)}>
+                    {p === 100 ? "Max" : `${p}%`}
+                  </button>
+                ))}
               </span>
-              {/* Aggregator picker: the quote and the swap both go through the picked one. */}
-              <div ref={aggregatorMenuRef} className="relative ml-1.5">
-                <button
-                  type="button"
-                  onClick={() => setIsAggregatorMenuOpen((v) => !v)}
-                  aria-haspopup="listbox"
-                  aria-expanded={isAggregatorMenuOpen}
-                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[12px] sm:text-[13px] font-medium cursor-pointer transition-colors ${
-                    isDark ? "text-[#CCCCCC] bg-[#222222] hover:bg-[#2A2A2A]" : "text-[#555555] bg-[#F4F4F4] hover:bg-[#ECECEC]"
-                  }`}
-                  title={routeLabel ? `Current route: ${routeLabel}` : undefined}
-                >
-                  <span className={isDark ? "text-[#777777]" : "text-[#A7A7A7]"}>via</span>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={providerLogo(aggregator)} alt="" className="w-4 h-4 rounded-full" />
-                  <span className="font-semibold">{providerLabel(aggregator)}</span>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={`transition-transform ${isAggregatorMenuOpen ? "rotate-180" : ""}`}>
-                    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+            )}
+          </div>
+          <div className="sp-tr">
+            <button type="button" className="sp-tok" aria-label={`Select token, now ${tokenIn?.symbol ?? "none"}`} onClick={() => setTokenModalTarget("in")}>
+              {tokenIn && <Icon sym={tokenIn.symbol} className="sp-ico s24" />}
+              <span>{tokenIn?.symbol ?? "Select"}</span>
+              {IC.chev}
+            </button>
+            <input
+              className="sp-amt num"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="0"
+              value={amountIn}
+              aria-label="Amount to pay"
+              onChange={(e) => {
+                let v = e.target.value.replace(/,/g, "").replace(/[^0-9.]/g, "");
+                const dot = v.indexOf(".");
+                if (dot >= 0) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, "");
+                setAmountIn(v);
+                setActivePercent(null);
+                setTxHash("");
+              }}
+            />
+          </div>
+          <div className="sp-br">
+            {isWalletConnected && tokenIn ? (
+              <span className="sp-bal">
+                <span className="num">Swappable: {tokFmtSwap(tokenInBalance, tokenIn.symbol)}</span>
+                <Info text={swappableTip(tokenIn.symbol)} />
+                <button type="button" className="sp-max" onClick={handleMaxClick}>
+                  MAX
                 </button>
-                {isAggregatorMenuOpen && (
-                  <div
-                    role="listbox"
-                    className={`absolute left-0 top-full mt-1.5 z-20 w-[260px] rounded-xl p-1 border shadow-lg ${
-                      isDark ? "bg-[#1F1F1F] border-[#2E2E2E]" : "bg-white border-[#E8E8E8]"
-                    }`}
-                  >
-                    {AGGREGATORS.map((a) => {
-                      const selected = a.id === aggregator;
-                      return (
-                        <button
-                          key={a.id}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          onClick={() => {
-                            setAggregator(a.id);
-                            setIsAggregatorMenuOpen(false);
-                            setTxHash("");
-                          }}
-                          className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left cursor-pointer transition-colors ${
-                            selected
-                              ? isDark ? "bg-[#703AE6]/15" : "bg-[#703AE6]/10"
-                              : isDark ? "hover:bg-[#2A2A2A]" : "hover:bg-[#F4F4F4]"
-                          }`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={providerLogo(a.id)} alt="" className="w-7 h-7 rounded-full shrink-0" />
-                          <span className="flex flex-col flex-1 min-w-0">
-                            <span className={`text-[13px] font-semibold ${isDark ? "text-white" : "text-[#111111]"}`}>{a.label}</span>
-                            <span className={`text-[11px] ${isDark ? "text-[#888888]" : "text-[#777777]"}`}>{a.hint}</span>
-                          </span>
-                          {selected && (
-                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0">
-                              <path d="M3 7.5L5.8 10L11 4" stroke="#703AE6" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          )}
+              </span>
+            ) : (
+              <span />
+            )}
+            {amountInUsd && <span className="sp-usd num">~ ${amountInUsd}</span>}
+            {/* The design's "Use collateral" switch, shown honestly: there is no idle / collateral
+                split in a Vanna margin account, so it is always on and can't be turned off. */}
+            {isWalletConnected && hasMarginAccount && tokenIn && balanceNum(tokenInBalance) > 0 && (
+              <label className="sp-coll" aria-disabled="true" style={{ cursor: "default" }}>
+                <input type="checkbox" checked readOnly disabled />
+                <span className="sp-sw" aria-hidden="true" />
+                <span>
+                  Collateral is swappable <b className="num">{tokFmtSwap(tokenInBalance, tokenIn.symbol)} {tokenIn.symbol}</b>
+                </span>
+                <Info text="Every token in your Vanna margin account is collateral and swappable at once — there is no separate idle balance to pick from, so this is always on. Swapping sells collateral directly; the on-chain health check runs after the swap." />
+              </label>
+            )}
+          </div>
+        </div>
+
+        <div className="sp-flipw">
+          <button type="button" className="sp-flip" aria-label="Reverse swap direction" onClick={handleFlip}>
+            <VMark size={24} />
+          </button>
+        </div>
+
+        {/* You Receive */}
+        <div className="sp-in">
+          <div className="sp-lr">
+            <span className="sp-lbl">You Receive</span>
+          </div>
+          <div className="sp-tr">
+            <button type="button" className="sp-tok" aria-label={`Select token, now ${tokenOut?.symbol ?? "none"}`} onClick={() => setTokenModalTarget("out")}>
+              {tokenOut && <Icon sym={tokenOut.symbol} className="sp-ico s24" />}
+              <span>{tokenOut?.symbol ?? "Select"}</span>
+              {IC.chev}
+            </button>
+            <input className="sp-amt num" readOnly tabIndex={-1} placeholder={isQuoteLoading ? "…" : "0"} value={isQuoteLoading ? "" : amountOut} aria-label="Amount you receive" />
+          </div>
+          <div className="sp-br">
+            {isWalletConnected && tokenOut ? <span className="sp-bal num">Swappable: {tokFmtSwap(tokenOutBalance, tokenOut.symbol)}</span> : <span />}
+            {amountOutUsd && <span className="sp-usd num">~ ${amountOutUsd}</span>}
+          </div>
+        </div>
+
+        <div className="sp-dyn" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {hasQuote && quote ? (
+            <>
+              {/* Quote details */}
+              <div className="sp-det">
+                <div
+                  className="sp-dh"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={detailsOpen}
+                  onClick={() => setIsDetailsExpanded(!detailsOpen)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setIsDetailsExpanded(!detailsOpen);
+                    }
+                  }}
+                >
+                  <span className="sp-dl">
+                    {exchangeRate && (
+                      <button
+                        type="button"
+                        className="sp-rate num"
+                        title="Click to flip direction"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFlipRate();
+                        }}
+                      >
+                        {exchangeRate}
+                      </button>
+                    )}
+                    {hfAfter && (
+                      <span className="sp-hfh">
+                        · HF <span>{hfFmt(hfAfter.before)}</span> {IC.arrow} <b className={hfAfter.after < SAFE_HF ? "neg" : ""}>{hfFmt(hfAfter.after)}</b>
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="sp-ref"
+                      aria-label="Refresh quote"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRefreshNonce((n) => n + 1);
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                        <path d="M11.67 7A4.67 4.67 0 1 1 7 2.33M7 2.33L9.33 4.67M7 2.33L4.67 4.67" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </span>
+                  <span className={`sp-chev ${detailsOpen ? "up" : ""}`}>{IC.chev}</span>
+                </div>
+                {detailsOpen && (
+                  <div className="sp-db num">
+                    {priceImpactInfo.label && (
+                      <div className="sp-dr">
+                        <span>Price Impact</span>
+                        <span className={`sp-imp ${priceImpactInfo.level === "medium" ? "med" : priceImpactInfo.level ?? "low"}`}>
+                          {priceImpactInfo.label}
+                          <i />
+                        </span>
+                      </div>
+                    )}
+                    {hfAfter && (
+                      <div className="sp-dr">
+                        <span>Health Factor</span>
+                        <span>
+                          {hfFmt(hfAfter.before)} <em>{IC.arrow}</em> <b className={hfAfter.after < SAFE_HF ? "neg" : ""}>{hfFmt(hfAfter.after)}</b>
+                        </span>
+                      </div>
+                    )}
+                    <div className="sp-dr">
+                      <span>Slippage Tolerance</span>
+                      <span>
+                        {slippagePercent}%{" "}
+                        <button type="button" className="sp-edit" onClick={() => setIsSettingsOpen(true)}>
+                          Edit
                         </button>
-                      );
-                    })}
+                      </span>
+                    </div>
+                    {minReceived && (
+                      <div className="sp-dr">
+                        <span>Min. Received</span>
+                        <span>{minReceived}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={() => setIsSettingsOpen((prev) => !prev)}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer transition-colors ${
-                isSettingsOpen
-                  ? isDark ? "bg-[#2A2A2A]" : "bg-[#F0F0F0]"
-                  : isDark ? "hover:bg-[#2A2A2A]" : "hover:bg-[#F4F4F4]"
-              }`}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M6.5 2.5L7.2 1.2C7.3 1.1 7.5 1 7.6 1H8.4C8.5 1 8.7 1.1 8.8 1.2L9.5 2.5L11 3.1L12.3 2.7C12.5 2.6 12.7 2.7 12.8 2.8L13.4 3.4C13.5 3.5 13.6 3.7 13.5 3.9L13.1 5.2L13.7 6.7L15 7.4C15.1 7.5 15.2 7.7 15.2 7.8V8.6C15.2 8.7 15.1 8.9 15 9L13.7 9.7L13.1 11.2L13.5 12.5C13.6 12.7 13.5 12.9 13.4 13L12.8 13.6C12.7 13.7 12.5 13.8 12.3 13.7L11 13.3L9.5 13.9L8.8 15.2C8.7 15.3 8.5 15.4 8.4 15.4H7.6C7.5 15.4 7.3 15.3 7.2 15.2L6.5 13.9L5 13.3L3.7 13.7C3.5 13.8 3.3 13.7 3.2 13.6L2.6 13C2.5 12.9 2.4 12.7 2.5 12.5L2.9 11.2L2.3 9.7L1 9C0.9 8.9 0.8 8.7 0.8 8.6V7.8C0.8 7.7 0.9 7.5 1 7.4L2.3 6.7L2.9 5.2L2.5 3.9C2.4 3.7 2.5 3.5 2.6 3.4L3.2 2.8C3.3 2.7 3.5 2.6 3.7 2.7L5 3.1L6.5 2.5Z" stroke={isSettingsOpen ? "#703AE6" : isDark ? "#555555" : "#B0B0B0"} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                <circle cx="8" cy="8.2" r="2.2" stroke={isSettingsOpen ? "#703AE6" : isDark ? "#555555" : "#B0B0B0"} strokeWidth="1.2" fill="none" />
-              </svg>
-            </button>
-          </div>
-
-          {/* From Token Input */}
-          <SwapInput
-            label="You Pay"
-            token={tokenIn}
-            amount={amountIn}
-            amountUsd={amountInUsd}
-            balance={tokenInBalance}
-            onTokenSelect={() => setTokenModalTarget("in")}
-            onAmountChange={(val) => { setAmountIn(val); setActivePercent(null); setTxHash(""); }}
-            onMaxClick={handleMaxClick}
-            showMax
-            showPresets
-            activePercent={activePercent}
-            onPercentClick={handlePercentClick}
-            swapMode={swapMode}
-          />
-
-          <SwapDirectionButton onClick={handleFlip} />
-
-          {/* To Token Input */}
-          <SwapInput
-            label="You Receive"
-            token={tokenOut}
-            amount={amountOut}
-            amountUsd={amountOutUsd}
-            balance={tokenOutBalance}
-            isReadOnly
-            isLoading={isQuoteLoading}
-            onTokenSelect={() => setTokenModalTarget("out")}
-          />
-
-          {/* Swap Details */}
-          <div className="mt-2">
-            <SwapDetails
-              isVisible={hasQuote}
-              isExpanded={isDetailsExpanded}
-              onToggleExpand={() => setIsDetailsExpanded((prev) => !prev)}
-              exchangeRate={exchangeRate}
-              onFlipRate={exchangeRate ? handleFlipRate : undefined}
-              quoteRate={null}
-              priceImpact={priceImpactInfo.label}
-              priceImpactLevel={priceImpactInfo.level}
-              slippage={slippagePercent}
-              minReceived={minReceived}
-              fee={null}
-              networkCost={null}
-              onRefreshRate={() => setRefreshNonce((n) => n + 1)}
-              isRefreshing={isQuoteLoading}
-              onEditSlippage={() => setIsSettingsOpen(true)}
-              healthFactorBefore={futureHealthFactor ? formatHfLabel(futureHealthFactor.before) : null}
-              healthFactorAfter={futureHealthFactor ? formatHfLabel(futureHealthFactor.after) : null}
-              healthFactorAtRisk={Boolean(futureHealthFactor?.showWarning)}
-            />
-          </div>
-
-          {/* Jupiter route (AMM per hop) */}
-          {hasQuote && route && (
-            <div className="mt-2">
-              <RouteInfo route={route} dex={quote ? providerLabel(quote.provider) : providerLabel(aggregator)} />
-            </div>
+              {/* Route card (AMM per hop, straight from the aggregator's route plan) */}
+              {routePath && (
+                <div className="sp-route">
+                  <div className="sp-rh">
+                    <span className="sp-rl">
+                      <b>Route</b>
+                      <span>
+                        · {routePath.legs.length} {routePath.legs.length === 1 ? "hop" : "hops"}
+                        {routeLabel ? ` · ${routeLabel}` : ""}
+                      </span>
+                    </span>
+                    <span className="sp-via2">
+                      <Icon sym={DEX_SYM[quote.provider]} className="sp-ico s16" />
+                      via {providerLabel(quote.provider)}
+                    </span>
+                  </div>
+                  <div className="sp-rpath">
+                    {routePath.tokens.map((t, i) => (
+                      <span key={`${t.id}-${i}`} style={{ display: "contents" }}>
+                        <span className="sp-rt">
+                          <Icon sym={t.symbol} className="sp-ico s36" />
+                          <b>{t.symbol}</b>
+                        </span>
+                        {i < routePath.tokens.length - 1 && (
+                          <span className="sp-rline">
+                            <small title={routePath.legs[i]}>{routePath.legs[i]}</small>
+                            <i />
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="sp-sp" />
           )}
 
           {/* No route / quote failure — shown honestly, never replaced by an estimate. */}
           {quoteError && !isQuoteLoading && (
-            <div
-              className={`${bannerBase} ${
-                isDark ? "bg-[#2A2A2A] text-[#CCCCCC] border border-[#333333]" : "bg-[#F7F7F7] text-[#555555] border border-[#EEEEEE]"
-              }`}
-            >
-              {warnIcon}
+            <div className="sp-warn info">
+              {IC.warn}
               <span>
                 {quoteError.unavailable
                   ? "Titan isn't set up on this server yet (TITAN_API_KEY missing). Switch to Jupiter to swap."
                   : quoteError.noRoute
-                  ? `No route found for ${tokenIn?.symbol} → ${tokenOut?.symbol} on ${providerLabel(aggregator)} at this amount. Try a different amount, pair or aggregator.`
-                  : `Couldn't fetch a quote: ${quoteError.message}`}
+                    ? `No route found for ${tokenIn?.symbol} → ${tokenOut?.symbol} on ${providerLabel(aggregator)} at this amount. Try a different amount, pair or aggregator.`
+                    : `Couldn't fetch a quote: ${quoteError.message}`}
               </span>
             </div>
           )}
 
-          {/* High price-impact warning banner (from Jupiter's reported price impact). */}
+          {/* High price-impact warning banner (from the aggregator's reported price impact). */}
           {isHighPriceImpact && (
-            <div
-              className={`${bannerBase} font-semibold ${
-                isDark ? "bg-[#FC5457]/10 text-[#FC5457] border border-[#FC5457]/30" : "bg-[#FFF1F1] text-[#C62525] border border-[#FFB3B3]"
-              }`}
-            >
-              {warnIcon}
+            <div className="sp-warn danger">
+              {IC.warn}
               <span>
-                High price impact{priceImpactInfo.label ? ` (${priceImpactInfo.label})` : ""}. The route&apos;s
-                liquidity is too thin for this trade size. Reduce the amount.
+                High price impact{priceImpactInfo.label ? ` (${priceImpactInfo.label})` : ""}. The route&apos;s liquidity is too thin for this trade size. Reduce the amount.
               </span>
             </div>
           )}
 
-          {/* Future health-factor warning — margin swaps that would leave HF at or below the
-              liquidation threshold. */}
-          {futureHealthFactor?.showWarning && (
-            <div
-              className={`${bannerBase} font-semibold ${
-                isDark ? "bg-[#FC5457]/10 text-[#FC5457] border border-[#FC5457]/30" : "bg-[#FFF1F1] text-[#C62525] border border-[#FFB3B3]"
-              }`}
-            >
-              {warnIcon}
+          {/* Health-factor floor: blocked below SAFE_HF, amber below WARN_HF, both only when the swap lowers it. */}
+          {hfAfter?.blocked ? (
+            <div className="sp-warn danger">
+              {IC.warn}
               <span>
-                This swap would drop your health factor from {formatHfLabel(futureHealthFactor.before)} to{" "}
-                {formatHfLabel(futureHealthFactor.after)} (liquidation at {LIQUIDATION_HEALTH_FACTOR}).
+                This swap would take your health factor from {hfFmt(hfAfter.before)} to {hfFmt(hfAfter.after)}, below the {nf(SAFE_HF, 2)} safety floor (liquidation at{" "}
+                {nf(LIQ_HF, 2)}).
               </span>
             </div>
-          )}
+          ) : hfAfter?.amber ? (
+            <div className="sp-warn warn">
+              {IC.warn}
+              <span>
+                Health factor would be <span className={hfZone(hfAfter.after)}>{hfFmt(hfAfter.after)}</span>, close to the {nf(SAFE_HF, 2)} safety floor (liquidation at {nf(LIQ_HF, 2)}).
+              </span>
+            </div>
+          ) : null}
 
           {/* Margin mode needs a margin account (the swap runs inside it). */}
           {swapMode === "margin" && isWalletConnected && !hasMarginAccount && (
-            <div className={`${bannerBase} ${isDark ? "bg-yellow-500/10 text-yellow-400" : "bg-yellow-50 text-yellow-700"}`}>
-              {warnIcon}
-              <span>Swaps run inside your margin account — create one in the Margin section first.</span>
+            <div className="sp-warn warn">
+              {IC.warn}
+              <span>
+                Swaps run inside your margin account — create one on the <a href="/margin" style={{ textDecoration: "underline" }}>Margin</a> page first.
+              </span>
             </div>
           )}
 
-          {/* Swap CTA Button */}
-          <div className="mt-2">
-            <SwapButton
-              state={buttonState}
-              onClick={handleButtonClick}
-              tokenSymbol={tokenIn?.symbol}
-              isLoading={isActionLoading}
-            />
-          </div>
+          {/* Swap CTA */}
+          <button type="button" className={`sp-cta ${cta.kind}`} disabled={!ctaEnabled} onClick={handleButtonClick}>
+            {cta.label}
+          </button>
 
           {/* Last swap result */}
           {txHash && (
-            <a
-              href={explorerUrl("tx", txHash)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 text-center text-[12px] font-semibold text-[#703AE6] hover:text-[#8D61EB] transition-colors"
-            >
+            <a className="sp-done" href={explorerUrl("tx", txHash)} target="_blank" rel="noopener noreferrer">
               Swap confirmed — view transaction
             </a>
           )}
-          {txError && !isSwapping && (
-            <p className="mt-2 text-center text-[12px] font-medium text-[#FC5457]">{txError}</p>
-          )}
+          {txError && !isSwapping && <p className="sp-warn danger">{txError}</p>}
         </div>
-      </div>
+      </section>
 
       {/* Settings Modal */}
-      <SwapSettings
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        slippage={slippage}
-        onSlippageChange={setSlippage}
-        slippageMode={slippageMode}
-        onSlippageModeChange={setSlippageMode}
-      />
+      {isSettingsOpen && (
+        <SwapSettingsModal
+          slippage={slippage}
+          onSlippageChange={setSlippage}
+          mode={slippageMode}
+          onModeChange={setSlippageMode}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+      )}
 
-      {/* Token Search Modal — the whole registry, both sides (Jupiter routes any pair). */}
-      <TokenSearchModal
-        isOpen={tokenModalTarget !== null}
-        onClose={() => setTokenModalTarget(null)}
-        onSelect={handleTokenSelect}
-        tokens={tokenList}
-        popularTokens={tokenList.filter((t) => POPULAR_SYMBOLS.includes(t.symbol))}
-        balances={tokenListBalances}
-      />
+      {/* Token picker — the whole registry, both sides (the aggregators route any pair). */}
+      {tokenModalTarget !== null && (
+        <TokenPickerModal
+          tokens={tokenList}
+          popular={tokenList.filter((t) => POPULAR_SYMBOLS.includes(t.symbol))}
+          balances={isWalletConnected ? tokenListBalances : undefined}
+          onSelect={handleTokenSelect}
+          onClose={() => setTokenModalTarget(null)}
+        />
+      )}
     </>
   );
 };

@@ -11,6 +11,8 @@ export interface PriceEntry {
   ageSecs: number | null;
   stale: boolean;
   account: string;
+  /** Where the oracle reads the price (e.g. "pyth", "scope"), as /api/prices reports it. */
+  source?: string | null;
 }
 
 export const PRICES_QUERY_KEY = ['oracle', 'prices'] as const;
