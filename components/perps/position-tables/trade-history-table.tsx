@@ -9,14 +9,15 @@ const ACTION_LABEL: Record<PerpHistoryRow["action"], string> = {
   open: "Open / increase",
   close: "Close / reduce",
   cancel: "Cancel order",
-  settle: "Settle to margin",
+  settle: "Withdraw to margin",
   setup: "Account setup",
+  deposit: "Deposit to Phoenix",
 };
 
 const time = (unix: number) =>
   unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
-/** The margin's GMTrade actions, decoded from its venue account's transactions (newest first). */
+/** The margin's Phoenix actions, decoded from the wallet's transactions (newest first). */
 const TradeHistoryTable = ({ rows, loading }: { rows: PerpHistoryRow[]; loading: boolean }) => {
   const columns: PerpsColumn<PerpHistoryRow>[] = [
     { id: "time", header: "Time", render: (r) => time(r.timestamp) },

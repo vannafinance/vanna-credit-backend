@@ -5,22 +5,20 @@ import { useRouter } from "next/navigation";
 import { useTheme } from "@/contexts/theme-context";
 import { usePerpsHistory, usePerpsView } from "@/hooks/use-perps";
 import ActivePositionsTable from "@/components/perps/position-tables/active-positions-table";
-import OpenOrdersTable from "@/components/perps/position-tables/open-orders-table";
 import TradeHistoryTable from "@/components/perps/position-tables/trade-history-table";
 import { pairSlug } from "@/components/perps/perps-format";
 
 const TABS = [
   { id: "positions", label: "Open Positions" },
-  { id: "orders", label: "Open Orders" },
   { id: "history", label: "Perps History" },
 ] as const;
 
 const fmtUsd = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
- * Portfolio "Perps" tab — the margin's GMTrade positions and pending orders (valued like the oracle
- * values them on every health check) and its decoded GMTrade history. Closing / cancelling happens
- * on the Perps page, which this links to.
+ * Portfolio "Perps" tab — the margin's Phoenix positions (valued like the oracle values them on
+ * every health check) and its decoded Phoenix history. Closing happens on the Perps page, which this
+ * links to. Phoenix market orders fill immediately, so there are no pending orders to list.
  */
 export const PerpsSection = () => {
   const { isDark } = useTheme();
@@ -29,7 +27,6 @@ export const PerpsSection = () => {
   const { view, isLoading } = usePerpsView();
   const history = usePerpsHistory(tab === "history");
   const positions = view?.positions ?? [];
-  const orders = view?.orders ?? [];
   const pnl = positions.reduce((s, p) => s + p.pnlUsd, 0);
   const sizeUsd = positions.reduce((s, p) => s + p.sizeUsd, 0);
   const goTrade = (market: string) => router.push(`/trade/perps/${pairSlug(market)}`);
@@ -38,16 +35,16 @@ export const PerpsSection = () => {
   const label = "text-[12px] font-medium text-[#777777]";
   const value = `text-[20px] font-bold ${isDark ? "text-white" : "text-[#111111]"}`;
   const stats = [
-    { id: "value", label: "Perps Value", value: fmtUsd(view?.account.venueValueUsd ?? 0), hint: "Idle USDC + escrowed orders + position equity, as Vanna values it." },
+    { id: "value", label: "Perps Value", value: fmtUsd(view?.account.venueValueUsd ?? 0), hint: "USDC in Phoenix + position equity (PnL, funding, close fee), as Vanna values it." },
     { id: "size", label: "Open Size", value: fmtUsd(sizeUsd), hint: "Total notional of open positions." },
     {
       id: "pnl",
       label: "Unrealized PnL",
       value: `${pnl >= 0 ? "+" : "−"}${fmtUsd(Math.abs(pnl))}`,
       color: pnl > 0 ? "text-[#24A0A9]" : pnl < 0 ? "text-[#FC5457]" : undefined,
-      hint: "Mark-price PnL before fees.",
+      hint: "Index-price PnL before fees and funding.",
     },
-    { id: "count", label: "Positions / Orders", value: `${positions.length} / ${orders.length}`, hint: "Open positions and pending orders." },
+    { id: "count", label: "Open Positions", value: `${positions.length}`, hint: "Open Phoenix positions." },
   ];
 
   return (
@@ -79,7 +76,6 @@ export const PerpsSection = () => {
       {tab === "positions" && (
         <ActivePositionsTable positions={positions} onClose={(p) => goTrade(p.market)} closeDisabled={false} />
       )}
-      {tab === "orders" && <OpenOrdersTable orders={orders} onCancel={(o) => goTrade(o.market)} cancelDisabled={false} />}
       {tab === "history" && <TradeHistoryTable rows={history.rows} loading={history.isLoading} />}
     </div>
   );

@@ -21,8 +21,7 @@ import {
 import { TOKENS, type TokenInfo } from "../tokens";
 import { fetchAllAssetConfigs } from "../protocol-state";
 import { SCOPE_CHAIN_UNUSED, scopeEntryOffset, type OracleConfigState } from "../oracle";
-import { GMTRADE_PROGRAM_ID, GMTRADE_STORE } from "../perps-accounts";
-import { fetchMarketBook } from "../perps-state";
+import { decodeMarketBook, fetchPerpAssetMap, PHOENIX_EXCHANGE, PHOENIX_PROGRAM_ID, phoenixMarketBook, readPhoenixExchange } from "../phoenix";
 import { callCheatcode } from "./cheatcodes";
 import { jupiterBaseUrl, jupiterHeaders } from "./jupiter-api";
 
@@ -69,14 +68,30 @@ export function buildForkPriceAccountData(template: Buffer, feedId: string, usdP
 }
 
 /**
- * Spot tokens Jupiter prices for each GMTrade index (GMTrade's index mints are synthetic): ETH =
- * Wormhole WETH, BTC = cbBTC, SOL = wSOL. Only used to refresh a market's Pyth fallback on the fork.
+ * Spot tokens Jupiter prices for each Phoenix market's index (Phoenix markets have no mint): ETH =
+ * Wormhole WETH, BTC = cbBTC, SOL = wSOL, TSLA / META = the xStocks. Only used to refresh a market's
+ * Pyth index feed on the fork (Scope-priced markets are refreshed with the Scope copy).
  */
 const PERP_INDEX_PROXY: Record<string, PublicKey> = {
   ETH: new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
   BTC: new PublicKey("cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"),
   SOL: new PublicKey("So11111111111111111111111111111111111111112"),
+  TSLA: new PublicKey("XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB"),
+  META: new PublicKey("Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu"),
 };
+
+/** The Phoenix markets Vanna lists, with each one's index price config (from the market book). */
+async function listedPerpIndexes(connection: Connection): Promise<{ symbol: string; mint: PublicKey; oracle: OracleConfigState }[]> {
+  const info = await connection.getAccountInfo(phoenixMarketBook());
+  if (!info) return [];
+  const book = decodeMarketBook(Buffer.from(info.data));
+  const ex = await readPhoenixExchange(connection);
+  const markets = await fetchPerpAssetMap(connection, ex.perpAssetMap);
+  return book.markets.flatMap((e) => {
+    const symbol = markets.find((m) => m.assetId === e.assetId)?.symbol;
+    return symbol && PERP_INDEX_PROXY[symbol] ? [{ symbol, mint: PERP_INDEX_PROXY[symbol], oracle: e.indexPrice }] : [];
+  });
+}
 
 type Priced = Pick<TokenInfo, "symbol" | "mint">;
 
@@ -168,23 +183,35 @@ async function refreshScopeOnFork(connection: Connection, oracles: OracleConfigS
  */
 export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promise<RefreshedPrice[]> {
   const connection = new Connection(rpcUrl, { commitment: "confirmed", fetch: forkFetch });
-  const book = await fetchMarketBook(connection).catch(() => null);
-  const perps = (book?.markets ?? [])
-    .filter((e) => e.meta && PERP_INDEX_PROXY[e.meta.key])
-    .map((e) => ({ symbol: e.meta!.key, mint: PERP_INDEX_PROXY[e.meta!.key], oracle: e.indexPrice }));
-  const [assetMap, now, live] = await Promise.all([
+  // Independent reads run together (each is a round trip to the hosted fork or an API).
+  const [perps, assetMap, now, tokenPrices] = await Promise.all([
+    listedPerpIndexes(connection).catch(() => []),
     fetchAllAssetConfigs(connection),
     forkUnixTimestamp(connection),
-    fetchJupiterUsdPrices([...TOKENS, ...perps]),
+    // Registry tokens + every Phoenix index proxy, one Jupiter call (the listed set is a subset).
+    fetchJupiterUsdPrices([
+      ...TOKENS,
+      // SOL's proxy is the SOL token itself: skip duplicates so the fetch can tell it got everything.
+      ...Object.entries(PERP_INDEX_PROXY)
+        .filter(([, mint]) => !TOKENS.some((t) => t.mint.equals(mint)))
+        .map(([symbol, mint]) => ({ symbol, mint })),
+    ]),
   ]);
-  // Every price the program reads: the registry tokens' price-book entries, then each listed GMTrade
+  // A perp market is priced like the token that proxies it (SOL-PERP = SOL).
+  const live: Record<string, number> = { ...tokenPrices };
+  for (const [symbol, mint] of Object.entries(PERP_INDEX_PROXY)) {
+    const token = TOKENS.find((t) => t.mint.equals(mint));
+    if (token && live[token.symbol] && !live[symbol]) live[symbol] = live[token.symbol];
+  }
+  // Every price the program reads: the registry tokens' price-book entries, then each listed Phoenix
   // market's index price (from the oracle's market book).
   const configs: { token: Priced; oracle: OracleConfigState | null }[] = [
     ...TOKENS.map((token) => ({ token: token as Priced, oracle: [...assetMap.values()].find((a) => a.mint.equals(token.mint))?.oracle ?? null })),
     ...perps.map((p) => ({ token: { symbol: p.symbol, mint: p.mint }, oracle: p.oracle })),
   ];
-  await refreshScopeOnFork(connection, configs.flatMap((c) => (c.oracle ? [c.oracle] : [])), now);
-  if (book) await alignGmtradeStoreOnFork(connection);
+  // The Scope copy, the Phoenix exchange alignment and the Pyth writes below all go out together.
+  const background: Promise<unknown>[] = [refreshScopeOnFork(connection, configs.flatMap((c) => (c.oracle ? [c.oracle] : [])), now)];
+  if (perps.length) background.push(alignPhoenixExchangeOnFork(connection));
 
   // USD per token for the fallback feeds (live → reference), and which token each Pyth account prices.
   const usdOf = (symbol: string) => live[symbol] ?? REFERENCE_PRICE_USD[symbol];
@@ -227,34 +254,38 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     }
     const feedIdHex = Buffer.from(current.data.subarray(PRICE_FEED_ID_OFFSET, PRICE_FEED_ID_OFFSET + 32)).toString("hex");
     const data = buildForkPriceAccountData(current.data, feedIdHex, value, now);
-    await callCheatcode("surfnet_setAccount", [
-      address.toBase58(),
-      { lamports: current.lamports, data: data.toString("hex"), owner: PYTH_RECEIVER_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
-    ]);
+    background.push(
+      callCheatcode("surfnet_setAccount", [
+        address.toBase58(),
+        { lamports: current.lamports, data: data.toString("hex"), owner: PYTH_RECEIVER_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
+      ]),
+    );
     results.push({ symbol: token.symbol, account: address.toBase58(), usd, source, publishTime: Number(now) });
   }
+  await Promise.all(background);
   return results;
 }
 
 const LAST_RESTART_SLOT_SYSVAR = new PublicKey("SysvarLastRestartS1ot1111111111111111111111");
-/** `Store.last_restarted_slot`: GMTrade refuses orders while it differs from the sysvar. */
-const STORE_LAST_RESTARTED_SLOT_OFFSET = 8 + 4792;
+/** Phoenix's global config records the cluster's last restart slot here and refuses every call
+ * ("Global configuration must be active") while it differs from the LastRestartSlot sysvar. */
+const PHOENIX_LAST_RESTART_SLOT_OFFSET = 1096;
 
 /**
- * Fork only: GMTrade checks its store's recorded last-restart slot against the LastRestartSlot
- * sysvar, and a fork's sysvar differs from mainnet's, so align it once (same as the scripts'
- * `alignGmtradeStoreOnFork`).
+ * Fork only: a fork's LastRestartSlot sysvar differs from mainnet's (0 vs mainnet's last restart),
+ * so Phoenix treats its cloned global config as inactive. Align the recorded slot with the fork's
+ * sysvar (same idea as GMTrade's store alignment before it).
  */
-export async function alignGmtradeStoreOnFork(connection: Connection): Promise<void> {
-  const [store, sysvar] = await connection.getMultipleAccountsInfo([GMTRADE_STORE, LAST_RESTART_SLOT_SYSVAR]);
-  if (!store) return;
-  const forkRestart = sysvar && sysvar.data.length >= 8 ? sysvar.data.readBigUInt64LE(0) : 0n;
-  if (store.data.readBigUInt64LE(STORE_LAST_RESTARTED_SLOT_OFFSET) === forkRestart) return;
-  const data = Buffer.from(store.data);
-  data.writeBigUInt64LE(forkRestart, STORE_LAST_RESTARTED_SLOT_OFFSET);
+export async function alignPhoenixExchangeOnFork(connection: Connection): Promise<void> {
+  const [exchange, sysvar] = await connection.getMultipleAccountsInfo([PHOENIX_EXCHANGE, LAST_RESTART_SLOT_SYSVAR]);
+  if (!exchange || exchange.data.length < PHOENIX_LAST_RESTART_SLOT_OFFSET + 8) return;
+  const forkRestart = sysvar && sysvar.data.length >= 8 ? Buffer.from(sysvar.data).readBigUInt64LE(0) : 0n;
+  const data = Buffer.from(exchange.data);
+  if (data.readBigUInt64LE(PHOENIX_LAST_RESTART_SLOT_OFFSET) === forkRestart) return;
+  data.writeBigUInt64LE(forkRestart, PHOENIX_LAST_RESTART_SLOT_OFFSET);
   await callCheatcode("surfnet_setAccount", [
-    GMTRADE_STORE.toBase58(),
-    { lamports: store.lamports, data: data.toString("hex"), owner: GMTRADE_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
+    PHOENIX_EXCHANGE.toBase58(),
+    { lamports: exchange.lamports, data: data.toString("hex"), owner: PHOENIX_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0 },
   ]);
 }
 

@@ -8,10 +8,10 @@ import { assetConfigPda, priceBookPda, reservePda, shareMintPda } from "./pdas";
 import { decodePriceBook, emptyOracleConfig, isReceiptOracle, oracleAccounts, type OracleConfigState, type PriceSource } from "./oracle";
 import { TOKENS, type TokenInfo } from "./tokens";
 import { KAMINO_RECEIPTS } from "./kamino";
-import { GMTRADE_STORE } from "./perps-accounts";
+import { PHOENIX_EXCHANGE, PHUSD_MINT } from "./phoenix";
 
 /** Venues this app trades through (their AssetConfig is keyed by the venue, not a mint). */
-const VENUE_KEYS = [GMTRADE_STORE];
+const VENUE_KEYS = [PHOENIX_EXCHANGE];
 import {
   annualBorrowRate,
   annualSupplyRate,
@@ -27,16 +27,14 @@ import {
 /** Decoded AssetConfig, bigint/primitive-normalised. */
 export interface AssetConfigState {
   address: PublicKey;
-  /** A token's mint, or a venue's key (GMTrade: its store). */
+  /** A token's mint, or a venue's key (Phoenix: its exchange / global config). */
   mint: PublicKey;
   tokenProgram: PublicKey;
   reserve: PublicKey;
-  /** "token" for a plain token; "venue" for GMTrade, held through the margin's venue account. */
+  /** "token" for a plain token; "venue" for Phoenix, held as the margin's own Phoenix trader. */
   kind: "token" | "venue";
   /** The oracle agent that values this asset (`AssetConfig.oracle`). */
   oracleProgram: PublicKey;
-  /** A venue's settle token (USDC for GMTrade); PublicKey.default for a token. */
-  settleMint: PublicKey;
   /** How the oracle prices this token: its price-book entry (Scope chain, Pyth fallback, a receipt's
    * klend reserve). Empty for a venue, which the oracle values from its market book. */
   oracle: OracleConfigState;
@@ -106,7 +104,6 @@ function normaliseAsset(address: PublicKey, a: any, sources: Map<string, PriceSo
     reserve: a.reserve,
     kind,
     oracleProgram: new PublicKey(a.oracle),
-    settleMint: new PublicKey(a.settleMint),
     oracle,
     oracleAccounts: oracleAccounts(oracle),
     maxCollateralPerMargin: big(a.maxCollateralPerMargin),
@@ -171,7 +168,7 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
 
 /**
  * Every AssetConfig this app knows about — the registry tokens, their Kamino receipt
- * (cToken) assets and the GMTrade venue — keyed by asset_index, read by PDA in one batched `getMultipleAccounts`.
+ * (cToken) assets, phUSD and the Phoenix venue — keyed by asset_index, read by PDA in one batched `getMultipleAccounts`.
  *
  * Deliberately NOT `getProgramAccounts`: the hosted Surfpool fork forwards that call to its
  * upstream mainnet RPC, which rate-limits it (HTTP 429 → "Internal error"). Every asset the
@@ -180,7 +177,8 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
  * reject an incomplete scan anyway), so this fails closed rather than hiding a position.
  */
 export async function fetchAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
-  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), ...VENUE_KEYS];
+  // phUSD (Phoenix collateral in transit through the margin) is registered too, outside the registry.
+  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), PHUSD_MINT, ...VENUE_KEYS];
   const addresses = mints.map((m) => assetConfigPda(m));
   const [book, ...infos] = await getMultipleAccountsChunked(connection, [priceBookPda(), ...addresses]);
   const sources = priceSourcesFrom(book as AccountInfo<Buffer> | null);

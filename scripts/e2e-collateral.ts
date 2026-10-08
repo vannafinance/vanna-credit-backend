@@ -155,7 +155,7 @@ async function main() {
   await step("margin swap 0.5 GOOGLx → AAPLx (xStock to xStock, ~30-account route, 256 KiB heap)", async () => {
     const req = { fromSymbol: "GOOGLx", toSymbol: "AAPLx", amount: 0.5, slippageBps: 150 };
     const quote = await quoteMarginSwap(req);
-    console.log(`  route: ${quote.routePlan.map((r) => r.swapInfo.label).join(" > ")}`);
+    console.log(`  route: ${(quote.routePlan ?? []).map((r) => r.swapInfo?.label).join(" > ")}`);
     const before = (await fetchMarginSnapshot(owner)).collateral.find((c) => c.symbol === "AAPLx")?.amount ?? 0;
     await executeMarginSwap(req, quote, opts);
     const after = (await show("GOOGLx → AAPLx")).collateral.find((c) => c.symbol === "AAPLx")?.amount ?? 0;

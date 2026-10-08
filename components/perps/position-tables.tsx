@@ -2,18 +2,18 @@
 
 import { useState } from "react";
 import { useTheme } from "@/contexts/theme-context";
-import { useCancelPerpOrder, useClosePerp, usePerpsHistory } from "@/hooks/use-perps";
+import { useClosePerp, usePerpsHistory } from "@/hooks/use-perps";
 import type { PerpPosition, PerpsView } from "@/lib/solana/perps-types";
 import { AnimatedTabs } from "../ui/animated-tabs";
 import { Button } from "../ui/button";
 import { Modal } from "../ui/modal";
 import ActivePositionsTable from "./position-tables/active-positions-table";
-import OpenOrdersTable from "./position-tables/open-orders-table";
 import TradeHistoryTable from "./position-tables/trade-history-table";
 import { ClosePositionModal } from "./modals/close-position-modal";
 import { CloseAllPositionsModal } from "./modals/close-all-positions-modal";
 
-type PerpsTab = "position" | "openOrders" | "history";
+// Phoenix market orders fill (or cancel) inside their transaction, so there is no open-orders tab.
+type PerpsTab = "position" | "history";
 
 interface PositionTablesProps {
   view: PerpsView | undefined;
@@ -30,15 +30,12 @@ const PositionTables = ({ view, address, connectWallet }: PositionTablesProps) =
   const [isClosingAll, setIsClosingAll] = useState(false);
 
   const closePerp = useClosePerp();
-  const cancelOrder = useCancelPerpOrder();
 
   const positions = address ? (view?.positions ?? []) : [];
-  const orders = address ? (view?.orders ?? []) : [];
-  const busy = closePerp.isPending || cancelOrder.isPending || isClosingAll;
+  const busy = closePerp.isPending || isClosingAll;
 
   const tabs = [
     { id: "position", label: `Positions (${positions.length})` },
-    { id: "openOrders", label: `Open orders (${orders.length})` },
     { id: "history", label: "History" },
   ];
 
@@ -100,13 +97,6 @@ const PositionTables = ({ view, address, connectWallet }: PositionTablesProps) =
         <>
           {activeTab === "position" && (
             <ActivePositionsTable positions={positions} onClose={setClosing} closeDisabled={busy} />
-          )}
-          {activeTab === "openOrders" && (
-            <OpenOrdersTable
-              orders={orders}
-              cancelDisabled={busy}
-              onCancel={(o) => cancelOrder.mutate({ market: o.market, side: o.side })}
-            />
           )}
           {activeTab === "history" && <TradeHistoryTable rows={history.rows} loading={history.isLoading} />}
         </>

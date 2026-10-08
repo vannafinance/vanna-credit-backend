@@ -236,7 +236,7 @@ export function BasisActionPanel({ vault: v, token, onToken, account }: { vault:
         {[
           ["Borrow on Margin", "Against any collateral Vanna accepts."],
           ["Deposit", "USDC, USDT or SOL from your margin account."],
-          ["Vault hedges", "Spot on Jupiter, an equal 1x short on GMTrade."],
+          ["Vault hedges", "Spot on Jupiter, an equal 1x short on Phoenix."],
           ["Earn funding", "Shares count toward your health factor."],
         ].map(([title, desc], i) => (
           <div key={title} className="flex gap-3 items-start">

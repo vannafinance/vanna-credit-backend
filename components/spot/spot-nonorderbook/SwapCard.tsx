@@ -8,8 +8,8 @@ import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
 import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { useTokenPrices } from "@/hooks/use-token-prices";
-import { executeWalletSwap, fetchJupiterQuote, type JupiterQuote } from "@/lib/solana/swap";
-import { executeMarginSwap, quoteMarginSwap } from "@/lib/solana/exec";
+import { PublicKey } from "@solana/web3.js";
+import { bestSwapQuote, executeSwapQuote, providerLabel, titanStatusLabel, type AggregatedQuote } from "@/lib/solana/aggregator";
 import { fromRaw, toRaw } from "@/lib/solana/math";
 import { spendableLamports } from "@/lib/solana/balances";
 import { projectHealthFactor } from "@/lib/solana/margin";
@@ -172,10 +172,10 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   const tokenOutPrice = tokenOut ? swapTokenPrices[tokenOut.symbol] ?? 0 : 0;
 
   // ---------------------------------------------------------------------------------------------
-  // Quote (debounced). Both modes → Jupiter via /api/jupiter/quote (margin mode through
-  // quoteMarginSwap, the same exact-input routing the margin adapter executes).
+  // Quote (debounced). Both modes quote Jupiter AND Titan and take the larger output (margin mode
+  // through the margin-sized routes each adapter executes); see lib/solana/aggregator.ts.
   // ---------------------------------------------------------------------------------------------
-  const [quote, setQuote] = useState<JupiterQuote | null>(null);
+  const [quote, setQuote] = useState<AggregatedQuote | null>(null);
   const [quoteFetchedAt, setQuoteFetchedAt] = useState(0);
   const [quoteError, setQuoteError] = useState<{ noRoute: boolean; message: string } | null>(null);
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
@@ -185,13 +185,19 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
   const amountInRaw = tokenIn ? safeRaw(amountIn, tokenIn.decimals) : null;
 
   const requestQuote = useCallback(
-    async (from: Token, to: Token, amountUi: string, raw: bigint): Promise<JupiterQuote> => {
-      if (swapMode === "margin") {
-        return quoteMarginSwap({ fromSymbol: from.symbol, toSymbol: to.symbol, amount: amountUi, slippageBps });
-      }
-      return fetchJupiterQuote({ inputMint: from.id, outputMint: to.id, amount: raw, slippageBps });
-    },
-    [swapMode, slippageBps],
+    async (from: Token, to: Token, amountUi: string, raw: bigint): Promise<AggregatedQuote> =>
+      bestSwapQuote({
+        mode: swapMode === "margin" ? "margin" : "wallet",
+        inputMint: from.id,
+        outputMint: to.id,
+        fromSymbol: from.symbol,
+        toSymbol: to.symbol,
+        amountUi,
+        amountRaw: raw,
+        slippageBps,
+        owner: userAddress ? new PublicKey(userAddress) : null,
+      }),
+    [swapMode, slippageBps, userAddress],
   );
 
   useEffect(() => {
@@ -324,11 +330,8 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
       // Re-quote a stale quote right before signing. If the fresh quote's minimum output is
       // worse than what the user reviewed, stop and show it instead of silently accepting it.
       if (Date.now() - quoteFetchedAt > QUOTE_MAX_AGE_MS) {
-        // Margin swaps re-quote through quoteMarginSwap too (its shorter route fits margin_execute).
-        const fresh =
-          swapMode === "margin"
-            ? await quoteMarginSwap({ fromSymbol: tokenIn.symbol, toSymbol: tokenOut.symbol, amount: amountIn, slippageBps })
-            : await fetchJupiterQuote({ inputMint: tokenIn.id, outputMint: tokenOut.id, amount: amountInRaw, slippageBps });
+        // Re-quote both providers (margin mode with the margin-sized routes) and keep the better one.
+        const fresh = await requestQuote(tokenIn, tokenOut, amountIn, amountInRaw);
         const reviewedMin = BigInt(quote.otherAmountThreshold ?? quote.outAmount);
         const freshMin = BigInt(fresh.otherAmountThreshold ?? fresh.outAmount);
         setQuote(fresh);
@@ -339,14 +342,13 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
         toExecute = fresh;
       }
       showTxStep(`Swapping ${amountIn} ${tokenIn.symbol} for ${tokenOut.symbol}${swapMode === "margin" ? " in your margin account" : ""} — approve in your wallet`);
-      if (swapMode === "margin") {
-        const result = await executeMarginSwap(
-          { fromSymbol: tokenIn.symbol, toSymbol: tokenOut.symbol, amount: amountIn, slippageBps },
-          toExecute,
-        );
-        return result.signature;
-      }
-      return executeWalletSwap(toExecute);
+      return executeSwapQuote(toExecute, {
+        mode: swapMode === "margin" ? "margin" : "wallet",
+        fromSymbol: tokenIn.symbol,
+        toSymbol: tokenOut.symbol,
+        amountUi: amountIn,
+        slippageBps,
+      });
     },
     onMutate: () => {
       setTxError("");
@@ -472,15 +474,27 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
               >
                 Swap
               </span>
-              {/* Jupiter aggregates the fork's pool AMMs, so there is no per-DEX picker. */}
+              {/* Two aggregators are quoted side by side; the better output wins (lib/solana/aggregator.ts). */}
               <span
                 className={`flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-1 rounded-lg text-[12px] sm:text-[14px] font-medium leading-[18px] ${
                   isDark ? "text-[#777777]" : "text-[#A7A7A7]"
                 }`}
-                title={routeLabel ? `Current route: ${routeLabel}` : "Routes across Raydium, Orca and Meteora pools"}
+                title={`${titanStatusLabel(quote?.titanStatus)}${routeLabel ? ` · Current route: ${routeLabel}` : ""}`}
               >
                 <span>via</span>
-                <span className={`font-semibold ${isDark ? "text-[#CCCCCC]" : "text-[#555555]"}`}>Jupiter</span>
+                <span className={`font-semibold ${quote?.provider !== "titan" ? (isDark ? "text-[#CCCCCC]" : "text-[#555555]") : ""}`}>Jupiter</span>
+                <span>·</span>
+                <span
+                  className={`font-semibold ${
+                    quote?.provider === "titan"
+                      ? isDark ? "text-[#CCCCCC]" : "text-[#555555]"
+                      : quote?.titanStatus === "not-configured" || quote?.titanStatus === "no-route"
+                        ? "line-through opacity-60"
+                        : ""
+                  }`}
+                >
+                  Titan
+                </span>
               </span>
             </div>
 
@@ -558,7 +572,7 @@ export const SwapCard = ({ baseSymbol }: SwapCardProps) => {
           {/* Jupiter route (AMM per hop) */}
           {hasQuote && route && (
             <div className="mt-2">
-              <RouteInfo route={route} dex="Jupiter" />
+              <RouteInfo route={route} dex={quote ? providerLabel(quote.provider) : "Jupiter"} alternatives={quote?.quotes} outDecimals={tokenOut?.decimals} outSymbol={tokenOut?.symbol} titanNote={quote ? titanStatusLabel(quote.titanStatus) : undefined} />
             </div>
           )}
 

@@ -33,7 +33,7 @@ export const ORACLE_PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_VANNA_ORACLE_PROGRAM_ID ?? "FXY5DRfekMUTbUp4uyCFpCZmCccrp6kPq3hTM4GRihnc",
 );
 
-/** The core program's validator agent: reviews every `margin_execute` call (Kamino, Jupiter, GMTrade). */
+/** The core program's validator agent: reviews every `margin_execute` call (Kamino, Jupiter, Titan, Ember, Phoenix). */
 export const VALIDATOR_PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_VANNA_VALIDATOR_PROGRAM_ID ?? "6fND3vhtstp486iE6rsSNVUox3kcjNNRsSLAN7ZPs7th",
 );

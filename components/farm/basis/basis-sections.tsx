@@ -74,7 +74,7 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
   const gross = v.funding7 * HEDGE - v.perpFee * HEDGE - v.exec;
   const parts: [string, string, number][] = [
     ["Funding", `${fmtPct(v.funding7)} on the half held short`, v.funding7 * HEDGE],
-    ["GMTrade fees", "Position and borrow fees", -v.perpFee * HEDGE],
+    ["Phoenix fees", "Position and borrow fees", -v.perpFee * HEDGE],
     ["Execution", "Jupiter swaps, rebalancing", -v.exec],
     ["Vault fee", `${v.fee}% of profit`, (-gross * v.fee) / 100],
   ];
@@ -153,7 +153,7 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
         <div className="grid gap-2 tabular-nums">
           {[
             { side: "LONG", what: `${v.asset} spot`, venue: "Jupiter", amount: spot },
-            { side: "SHORT", what: v.perp, venue: "GMTrade · 1x", amount: leg },
+            { side: "SHORT", what: v.perp, venue: "Phoenix · 1x", amount: leg },
           ].map((l) => (
             <div key={l.side} className={`grid grid-cols-[54px_minmax(0,1fr)_auto] sm:grid-cols-[62px_minmax(0,1fr)_auto_auto] gap-3 items-center text-[13px] px-3 py-2.5 rounded-[10px] ${c.tile}`}>
               <span
@@ -214,7 +214,7 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
             caption={`spread over ${token} borrow`}
           />
           <RiskTile icon={ICONS.up} title="Short squeeze" level="low" value={`+${squeeze}%`} caption={`${v.asset} rise to liquidation`} />
-          <RiskTile icon={ICONS.venue} title="Venue risk" level="med" value="2 venues" caption="GMTrade, Jupiter, oracles" />
+          <RiskTile icon={ICONS.venue} title="Venue risk" level="med" value="2 venues" caption="Phoenix, Jupiter, oracles" />
         </div>
       </BasisCard>
     </>
@@ -237,7 +237,7 @@ export function BasisAnalytics({ vault: v }: { vault: BasisVault }) {
   const data = perf === "share" ? v.sharePrice.slice(s) : v.funding.slice(s);
   const readout =
     hover === null ? (
-      perf === "share" ? `USDC per ${v.share}, net of fees` : `${v.perp} on GMTrade, annualised, daily`
+      perf === "share" ? `USDC per ${v.share}, net of fees` : `${v.perp} on Phoenix, annualised, daily`
     ) : perf === "share" ? (
       <>
         {seriesLabel(s + hover)} · <b className={c.title}>{fmtNum(data[hover], 4)}</b> USDC per {v.share}
@@ -253,7 +253,7 @@ export function BasisAnalytics({ vault: v }: { vault: BasisVault }) {
   const idle = v.tvl * 0.004;
   const alloc: [string, string, number, string][] = [
     ["Jupiter", `Spot ${v.asset}`, leg - idle / 2, c.isDark ? "#32EEE2" : "#22CED9"],
-    ["GMTrade", `${v.perp} short margin (USDC)`, leg - idle / 2, c.isDark ? "#F0666E" : "#FC5457"],
+    ["Phoenix", `${v.perp} short margin (USDC)`, leg - idle / 2, c.isDark ? "#F0666E" : "#FC5457"],
     ["Idle", "USDC buffer for withdrawals", idle, "#9CA3AF"],
   ];
 

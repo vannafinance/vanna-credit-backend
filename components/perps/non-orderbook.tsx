@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useTheme } from "@/contexts/theme-context";
+import { useWithdrawPerpCollateral } from "@/hooks/use-perps";
 import type { PerpsAccount } from "@/lib/solana/perps-types";
 import { fmtUsd, healthFactorDisplay } from "./perps-format";
 
@@ -13,19 +14,21 @@ interface PerpsAccountPanelProps {
 
 /**
  * Right-hand column next to the chart (the old trades list): the margin account as the perps
- * venue sees it — USDC available for new orders, value held on GMTrade, health factor and totals.
+ * venue sees it — USDC available for new orders, value held on Phoenix (with a way to bring idle USDC
+ * home), health factor and totals.
  */
 export function PerpsAccountPanel({ account, walletConnected, isLoading }: PerpsAccountPanelProps) {
   const { isDark } = useTheme();
   const muted = isDark ? "text-[#919191]" : "text-[#5C5B5B]";
   const primary = isDark ? "text-[#FFFFFF]" : "text-[#111111]";
   const hf = healthFactorDisplay(account?.healthFactor ?? null);
+  const withdraw = useWithdrawPerpCollateral();
 
   const rows: { label: string; value: string; color?: string }[] = account
     ? [
         { label: "Margin USDC available", value: `${fmtUsd(account.marginUsdc)} USDC` },
-        { label: "Perps value", value: `$${fmtUsd(account.venueValueUsd)}` },
-        { label: "Unsettled idle USDC", value: `${fmtUsd(account.idleUsdc)} USDC` },
+        { label: "Perps value (Phoenix)", value: `$${fmtUsd(account.venueValueUsd)}` },
+        { label: "USDC in Phoenix", value: `${fmtUsd(account.idleUsdc)} USDC` },
         { label: "Health factor", value: hf.label, color: hf.color },
         { label: "Total collateral", value: `$${fmtUsd(account.totalCollateralUsd)}` },
         { label: "Total debt", value: `$${fmtUsd(account.totalDebtUsd)}` },
@@ -56,6 +59,17 @@ export function PerpsAccountPanel({ account, walletConnected, isLoading }: Perps
               <span className={`text-right font-semibold ${row.color ?? primary}`}>{row.value}</span>
             </div>
           ))}
+          {account && account.idleUsdc > 0.01 && (
+            <button
+              type="button"
+              disabled={withdraw.isPending}
+              onClick={() => withdraw.mutate({})}
+              className="mx-1 mt-1 text-left text-[11px] font-semibold text-[#703AE6] hover:underline disabled:opacity-50 cursor-pointer"
+              title="Moves the USDC sitting in Phoenix back to your margin account. Open positions keep what they need: Phoenix refuses a withdrawal that would leave them under-collateralized."
+            >
+              {withdraw.isPending ? "Withdrawing…" : "Withdraw USDC to margin →"}
+            </button>
+          )}
         </div>
       )}
 
@@ -67,7 +81,7 @@ export function PerpsAccountPanel({ account, walletConnected, isLoading }: Perps
           Deposit / Borrow USDC on the Margin page →
         </Link>
         <p className={`px-1 mt-1 text-[10px] leading-[15px] ${muted}`}>
-          Perps collateral comes from your margin account&apos;s USDC. Liquidation happens at a health factor of 1.10.
+          Perps run on Phoenix. Collateral comes from your margin account&apos;s USDC (held in Phoenix as phUSD, cross-margined across markets). Liquidation happens at a health factor of 1.10.
         </p>
       </div>
     </div>

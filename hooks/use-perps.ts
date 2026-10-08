@@ -6,15 +6,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
 import { useAfterMarginTx } from '@/hooks/use-margin';
-import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView } from '@/lib/solana/perps';
+import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView, withdrawPerpCollateral } from '@/lib/solana/perps';
 import { openPerp } from '@/lib/solana/perps';
-import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryRow, PerpsView } from '@/lib/solana/perps-types';
+import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryRow, PerpsView, WithdrawPerpCollateralRequest } from '@/lib/solana/perps-types';
 import { describeError } from '@/lib/solana/errors';
 import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-progress';
 
 /**
- * The Perps page's on-chain state: listed markets (index price, leverage cap), the connected
- * wallet's positions and pending orders, and its margin account. Polled every few seconds so PnL
+ * The Perps page's on-chain state: listed Phoenix markets (index / mark price, leverage cap), the
+ * connected wallet's positions and its margin account. Polled every few seconds so PnL
  * follows the index price, and refetched on every ledger tick. Works without a wallet (markets only).
  */
 export const usePerpsView = () => {
@@ -41,7 +41,7 @@ export const usePerpsView = () => {
   };
 };
 
-/** The wallet's GMTrade history (decoded from on-chain transactions); fetched while `enabled`. */
+/** The wallet's Phoenix history (decoded from on-chain transactions); fetched while `enabled`. */
 export const usePerpsHistory = (enabled: boolean) => {
   const address = useUserStore((s) => s.address);
   const query = useQuery({
@@ -87,10 +87,14 @@ export const useOpenPerp = () =>
     'Order failed',
   );
 
-/** Close (or partly close) a position; its USDC is settled back into the margin account. */
+/** Close (or partly close) a position; once nothing is open its USDC goes back to the margin account. */
 export const useClosePerp = () =>
   useTx<ClosePerpRequest>((r) => `Closing ${r.market}-PERP ${r.side}`, (r) => closePerp(r, { onStatus: onTxStatus }), 'Close failed');
 
-/** Cancel a pending order; its escrowed USDC is settled back into the margin account. */
+/** Kept for older callers: Phoenix market orders fill immediately, so there is nothing to cancel. */
 export const useCancelPerpOrder = () =>
   useTx<CancelPerpRequest>((r) => `Cancelling ${r.market}-PERP ${r.side} order`, (r) => cancelPerpOrder(r, { onStatus: onTxStatus }), 'Cancel failed');
+
+/** Move USDC from Phoenix back into the margin account (all of it by default). */
+export const useWithdrawPerpCollateral = () =>
+  useTx<WithdrawPerpCollateralRequest>(() => 'Withdrawing USDC from Phoenix', (r) => withdrawPerpCollateral(r, { onStatus: onTxStatus }), 'Withdraw failed');

@@ -5,8 +5,9 @@
  * user_repay_from_margin (the only repay path), user_withdraw_collateral, user_reclaim_rent.
  *
  * Prices come from the oracle AGENT: health-checked instructions end their `remaining_accounts`
- * with its segment `[vanna_oracle, price_book, ...price accounts]`. A GMTrade venue account counts
- * as one holding at the value the oracle reports (idle + escrow + position equity).
+ * with its segment `[vanna_oracle, price_book, ...price accounts]`. The Phoenix venue (the margin's
+ * Phoenix trader account) counts as one holding at the value the oracle reports (collateral +
+ * position equity).
  *
  * Health model (V1, account-wide): HF = Σ collateral USD / Σ debt USD, liquidatable at HF <= 1.10.
  * The margin vault's live balance IS the collateral, and borrowed tokens land in the vault, so a
@@ -70,8 +71,8 @@ import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { ensureFreshPrices } from "./price-refresh";
 import { temporaryWsolReceiver, wrapSolInstructions } from "./wsol";
 import { readReserveRate, receiptByMint, underlyingForReceipts, type ReserveRate } from "./kamino";
-import { fetchMarketBook, readVenueState, type VenueState } from "./perps-state";
-import { venueAccountOf, venueOracleAccounts, type MarketBookState } from "./perps-accounts";
+import { loadPhoenixVenue, venueOracleAccounts, type PhoenixVenueContext } from "./phoenix-state";
+import { phoenixTraderPda } from "./phoenix";
 
 /** Sentinel for an empty slot in `collateral_asset_indexes` / `debt_asset_indexes`. */
 export const EMPTY_ASSET_INDEX = 65535;
@@ -96,14 +97,7 @@ export interface MarginAccountRaw {
   debtCount: number;
   collateralAssetIndexes: number[];
   debtAssetIndexes: number[];
-  /** Per venue (by asset index): the bitmap of legs (markets) that may hold exposure. */
-  venueLegs: { assetIndex: number; legs: bigint }[];
   eventSequence: bigint;
-}
-
-/** `MarginAccount::legs_of`: a venue's tracked legs (0 when none). */
-export function legsOf(raw: MarginAccountRaw | null, assetIndex: number): bigint {
-  return raw?.venueLegs.find((v) => v.legs !== 0n && v.assetIndex === assetIndex)?.legs ?? 0n;
 }
 
 export async function fetchMarginAccount(owner: PublicKey): Promise<MarginAccountRaw | null> {
@@ -118,7 +112,6 @@ export async function fetchMarginAccount(owner: PublicKey): Promise<MarginAccoun
     debtCount: Number(raw.debtCount),
     collateralAssetIndexes: (raw.collateralAssetIndexes as number[]).map(Number),
     debtAssetIndexes: (raw.debtAssetIndexes as number[]).map(Number),
-    venueLegs: ((raw.venueLegs ?? []) as any[]).map((v) => ({ assetIndex: Number(v.assetIndex), legs: big(v.legs) })),
     eventSequence: big(raw.eventSequence),
   };
 }
@@ -172,8 +165,8 @@ export interface MarginSnapshot {
   /** null = infinite (no debt). */
   healthFactor: number | null;
   healthFactorWad: bigint | null;
-  /** The GMTrade venue account, when the margin holds one (counted in the totals above). */
-  venue: VenueState | null;
+  /** The Phoenix venue, when the margin holds it (counted in the totals above). */
+  venue: PhoenixVenueContext | null;
   prices: Record<string, OnchainPrice | null>;
   /** Symbols whose on-chain price is older than their asset's max_price_age_secs. */
   stalePrices: string[];
@@ -231,7 +224,7 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     const a = assetMap.get(i);
     if (a) readAssets.set(i, a);
   }
-  // A venue isn't a token: the oracle values it from its venue account (below), not from a vault.
+  // A venue isn't a token: the oracle values it from the margin's Phoenix trader (below), not a vault.
   const assetList = [...readAssets.values()].filter((a) => a.kind === "token");
   const venueAsset = [...assetMap.values()].find((a) => a.kind === "venue" && activeCol.includes(a.assetIndex)) ?? null;
 
@@ -344,19 +337,18 @@ export async function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnaps
     }
   });
 
-  let venue: VenueState | null = null;
+  let venue: PhoenixVenueContext | null = null;
   if (venueAsset) {
-    const book = await fetchMarketBook(connection);
-    if (book) {
-      venue = await readVenueState(connection, margin, book, legsOf(raw, venueAsset.assetIndex), now);
+    venue = await loadPhoenixVenue(connection, margin, now);
+    if (venue) {
       // Counted at full value, like every holding (the guide: LTV/threshold aren't used yet).
       totalCollateralNano += venue.valueNano;
       collateral.push({
-        symbol: "GMTrade",
+        symbol: "Phoenix",
         token: null,
         assetIndex: venueAsset.assetIndex,
         mint: venueAsset.mint,
-        vault: venue.venueAccount,
+        vault: phoenixTraderPda(margin),
         amountRaw: 0n,
         amount: 0,
         valueNano: venue.valueNano,
@@ -410,8 +402,6 @@ export class MarginIndexModel {
   debt: number[];
   /** Simulated vault balances per asset index (only used for was-zero decisions). */
   vault = new Map<number, bigint>();
-  /** Tracked venue legs per venue asset index (`MarginAccount::venue_legs`). */
-  venueLegs = new Map<number, bigint>();
   /** Simulated debt shares > 0 per asset index. */
   hasDebt = new Set<number>();
 
@@ -421,7 +411,6 @@ export class MarginIndexModel {
     for (const c of snapshot?.collateral ?? []) this.vault.set(c.assetIndex, c.amountRaw);
     for (const d of snapshot?.debts ?? []) if (d.borrowShares > 0n) this.hasDebt.add(d.assetIndex);
     for (const i of this.debt) if (i !== EMPTY_ASSET_INDEX) this.hasDebt.add(i);
-    for (const v of raw?.venueLegs ?? []) if (v.legs !== 0n) this.venueLegs.set(v.assetIndex, v.legs);
   }
 
   private add(list: number[], index: number) {
@@ -473,13 +462,13 @@ export class MarginIndexModel {
   }
 
   /**
-   * `margin_execute` at a venue: an order that opens a leg puts the venue on the collateral list
-   * and tracks the leg. Funding from the USDC vault never deactivates it.
+   * `margin_execute` at a venue: a call the validator marks `opens_venue` (a deposit into Phoenix,
+   * an order) puts the venue on the collateral list; once the venue holds nothing (`closes`: the
+   * whole Phoenix balance withdrawn, no position left) it leaves.
    */
-  venueCall(venueIndex: number, openedLeg: number | null) {
-    if (openedLeg === null) return;
-    this.add(this.collateral, venueIndex);
-    this.venueLegs.set(venueIndex, (this.venueLegs.get(venueIndex) ?? 0n) | (1n << BigInt(openedLeg)));
+  venueCall(venueIndex: number, opens: boolean, closes = false) {
+    if (opens) this.add(this.collateral, venueIndex);
+    if (closes) this.remove(this.collateral, venueIndex);
   }
 
   /** Repay that fully clears the debt (and, from margin, may empty the vault). */
@@ -497,12 +486,12 @@ export class MarginIndexModel {
 
 const readonlyMeta = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false });
 
-/** The venue part of a scan when the margin holds (or a call targets) the GMTrade venue. */
+/** The venue part of a scan when the margin holds (or a call targets) the Phoenix venue. */
 export interface VenueScan {
-  book: MarketBookState;
-  /** Legs to value on top of the tracked ones (the guide's `venueLegs`: the call's target market). */
-  extraLegs?: bigint;
-  /** A call AT the venue: the program values the venue account even before a leg is tracked. */
+  venue: PhoenixVenueContext;
+  /** Markets to value on top of the open ones (a call's target market). */
+  extraAssetIds?: number[];
+  /** A call AT the venue: the program values the venue even before it is on the collateral list. */
   always?: boolean;
 }
 
@@ -510,16 +499,17 @@ export interface VenueScan {
  * Builds a health-checked instruction's `remaining_accounts` as the guide's "Position accounts in
  * remaining_accounts" (port of `scripts/src/devnet-positions.ts::buildRemainingAccounts`):
  *   1. collateral groups in the margin's SLOT order (skip 65535), minus `exclude`:
- *      `[asset_config, margin vault]`, or `[asset_config, venue account]` for GMTrade;
+ *      `[asset_config, margin vault]`, or `[asset_config, margin]` for the Phoenix venue;
  *   2. debt groups `[asset_config, reserve, debt_position]`, minus `exclude.debt`;
  *   3. `extraGroups` (margin_execute's `new_assets` groups);
  *   4. the oracle segment `[vanna_oracle, price_book, ...]`: the price accounts of EVERY active
- *      position (excluded ones too) and of `priced`, each once; with GMTrade also the market book,
- *      USDC price accounts, venue USDC ATA and every tracked (+ extra) leg's accounts.
+ *      position (excluded ones too) and of `priced`, each once; with Phoenix also the market book,
+ *      exchange, perp asset map, the trader, USDC price accounts and each open (+ extra) market's
+ *      orderbook and index price accounts.
  */
 export function buildHealthRemainingAccounts(
   margin: PublicKey,
-  model: { collateral: number[]; debt: number[]; venueLegs?: Map<number, bigint> },
+  model: { collateral: number[]; debt: number[] },
   assetMap: Map<number, AssetConfigState>,
   exclude: { collateral?: number[]; debt?: number } = {},
   priced: AssetConfigState[] = [],
@@ -530,14 +520,14 @@ export function buildHealthRemainingAccounts(
   const skipCol = new Set(exclude.collateral ?? []);
   const writable = new Set((opts.writable ?? []).map((k) => k.toBase58()));
   const meta = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: writable.has(pubkey.toBase58()) });
-  let venueLegs: bigint | null = null;
+  let holdsVenue = false;
   for (const index of model.collateral) {
     if (index === EMPTY_ASSET_INDEX) continue;
     const asset = assetMap.get(index);
     if (!asset) throw new Error(`Active collateral asset index ${index} has no AssetConfig on-chain`);
     if (asset.kind === "venue") {
-      venueLegs = model.venueLegs?.get(index) ?? 0n;
-      if (!skipCol.has(index)) metas.push(meta(asset.address), meta(venueAccountOf(margin)));
+      holdsVenue = true;
+      if (!skipCol.has(index)) metas.push(meta(asset.address), meta(margin));
       continue;
     }
     oracles.push(...asset.oracleAccounts);
@@ -554,9 +544,9 @@ export function buildHealthRemainingAccounts(
     metas.push(meta(asset.address), meta(reserve), meta(debtPositionPda(margin, reserve)));
   }
   metas.push(...(opts.extraGroups ?? []));
-  if (venueLegs !== null || opts.venue?.always) {
-    if (!opts.venue) throw new Error("This margin account holds GMTrade positions — refresh and try again");
-    oracles.push(...venueOracleAccounts(venueAccountOf(margin), opts.venue.book, (venueLegs ?? 0n) | (opts.venue.extraLegs ?? 0n)));
+  if (holdsVenue || opts.venue?.always) {
+    if (!opts.venue) throw new Error("This margin account holds Phoenix positions — refresh and try again");
+    oracles.push(...venueOracleAccounts(margin, opts.venue.venue, opts.venue.extraAssetIds ?? []));
   }
   metas.push(readonlyMeta(ORACLE_PROGRAM_ID), readonlyMeta(priceBookPda()));
   const seen = new Set<string>([ORACLE_PROGRAM_ID.toBase58(), priceBookPda().toBase58()]);
@@ -769,15 +759,15 @@ export interface BatchContext {
   assetMap: Map<number, AssetConfigState>;
   pools: Record<string, PoolState>;
   model: MarginIndexModel;
-  /** The GMTrade market book, when the margin holds a venue account (or a GMTrade call needs it). */
-  venueBook: MarketBookState | null;
+  /** The Phoenix venue, when the margin holds it (or a Phoenix call loads it). */
+  venue: PhoenixVenueContext | null;
   instructions: TransactionInstruction[];
   suffix: TransactionInstruction[];
 }
 
-/** The venue part of this batch's health scans (undefined when GMTrade isn't involved). */
+/** The venue part of this batch's health scans (undefined when Phoenix isn't involved). */
 export function venueScan(ctx: BatchContext): VenueScan | undefined {
-  return ctx.venueBook ? { book: ctx.venueBook } : undefined;
+  return ctx.venue ? { venue: ctx.venue } : undefined;
 }
 
 export async function loadContext(owner: PublicKey): Promise<BatchContext> {
@@ -789,7 +779,7 @@ export async function loadContext(owner: PublicKey): Promise<BatchContext> {
     assetMap,
     pools,
     model: new MarginIndexModel(snapshot.raw, snapshot),
-    venueBook: snapshot.venue?.book ?? null,
+    venue: snapshot.venue,
     instructions: [],
     suffix: [],
   };
