@@ -2,7 +2,7 @@
 
 /**
  * Spot screen (design prototype V3, spot.js view): the swap card (Jupiter / Titan inside the margin
- * account) with the "Margin account" block beside it, and Positions | Position History below. Without a
+ * account) with the "Margin account" block beside it, and Position History below. Without a
  * wallet only the swap card shows, centred, as in the design.
  */
 import "./spot-v3.css";

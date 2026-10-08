@@ -94,14 +94,6 @@ html.dark .v3{
 .v3 .sp-max:hover{color:#8d61eb}
 .v3 .sp-usd{font-size:12px;font-weight:500;line-height:18px;color:var(--sp-dim);margin-left:auto}
 .v3 .sp-bal .info-i{margin-left:-4px}
-.v3 .sp-coll{flex-basis:100%;display:flex;align-items:center;gap:8px;margin-top:2px;font-size:12px;font-weight:500;line-height:18px;color:var(--label);cursor:pointer}
-.v3 .sp-coll input{position:absolute;opacity:0;pointer-events:none}
-.v3 .sp-sw{width:28px;height:16px;border-radius:99px;background:var(--line-2);position:relative;flex:none;transition:background .15s}
-.v3 .sp-sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .15s}
-.v3 .sp-coll input:checked + .sp-sw{background:var(--violet)}
-.v3 .sp-coll input:checked + .sp-sw::after{transform:translateX(12px)}
-.v3 .sp-coll input:focus-visible + .sp-sw{outline:2px solid var(--violet);outline-offset:2px}
-.v3 .sp-coll b{font-weight:600;color:var(--text)}
 .v3 .sp-paid{flex-basis:100%;display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-top:4px;padding:6px 10px;border-radius:8px;background:var(--field);border:1px solid var(--line-row);font-size:12px;font-weight:500;line-height:18px;color:var(--label)}
 .v3 .sp-pk{font-weight:600;color:var(--text)}
 .v3 .sp-pv{display:inline-flex;align-items:center;gap:4px 6px;flex-wrap:wrap;min-width:0}
@@ -275,4 +267,3 @@ html.dark .v3{
 /* App additions (not in the design file) */
 .v3 .sp-afoot .btn-s{display:inline-flex;align-items:center;gap:6px}
 .v3 .sp-afoot .btn-s:disabled{opacity:.5;cursor:not-allowed}
-.v3 .sp-coll input:disabled + .sp-sw{opacity:.85}

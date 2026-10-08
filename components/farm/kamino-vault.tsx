@@ -6,14 +6,14 @@
  *
  * Data: Kamino reserve metrics (`useFarmPool`), the margin account's cTokens for this vault and their
  * earnings ({@link useFarmAccount}), this vault's farm-deposit / farm-withdraw events from the margin
- * account's on-chain history. There is no position-value time series on chain, so "My Vault Position"
- * shows today's value (and earnings) rather than a chart.
+ * account's on-chain history. There is no position-value time series on chain, so the position summary
+ * shows today's value and earned yield.
  */
 import "./farm-v3.css";
 import { useState } from "react";
 import { Icon, IC } from "@/components/v3/icons";
 import { Info, Seg } from "@/components/v3/ui";
-import { cmp, pct, sUsd, tokFmt, usd } from "@/components/v3/format";
+import { cmp, nf, pct, tokFmt, usd } from "@/components/v3/format";
 import { explorerUrl } from "@/lib/solana/config";
 import { useFarmPool } from "@/lib/farm/use-farm";
 import type { FarmPoolConfig } from "@/lib/farm/pools";
@@ -26,6 +26,7 @@ const COLS = {
     ["Asset", "1.2fr"],
     ["Protocol", "1fr"],
     ["Supplied", "1.2fr"],
+    ["Receipt balance", "1.2fr"],
     ["APY", ".8fr"],
   ],
   history: [
@@ -177,6 +178,7 @@ function Transactions({ pool, position, farm }: { pool: FarmPoolConfig; position
             />,
             <Cell key="p" v={<Venue name="Kamino" />} />,
             <Cell key="s" v={tokFmt(position.underlying, pool.symbol)} mini={usd(position.liquidityUsd)} />,
+            <Cell key="r" v={`${nf(position.receipts, 6)} ${pool.receiptSymbol}`} />,
             <Cell key="y" v={m(pool.supplyApy, "pct")} />,
           ],
         ]
@@ -205,29 +207,15 @@ function Transactions({ pool, position, farm }: { pool: FarmPoolConfig; position
 
   return (
     <>
-      <article className="fm-mvp">
-        <h2>My Vault Position</h2>
-        <p className="fm-mvv num">{position ? usd(position.liquidityUsd) : "—"}</p>
-        {position ? (
-          <p className="fm-mvs num">
-            <span>
-              {tokFmt(position.underlying, pool.symbol)} redeemable ·{" "}
-              {position.earnedUsd === null ? (
-                "earnings unknown (history incomplete)"
-              ) : (
-                <span className={position.earnedUsd >= 0 ? "pos" : "neg"}>
-                  {sUsd(position.earnedUsd)} earned{position.since ? ` since ${new Date(position.since).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
-                </span>
-              )}
-            </span>
-          </p>
-        ) : (
-          <div className="fm-nopos">No position in this vault yet</div>
-        )}
-      </article>
-
+      <dl className="fm-position-summary num">
+        <div><dt>Position value</dt><dd>{position ? usd(position.liquidityUsd) : "—"}</dd></div>
+        <div><dt>Receipt balance</dt><dd>{position ? `${nf(position.receipts, 6)} ${pool.receiptSymbol}` : "—"}</dd></div>
+        <div><dt>Earned yield</dt><dd>{position?.earnedUsd != null ? usd(position.earnedUsd) : "—"}</dd>
+          {position?.since && <small>Since {new Date(position.since).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>}
+        </div>
+      </dl>
       <div className="fm-ath">
-        <h2>All Transactions</h2>
+        <h2>{tab === "current" ? "Your Position" : "Position History"}</h2>
         <div className="fm-athr">
           <span className="fm-vl">{types.length ? types.join(", ") : "All"}:</span>
           <CheckDropdown

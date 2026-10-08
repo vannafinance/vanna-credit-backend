@@ -144,7 +144,7 @@ export function BottomPanel({
           </div>
         ) : (
           <>
-            <div className="px-tbl-w">
+            <div className="px-tbl-w px-positions-table" role="region" aria-label="Open positions" tabIndex={0}>
               <table className="px-tbl num">
                 <thead>
                   <tr>
@@ -217,39 +217,6 @@ export function BottomPanel({
                   ))}
                 </tbody>
               </table>
-            </div>
-            <div className="px-cards num">
-              {rows.map((r) => (
-                <div key={r.key} className="px-card">
-                  <div className="px-card-h">
-                    <span className="px-mk">
-                      <Img src={marketIcon(r.key)} className="px-mk-ic" />
-                      <b>{r.key}-PERP</b>
-                    </span>
-                    <SideTag s={r.side} />
-                    <span className="px-card-lev">{levFmt(r.leverage)}</span>
-                    <button type="button" className="px-btn-s" disabled={busy} onClick={() => setClosing({ row: r, pct: 100 })}>
-                      Close
-                    </button>
-                  </div>
-                  <div className="px-card-g">
-                    <Cell k="Position size">
-                      {tokAmt(r.tokens, r.key)} {r.key}
-                    </Cell>
-                    <Cell k="PnL (ROE)">
-                      <span className={upDn(r.pnl)}>
-                        {sUsd(r.pnl)} ({r.collateral > 0 ? spct((r.pnl / r.collateral) * 100) : "—"})
-                      </span>
-                    </Cell>
-                    <Cell k="Entry">${price(r.entry)}</Cell>
-                    <Cell k="Mark">${price(r.mark)}</Cell>
-                    <Cell k="Liq. price">
-                      <LiqCell row={r} hf={hf} />
-                    </Cell>
-                    <Cell k="Equity">{usd(r.equity)}</Cell>
-                  </div>
-                </div>
-              ))}
             </div>
           </>
         )

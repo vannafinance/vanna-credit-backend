@@ -479,3 +479,12 @@ html.dark .px-root{
   .px-mkt .px-stats{flex:1;justify-content:space-between;gap:20px}
   .px-ven{margin-left:0}
 }
+
+/* Positions remain a complete trading table at every width. Keep the Close action visible
+   while narrow panels scroll across the data columns. */
+.px-positions-table{border:0;border-radius:0;padding:0;min-height:0;scrollbar-width:thin}
+.px-positions-table .px-tbl{min-width:820px}
+.px-positions-table .px-tbl th{height:42px;padding:10px 12px}
+.px-positions-table .px-tbl td{padding:16px 12px}
+.px-positions-table .px-tbl tbody tr:hover{background:var(--px-in)}
+.px-positions-table .px-tbl th:last-child,.px-positions-table .px-tbl td:last-child{position:sticky;right:0;background:var(--px-in);border-left:1px solid var(--px-bd)}

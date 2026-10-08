@@ -14,6 +14,10 @@
  * program-exact (`useV3Account` model): the cTokens replace the supplied asset at the same value.
  */
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getConnection } from "@/lib/solana/connection";
+import { KLEND_PROGRAM_ID, readReserveRate, receiptForUnderlying } from "@/lib/solana/kamino";
+import { receiptPreview } from "@/lib/farm/receipt-preview";
 import { BeforeAfter, Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
 import { hfFmt, nf, pct, tokFmt, usd } from "@/components/v3/format";
@@ -107,6 +111,23 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
 
   const available = hasMarginAccount ? parseFloat(collateralBalances[token]?.amount ?? "0") || 0 : 0;
   const amount = parseFloat(value) || 0;
+  const receipt = receiptForUnderlying(token);
+  const rateQuery = useQuery({
+    queryKey: ["farm", "receipt-rate", pool.reserve],
+    enabled: Boolean(receipt) && amount > 0,
+    staleTime: 15_000,
+    refetchInterval: amount > 0 ? 30_000 : false,
+    queryFn: async () => {
+      if (!receipt) throw new Error("Receipt not configured");
+      const info = await getConnection().getAccountInfo(receipt.reserve, "confirmed");
+      if (!info?.owner.equals(KLEND_PROGRAM_ID)) throw new Error("Reserve unavailable");
+      const rate = readReserveRate(info.data, receipt.collateralMint);
+      if (!rate.liquidityMint.equals(findToken(token)!.mint)) throw new Error("Reserve asset mismatch");
+      return rate;
+    },
+  });
+  const estimatedReceipts = receiptPreview(rateQuery.data, value);
+
   const deposit = useFarmDeposit();
   const isPending = deposit.isPending;
   const overBalance = amount > available + 1e-12;
@@ -222,6 +243,10 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
               <span>
                 <BeforeAfter a={tokFmt(held, token, false)} b={tokFmt(held + amount, token, false)} />
               </span>
+            </div>
+            <div className="kv">
+              <span>Est. receipt received <Info text="Estimated from the reserve's current exchange rate, rounded down to receipt-token precision. The final amount may change slightly when the transaction executes." /></span>
+              <span aria-live="polite">{rateQuery.isFetching && !rateQuery.data ? "Loading…" : estimatedReceipts !== null ? `≈ ${estimatedReceipts} ${pool.receiptSymbol}` : "Unavailable"}</span>
             </div>
             <div className="kv">
               <span>APY</span>

@@ -653,18 +653,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
               <span />
             )}
             {amountInUsd && <span className="sp-usd num">~ ${amountInUsd}</span>}
-            {/* The design's "Use collateral" switch, shown honestly: there is no idle / collateral
-                split in a Vanna margin account, so it is always on and can't be turned off. */}
-            {isWalletConnected && hasMarginAccount && tokenIn && balanceNum(tokenInBalance) > 0 && (
-              <label className="sp-coll" aria-disabled="true" style={{ cursor: "default" }}>
-                <input type="checkbox" checked readOnly disabled />
-                <span className="sp-sw" aria-hidden="true" />
-                <span>
-                  Collateral is swappable <b className="num">{tokFmtSwap(tokenInBalance, tokenIn.symbol)} {tokenIn.symbol}</b>
-                </span>
-                <Info text="Every token in your Vanna margin account is collateral and swappable at once — there is no separate idle balance to pick from, so this is always on. Swapping sells collateral directly; the on-chain health check runs after the swap." />
-              </label>
-            )}
+
           </div>
         </div>
 

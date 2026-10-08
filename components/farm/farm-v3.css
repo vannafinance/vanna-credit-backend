@@ -218,12 +218,13 @@ html.dark .v3 .fm-tabs{border-color:#333}
 .v3 .fm-athr{display:flex;align-items:center;gap:12px}
 .v3 .fm-cust{height:48px;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:var(--field);display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--text)}
 .v3 .fm-seg-l{align-self:flex-start}
-.v3 .fm-itbl{min-height:220px;border:1px solid var(--line);border-radius:16px;background:var(--fm-itbl);padding:8px 16px;overflow-x:auto}
+.v3 .fm-itbl{border-block:1px solid var(--line);background:transparent;padding:0;overflow-x:auto;scrollbar-width:thin}
 .v3 .fm-it-h,.v3 .fm-it-r{display:grid;gap:16px;align-items:center;min-width:520px}
 .v3 .fm-it-h.k4,.v3 .fm-it-r.k4{grid-template-columns:1.2fr 1fr 1.2fr .8fr}
 .v3 .fm-it-h.k5,.v3 .fm-it-r.k5{grid-template-columns:1.1fr .9fr 1.1fr .8fr 1fr}
-.v3 .fm-it-h{font-size:13px;font-weight:500;color:var(--fm-th);padding:8px 0}
-.v3 .fm-it-r{padding:12px 0;border-top:1px solid var(--line-row)}
+.v3 .fm-it-h{font-size:12px;font-weight:500;color:var(--label);padding:14px 12px}
+.v3 .fm-it-r{padding:18px 12px;border-top:1px solid var(--line-row)}
+.v3 .fm-it-r:hover{background:var(--field)}
 .v3 .fm-it-e{min-height:200px;display:grid;place-items:center;font-size:14px;font-weight:500;color:var(--sp-dim,#a7a7a7)}
 .v3 .fm-h21{font-size:21px;font-weight:600;color:var(--text)}
 .v3 .fm-scg{display:grid;grid-template-columns:1fr;gap:16px}
@@ -358,3 +359,10 @@ html:not(.dark) .v3 .fm-act.k .fm-cta:disabled{background:#a7a7a7;color:#fff}   
 .v3 .fm-mvs{font-size:12px;font-weight:500;color:var(--label)}
 .v3 .fm-tokw{position:relative}
 .v3 .fm-act .fm-dnnote{justify-content:center;margin-top:0;text-align:center}
+
+/* Vault overview: a single summary strip above the position rows. */
+.v3 .fm-position-summary{display:flex;gap:24px;flex-wrap:wrap;padding:0 0 20px;border-bottom:1px solid var(--line)}
+.v3 .fm-position-summary > div{flex:1;min-width:120px;display:flex;flex-direction:column;gap:8px}
+.v3 .fm-position-summary dt{font-size:12px;color:var(--label)}
+.v3 .fm-position-summary dd{font-size:17px;font-weight:600;color:var(--text)}
+.v3 .fm-position-summary small{font-size:11px;color:var(--label);font-weight:400}
