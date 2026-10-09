@@ -5,7 +5,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/shallow";
 import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
-import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
+import { useWallet } from "@/hooks/use-wallet";
+import { refreshAfterTx } from "@/lib/after-tx";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { useV3Account } from "@/hooks/use-v3-account";
 import { PublicKey } from "@solana/web3.js";
@@ -423,12 +424,8 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
       setTxHash(signature);
       showTxSuccess(`Swapped ${amountIn} ${tokenIn?.symbol} for ${tokenOut?.symbol}`);
       setAmountIn("");
-      if (userAddress) {
-        void refreshWalletBalancesOnChain(userAddress).catch(() => {});
-        void refreshMarginAccount(userAddress).catch(() => {});
-      }
-      // New swap row in the Swap history (and every other margin view).
-      void queryClient.invalidateQueries({ queryKey: ["margin"] });
+      // Account snapshot (wallet + margin balances) first; the new swap row in history shortly after.
+      void refreshAfterTx(queryClient, ["margin"]);
     },
     onError: (error) => {
       const errorMsg = describeError(error, "Swap failed");

@@ -12,8 +12,7 @@ import { fetchFarmPositions, listFarmPools, type FarmPosition } from "@/lib/sola
 import { farmDeposit, farmWithdraw, type FarmDepositRequest, type FarmWithdrawRequest } from "@/lib/solana/exec";
 import { describeError } from "@/lib/solana/errors";
 import { onTxStatus, showTxError, showTxStep, showTxSuccess } from "@/lib/tx-progress";
-import { refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
-import { useUserStore } from "@/store/user";
+import { refreshAfterTx } from "@/lib/after-tx";
 import { FARM_POOLS_PLACEHOLDER, type FarmPoolConfig } from "./pools";
 
 export function useFarmPools(): { pools: FarmPoolConfig[]; isLoading: boolean; error: string | null } {
@@ -48,15 +47,8 @@ export function useFarmPositions(owner: string | null | undefined): { positions:
 
 function useAfterFarmTx() {
   const qc = useQueryClient();
-  return async () => {
-    const address = useUserStore.getState().address;
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["farm"] }),
-      qc.invalidateQueries({ queryKey: ["margin"] }),
-      qc.invalidateQueries({ queryKey: ["earn"] }),
-      address ? refreshWalletBalancesOnChain(address).catch(() => {}) : Promise.resolve(),
-    ]);
-  };
+  // Farm positions and the account snapshot first, history and other views later.
+  return () => refreshAfterTx(qc, ["farm", "margin", "earn"]);
 }
 
 /** Supply margin-account balance to a Kamino vault (`margin_execute` Kamino deposit). */

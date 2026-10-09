@@ -9,7 +9,7 @@ import { hfFmt, levFmt, usdC } from "@/components/v3/format";
 import { LIQ_HF, hfZone } from "@/lib/account-model";
 import { useWallet } from "@/hooks/use-wallet";
 import { useFarmPositions } from "@/lib/farm/use-farm";
-import { applyMarginSnapshot, checkUserMarginAccount } from "@/store/margin-account-info-store";
+import { applyMarginSnapshot } from "@/store/margin-account-info-store";
 import { useAccountSnapshot } from "@/hooks/use-account-snapshot";
 import { useMarginScreen } from "./use-margin-screen";
 import { liqBuffer, noDebt } from "./mg-sim";
@@ -49,7 +49,7 @@ const TABS: [Tab, string, string][] = [
 export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { connectWallet, refreshBalances } = useWallet();
+  const { connectWallet } = useWallet();
   const m = useMarginScreen();
   const { positions: farm } = useFarmPositions(m.address);
   const [tab, setTab] = useState<Tab>("lev");
@@ -82,15 +82,8 @@ export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Discover the margin account whenever the wallet connects (margin state is reset on
-  // disconnect and rediscovered from chain — nothing is persisted client-side).
-  useEffect(() => {
-    if (m.address && m.connected) {
-      checkUserMarginAccount(m.address).catch(console.error);
-      refreshBalances(m.address).catch(() => {});
-    }
-  }, [m.address, m.connected, refreshBalances]);
-
+  // The margin account and wallet balances are loaded by the root MarginAccountHydrator from the
+  // shared account snapshot; this page reads the same query instead of re-reading from the browser.
   // Feed each fresh snapshot into the store (shallow replace) so every consumer reads the same numbers.
   const { snapshot } = useAccountSnapshot(m.address);
   useEffect(() => {

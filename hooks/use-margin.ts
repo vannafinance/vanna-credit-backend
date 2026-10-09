@@ -5,8 +5,7 @@ import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
-import { refreshMarginAccount } from '@/store/margin-account-info-store';
-import { refreshWalletBalancesOnChain } from '@/hooks/use-wallet';
+import { refreshAfterTx } from '@/lib/after-tx';
 import {
   depositAndBorrow,
   repay,
@@ -51,15 +50,8 @@ export const useMarginHistory = () => {
 /** Refresh everything a margin transaction can change. */
 export function useAfterMarginTx() {
   const qc = useQueryClient();
-  return async () => {
-    const address = useUserStore.getState().address;
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ['margin'] }),
-      qc.invalidateQueries({ queryKey: ['earn'] }),
-      address ? refreshMarginAccount(address) : Promise.resolve(),
-      address ? refreshWalletBalancesOnChain(address).catch(() => {}) : Promise.resolve(),
-    ]);
-  };
+  // Account snapshot first (the hydrator copies it into the margin and wallet stores), history later.
+  return () => refreshAfterTx(qc, ['margin', 'earn']);
 }
 
 const describeItems = (items: AmountItem[]) => items.map((i) => `${i.amount} ${i.symbol}`).join(' + ');
