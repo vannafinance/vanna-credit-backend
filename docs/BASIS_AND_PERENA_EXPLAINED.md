@@ -1,6 +1,8 @@
 # Vanna Farm: Basis aur Perena vaults ka detailed working guide
 
-**Code review date: 9 October 2026. Language: Hinglish.**
+**Initial review: 9 October 2026. PDF/UI audit updated: 10 October 2026 (IST). Language: Hinglish.**
+
+**Latest screenshot ke liye [section 15](#15-10-october-audit-screenshot-values-ka-source-aur-pdf-comparison) padhein.** Current UI missing APY ko `0.00%` render karti hai; ye measured zero return nahi. PDF ke saare analytics/fallbacks abhi implement nahi hue hain. Neeche contract explanation aur latest UI audit ko alag rakha gaya hai.
 
 Ye guide current local integration aur contracts ko explain karti hai: paisa kahan jata hai, kaunse instructions execute hote hain, shares kaise calculate hote hain, aur withdrawal mein kya hota hai. Examples educational calculations hain; future transaction quotes ya returns nahi.
 
@@ -455,7 +457,7 @@ APY% = ((current_price / historical_price)^(365 / elapsed_days) − 1) × 100
 
 Example: 7 days mein price 1 → 1.002, annualized APY approximately **10.98%**, actual 7-day gain sirf **0.2%**. Future return guaranteed nahi.
 
-7/30-day observation missing ho to `—` correct output hai. Hourly samples access/API polling par save hote hain; matching historical point target time ke at/before aur 2 hours ke within chahiye. Fork ke static/restamped Perena NAV se real mainnet yield infer nahi karni. Source: [NAV history](../lib/farm/nav-history.ts).
+7/30-day observation missing ho to calculation `null` return karti hai. **10 October ke current UI mein ye `0.00%` dikhta hai**; pehle guide mein described `—` behavior ab current nahi hai. Hourly samples access/API polling par save hote hain; matching historical point target time ke at/before aur 2 hours ke within chahiye. Fork ke static/restamped Perena NAV se real mainnet yield infer nahi karni. Source: [NAV history](../lib/farm/nav-history.ts), [current APY rendering](../components/farm/basis/basis-vault.tsx).
 
 ## 12. Vanna borrowing aur vault ke internal short alag hain
 
@@ -508,3 +510,222 @@ Previous integration run ne seven vaults ke 10-USDC deposit/withdraw round trips
 | Public Junior allocation/exit model | [USD* Junior](https://perena.gitbook.io/perena/products/usd-junior) |
 
 Implementation facts ka primary source current repository hai. External Perena design ke liye official docs use hui hain; external fee settings/product rules aur actual fork deployment ko interchangeable nahi maana gaya.
+
+## 15. 10 October audit: screenshot values ka source aur PDF comparison
+
+Reference: [Vanna frontend integration basis vaults and Perena vaults.pdf](Vanna%20frontend%20integration%20basis%20vaults%20and%20Perena%20vaults.pdf), especially printed pages 5–10 ke field tables/history formulas, position/borrow examples, aur final acceptance checklist. PDF target specification hai; neeche current implementation se actual comparison hai.
+
+**Finding: contract-based NAV, share pricing aur delta ka core calculation aligned hai. Complete UI/analytics implementation PDF ke according nahi hai.** Missing APY fallbacks, incomplete capacity calculation aur different fee-attribution/position-value semantics important differences hain. Is audit mein application code change ya deployment nahi hua.
+
+### 15.1 Data pipeline: teen alag sources
+
+```mermaid
+flowchart TD
+    R[Surfpool RPC: vault, mint, trader and oracle accounts] --> S[getVaultState: Hawkeye views and account reads]
+    S --> API[/api/farm/vaults]
+    API --> U[Farm list and Basis page]
+    API --> H[Hourly share-price observations]
+    H --> A[7D / 30D / 90D return calculations]
+    A --> U
+    P[Phoenix MAINNET public REST and WebSocket] --> F[Hourly funding percent times 8760]
+    F --> U
+    M[Connected margin account and transaction history] --> V[Receipt balance, collateral value and cash flows]
+    V --> U
+```
+
+TVL/delta/share price fork accounts se aate hain. Funding **Phoenix mainnet** se aati hai, exactly jaisa PDF page 5 note karta hai. Wallet position margin account se aati hai. In sources ko ek hi continuously settled mainnet portfolio samajhna correct nahi.
+
+### 15.2 Live API verification — screenshot ke actual numbers
+
+Public read-only endpoints check kiye:
+
+- [SOL vault state](https://test.solana.vanna.finance/api/farm/vaults?id=basis-sol)
+- [SOL share-price history](https://test.solana.vanna.finance/api/farm/vaults/history?id=basis-sol)
+- [SOL funding](https://test.solana.vanna.finance/api/farm/funding?symbol=SOL)
+
+Ye moving endpoints hain; neeche **audit ke waqt observed response** hai, permanently fixed values nahi:
+
+| Field | Observed value |
+| --- | ---: |
+| `navUsd` | 421.269195 |
+| `sharePriceUsd` | 0.982227 |
+| `assetUnits` | 3.842274388 SOL |
+| `markPriceUsd` | 110.03 |
+| `assetValueUsd` | 422.765450 |
+| `phoenixEquityUsd` | −1.496255 |
+| `shortUsd` | 422.515200 |
+| `netDeltaPct` | 0.0592 |
+| `capUsd` | 100000 |
+| `maxDepositUsd` | 100000 |
+| `apy7` / `apy30` | **null / null** |
+| Stored price observations | **9** |
+| First observation, IST | 9 Oct 2026, 13:23:41 |
+| Last observation, IST | 10 Oct 2026, 00:02:39 |
+| History span | **10.65 hours**, not 7 days |
+| Latest REST hourly funding | 0.003455% |
+| REST rate timestamp, IST | 9 Oct 2026, 23:30:00 |
+
+Math reproduce karne par:
+
+```text
+TVL = 422.765450 − 1.496255 = $421.269195 → $421.27
+
+Delta% = (422.765450 − 422.515200) / 422.515200 × 100
+       ≈ 0.0592286% → API truncates to 0.0592% → UI +0.06%
+
+Funding APR = 0.003455% per hour × 24 × 365
+            = 30.2658% → +30.3% at this REST observation
+```
+
+Screenshot ke +31.2% aur list ke +30.8% different fetch times/live WebSocket values ho sakte hain. Current code REST se pehle available WebSocket `funding` use karta hai. Screenshot ke exact historical WebSocket frames capture nahi hain, isliye un dono rates ka precise input independently reconstruct nahi kiya gaya.
+
+### 15.3 Har visible field: source, formula, status
+
+| UI field | Current source and formula | PDF comparison / interpretation |
+| --- | --- | --- |
+| Asset / receipt / protocol | `VAULTS` catalogue: name, symbol, mint, asset; Jupiter/Phoenix labels | Static metadata; market data nahi |
+| TVL / dollar Total Deposits | `getVaultState`: `max(assetValue + collateral + unsettledFunding + unrealizedPnl, 0)`; raw USD / 1e6 | Core NAV formula matches |
+| Total Deposits in vbSOL | **UI computes `navUsd / sharePriceUsd`** | Approximate shares; exact share mint supply read/display nahi ki gayi |
+| Share price | SDK `shareValue(1e6, nav, supply) / 1e6`, including virtual $1 / one share | Contract pricing aligned |
+| Funding Now | WS `market.funding`, else REST `fundingRatePercentage`; hourly percent × 8760 | Annualization aligned; mainnet market APR, not vault APY |
+| Net Delta | `(assetValue − shortNotional) / shortNotional × 100` | Equivalent at the same mark with token multiplier accounted for |
+| Capacity | Only `maxPositionUsd / 1e6` | **Incomplete:** PDF asks first binding cap, not only notional limit |
+| Capacity used | `NAV / displayed cap × 100` | **Not exact exposure-cap utilization:** mixes NAV and short-notional limit |
+| Vault APY 7D | Hourly price history compounded return; `null` rendered as zero | Formula aligned; PDF fallback chain missing |
+| Receipt balance | Margin receipt ATA balance / 1e6 | Matches margin-held-share requirement |
+| Position value / holding USD | `positionOf → holding.usd` from margin snapshot / Vanna collateral oracle | Counts-in-health value; **not separately shown withdrawal-at-NAV value** |
+| Earned yield | `position.valueUsd + withdrawals_USDC − deposits_USDC` | Cash-flow structure matches; current value is conservative collateral valuation; not pure funding earned |
+| Since Oct 9 | Earliest deposit timestamp in scanned history | User-position date, not vault launch date |
+| Wallet: 100 USDC | SOL deposit path's wallet token balance | Deliberate deployed-program exception to PDF margin-only deposit flow |
+| USDC borrow APY | Pool `borrowApr × 100` | Correct reserve source, but **APR input shown under APY label**, no compounding conversion here |
+| Max deposit | `maxDepositUsd / 1e6`, displayed as USDC | Dollar limit presented as USDC assuming near-$1 value; not all capacity constraints |
+| Net APY | `apy7 − borrowAprPct × borrowedShare` | Current allocation heuristic; PDF full-borrow example subtracts full borrow rate |
+| Est. earnings | `inputUsd × netApy / 100` | One-year simple estimate, not guaranteed output; no day selector in this panel |
+| Preview receive / burn | Transaction simulation before/after token balance differences | Actual transaction path, aligned in principle; Basis minimum-output protection still applies |
+| Health after | Simulated execution result; SOL tells user after shares move to margin | Separate from vault's internal Phoenix margin |
+
+Sources: [live state](../lib/solana/vault-state.ts), [SDK state](../../basis-trading-solana/client/src/state.ts), [list rows](../components/farm/vault-rows.tsx), [view/position adapter](../lib/farm/basis-live.ts), [action panel](../components/farm/vault-action-panel.tsx), [margin valuation](../lib/solana/margin.ts).
+
+### 15.4 Vault APY 0% kyun, jab Funding Now +31% hai?
+
+Do completely different measurements hain:
+
+```text
+Funding Now: latest market hourly funding rate ko annualize karna.
+Vault APY: time ke saath actual vault share price ka compounded growth.
+```
+
+Current code chain:
+
+```text
+/api/farm/vaults → recordNav → historicalApy
+7-day old matching observation missing → null
+BasisVaultPage: const apy7 = state?.apy7 ?? 0
+List: pct(s?.apy7 ?? 0, 2)
+Result: 0.00%
+```
+
+Observed 10.65-hour history mein 7-day baseline hai hi nahi. Isliye **is screenshot ka zero insufficient-history display hai**, measured zero performance nahi. History read/write failures bhi silently null/empty ban sakti hain; UI loading, missing history aur actual zero ko distinguish nahi karti.
+
+PDF header rule:
+
+```text
+7D: stored history APY → deposit-event page.apy7d → page.yield7d.netPct estimate
+30D: stored history APY → deposit-event page.apy30d
+```
+
+Current code first source hi implement karta hai. Checked local/installed client mein `getVaultPage`, `page.apy7d`, `page.yield7d` analytics helpers present nahi; app `getVaultState` plus custom frontend math use karti hai. PDF API names ko available SDK functions assume nahi karna.
+
+Funding estimate add ki jaye to **estimated** label chahiye. Funding Now ko seedha realized 7D APY bana dena galat hoga. Funding received on fork, trading costs, hedge exposure aur historical prices alag inputs hain.
+
+Net APY bhi `apy7 ?? 0` use karti hai. SOL wallet-funded path mein `borrowedShare=0`, so unknown APY → `0 − 0 = 0%`. Screenshot mein input amount 0 hai, therefore estimated earnings `$0.00` independently expected hai. Margin-funded paths mein unknown APY ko zero maanne se misleading negative net estimate bhi ban sakta hai.
+
+### 15.5 Funding source, units aur freshness
+
+```text
+WebSocket: wss://perp-api.phoenix.trade/v1/ws
+Subscribe: { type: "subscribe", subscription: { channel: "market", symbol: "SOL" } }
+Read: funding
+
+REST: https://perp-api.phoenix.trade/v1/funding/SOL/rates
+Read: rates[].fundingRatePercentage
+Annualize: hourly percentage × 8760 (not × 100 again)
+```
+
+App REST proxy requests 90 days, groups by UTC day, caches server responses 10 minutes. Daily funding APR = average of available hourly percentages × 8760. Positive means shorts receive per current integration convention.
+
+Freshness limitation: WebSocket value has no expiry in the hook. After disconnect an old live value may continue to beat REST fallback; server can also return an old cached response when upstream fails. Therefore “Now” is not a hard freshness guarantee. Source: [funding API](../app/api/farm/funding/route.ts), [WebSocket and fallback](../lib/farm/basis-live.ts).
+
+### 15.6 Capacity aur total-share differences, example ke saath
+
+Current list:
+
+```text
+Total vbSOL shown ≈ 421.269195 / 0.982227 = 428.891891 → 428.89
+Capacity = maxPositionUsd = $100,000
+Used = 421.269195 / 100000 × 100 = 0.421269% → 0.42%
+```
+
+Ye code ko reproduce karta hai, **correct binding capacity establish nahi karta**. Share price has a virtual offset and six-decimal truncation; true mint supply se number slightly differ kar sakta hai. SDK already `supply` read karta hai, but API currently expose nahi karti.
+
+Contract growth checks simultaneously enforce:
+
+```text
+short notional <= max_position_usd
+held asset units <= max_asset_units
+short_lots × 10000 <= market_open_interest_lots × max_oi_share_bps
+```
+
+Separate per-deposit limit aur margin checks bhi hain. PDF SOL's 450-SOL cap mention karta hai; current configured cap account se read karna chahiye, hard-code nahi. Sirf example ke liye 450 SOL at $110.03 = $49,513.50 asset exposure, which can bind before $100,000 notional. Exact remaining deposit capacity needs current caps, open interest, holdings, strategy mix and margin. Source: [contract cap checks](../../basis-trading-solana/programs/vanna_phoenix_vault/src/instructions/vault_core.rs).
+
+### 15.7 Analytics tab: formulas aur remaining differences
+
+| Metric | Current calculation | Difference / limitation |
+| --- | --- | --- |
+| 30D / 90D APY | `(lastPrice / earlierPrice)^(365/elapsedDays) − 1`, ×100 | Missing becomes zero; no PDF event fallback |
+| Since launch APY | Annualized first **stored observation** to last, minimum one day | PDF asks first deposit/launch baseline; label overstates coverage |
+| ROI | `(last / firstStored − 1) ×100` | Since recording, not necessarily since vault launch |
+| Sharpe | Mean daily return / population SD ×√365; at least 3 returns | PDF uses sample SD denominator `n−1`, minimum 2 returns |
+| Max drawdown | Minimum `(price / runningPeak −1) ×100` | Formula matches, only recorded period covered |
+| Positive funding | `(observedDays − negativeDays)/observedDays ×100` | Zero-rate days count nonnegative; missing history can show 0/30 |
+| Avg funding 7/30 | Hours-weighted average of last 7/30 available daily rows | Gaps can extend beyond 7/30 calendar days |
+| Funding contribution | `avg7FundingAPR × min(1, shortNotional/NAV)` | PDF uses actual fundingExposure; cap at 1 understates when exposure >1 |
+| Phoenix fees + execution | `realized7D_APY − fundingContribution` | **Not PDF's rebalance-event cost calculation**; mixes mark/P&L effects and APR/APY conventions |
+| Vault fee | 0 | Matches Basis program, excluding venue/network costs |
+| Short liquidation rise | `max(0, (effective−maintenance)/(short+maintenance)) ×100` | Approximation; excludes SOL collateral gain; not exact venue liquidation quote |
+| Capital split | `assetValue : max(PhoenixEquity,0)` percentages | Negative equity clipped; hides liability in ratio. SOL asset already at Phoenix |
+| APY chart | Daily price ratio annualized by actual day span | Borrow reference is current rate across chart, not historical rate series |
+| Share-price chart | Last observation per UTC day, filtered to range | Uses hourly storage but daily rendering; not full hourly series |
+| Monthly returns / gross | No monthly-return panel in current Basis analytics | PDF monthly table/functions not implemented here |
+| Risk badges | UI thresholds (e.g. delta ≤2% “Neutral”, preset venue risk) | Display heuristics, not contract guarantees |
+
+Live SOL exposure `422.5152 / 421.269195 ≈ 1.002958`; UI clamps it to 1. BTC screenshot **+20.34% delta** indicates substantial relative hedge mismatch, not a near-zero hedge. Small position lot rounding could contribute, but exact cause needs position/lot/event inspection. “1x hedge” in list is a strategy label, not proof of actual zero delta.
+
+Sources: [pure analytics math](../lib/farm/nav-math.ts), [analytics rendering](../components/farm/basis/basis-sections.tsx), [view adapter](../lib/farm/basis-live.ts).
+
+### 15.8 Position value, earnings aur borrow estimate cautions
+
+Current `Earned yield` includes valuation change and cash flows; it is not isolated funding income. In screenshot $200.12 current value against $200 net input naturally gives about $0.12. Wallet-specific history was not queried in this audit; that $200 is an inference from displayed values, not a separately verified deposit ledger.
+
+`positionOf` uses complete scanned history as its known-cost-basis condition. External share transfers or liquidations need additional cost-basis treatment; complete scanned farm rows alone do not prove all economics captured. Missing/unknown earnings currently render `$0.00`.
+
+Borrow fraction is:
+
+```text
+if input=0 or SOL wallet deposit: borrowedShare = 0
+else: borrowedShare = min(inputUSDC, totalAccountUSDCDebt) / inputUSDC
+netRate = (vaultApy or 0) − (poolBorrowAprPercent or 0) × borrowedShare
+```
+
+This is a debt-allocation heuristic, not tracing which dollars funded this deposit. Borrowing may fund other positions. The displayed “USDC borrow APY” currently takes APR without converting; comparisons should label rate conventions consistently.
+
+### 15.9 Audit conclusion and correction priorities
+
+1. **APY availability:** preserve missing/error/real-zero distinction; implement verified event fallback and separately labelled estimate if following PDF fully.
+2. **Data collection:** current API saves at most one `{at, price}` point/hour on reads, with 100-day retention. PDF asks hourly `{vault,time,sharePrice,nav,supply}`; no autonomous scheduler established by this audit. Storage failures must not be silently presented as zero yield.
+3. **Capacity and supply:** expose mint supply and all binding cap inputs; display exact supply and correctly denominated remaining capacity/utilization.
+4. **Position semantics:** show collateral value separately from pre-exit NAV value and simulated actual USDC payout.
+5. **Analytics:** implement rebalance-event costs, launch baseline, documented Sharpe convention and missing monthly tables; keep approximation labels explicit.
+6. **Freshness and rates:** expire stale funding observations; distinguish mainnet indicative funding from fork performance, APR from APY, and known rates from unavailable rates.
+
+Ye documented findings hain, applied application fixes nahi. Public API reads aur arithmetic checks hue; funds move, GCP deploy, fork reset ya transaction execution nahi hua.

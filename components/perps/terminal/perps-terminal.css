@@ -459,7 +459,7 @@ html.dark .px-root{
 @media (min-width:1024px){.px-page{padding-inline:120px}}
 .px-err{border:1px solid rgba(252,84,87,.4);background:rgba(252,84,87,.1);color:var(--px-short);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:500}
 
-/* Never let a hidden tooltip (opacity 0, still laid out) widen the page: no sideways scroll / shake. */
+/* Keep terminal content within the viewport; help overlays render outside this container. */
 .px-root{overflow-x:clip}
 
 /*
@@ -495,10 +495,6 @@ html:not(.dark) .px-positions-table .px-tbl th:last-child,html:not(.dark) .px-po
 .px-close-btn{display:inline-flex;align-items:center;justify-content:center;min-width:64px;height:30px;padding:0 14px;border-radius:999px;border:1px solid rgba(252,84,87,.45);background:rgba(252,84,87,.08);font-size:12px;line-height:18px;font-weight:600;color:#fc5457;transition:background .15s,border-color .15s}
 .px-close-btn:hover:not(:disabled){background:rgba(252,84,87,.18);border-color:#fc5457}
 .px-close-btn:disabled{opacity:.5;cursor:not-allowed}
-/* A closed "i" tooltip is still an absolute box (opacity 0, up to 290px wide); inside the positions
-   table's scroll area it widened the scrollable width and forced a horizontal scrollbar. Take closed
-   tooltips out of layout entirely; hover / focus still shows them. */
-.px-root .group:not(:hover):not(:focus-within) > [role="tooltip"]{display:none}
 /* Desktop: no fixed minimum — the eight columns size to their content so the table fits the panel
    without a horizontal scrollbar; tighter cell padding when the bottom panel is narrow. */
 @media (min-width:1024px){
