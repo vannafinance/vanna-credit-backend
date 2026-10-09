@@ -168,11 +168,6 @@ export function BackLink({ href = "/farm" }: { href?: string }) {
   );
 }
 
-/** Labels delta-neutral figures as illustrative (no vault program yet). */
-export function PreviewBadge() {
-  return <span className="fm-prev">Preview · sample data</span>;
-}
-
 /** Close a popover on an outside click or Escape. */
 export function useOutside(open: boolean, close: () => void) {
   const ref = useRef<HTMLSpanElement>(null);

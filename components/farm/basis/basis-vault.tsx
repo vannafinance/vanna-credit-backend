@@ -1,54 +1,35 @@
 "use client";
 
 /**
- * Delta-neutral (basis) vault page — /farm/basis/:id, the design's `dnView`. UI PREVIEW ONLY: the
- * vault figures are sample data from lib/farm/basis-vaults.ts (labelled "Preview · sample data")
- * and no transaction is ever sent. The margin balances, debts, borrow APYs and health factor the
- * deposit panel works from are read live (account snapshot + Vanna pools + useV3Account).
+ * Delta-neutral (basis) vault page — /farm/basis/:id, the design's `dnView`, on live data:
+ * header, stats strip (Vault APY 7D / 30D, Funding Now, Net Delta, TVL / Cap), Overview | Analytics |
+ * All Transactions, and the Deposit / Withdraw column wired to the real vault flow.
+ *
+ * Data ({@link useVaultView}, lib/farm/basis-live.ts): fork vault state (GET /api/farm/vaults),
+ * recorded share-price history, Phoenix mainnet funding (history + live WebSocket rate), this wallet's
+ * margin-account receipt balance and on-chain vault history. Unknown or not-yet-recorded figures
+ * render as 0, never as a placeholder or sample.
  */
 import "../farm-v3.css";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Icon } from "@/components/v3/icons";
-import { Info } from "@/components/v3/ui";
-import { pct, spct, usdC } from "@/components/v3/format";
-import { useUserStore } from "@/store/user";
-import { useAccountSnapshot } from "@/hooks/use-account-snapshot";
-import { usePoolData } from "@/hooks/use-earn";
-import { useV3Account } from "@/hooks/use-v3-account";
-import { BASIS_DEPOSIT_TOKENS, findBasisVault } from "@/lib/farm/basis-vaults";
-import { BackLink, PreviewBadge, TabsBox, VTag } from "../fm-ui";
-import { BasisActionPanel, type BasisAccountInputs } from "./basis-action-panel";
-import { BasisAnalytics, BasisOverview, BasisTransactions } from "./basis-sections";
+import { pct, spct, usd, usdC } from "@/components/v3/format";
+import { useVaultPosition, useVaultView } from "@/lib/farm/basis-live";
+import { BackLink, HowItWorks, TabsBox, Tiles, VTag, YieldList } from "../fm-ui";
+import { Stat, VaultTransactions } from "../vault-parts";
+import { VaultActionPanel, useVaultAccountInputs } from "../vault-action-panel";
+import { BasisAnalytics, BasisOverview } from "./basis-sections";
 
 const BACK = "/farm?category=delta-neutral";
 
 export function BasisVaultPage({ id }: { id: string }) {
-  const vault = findBasisVault(id);
+  const vid = `basis-${id}`;
+  const view = useVaultView(vid);
+  const position = useVaultPosition(view?.def);
+  const account = useVaultAccountInputs();
   const [left, setLeft] = useState<"ov" | "an" | "tx">("ov");
-  const [token, setToken] = useState<string>("USDC");
 
-  const userAddress = useUserStore((s) => s.address);
-  const { snapshot } = useAccountSnapshot(userAddress);
-  const { pools } = usePoolData();
-  const v3 = useV3Account();
-
-  const account = useMemo<BasisAccountInputs>(() => {
-    const margin = snapshot?.api?.margin;
-    const balances: Record<string, number> = {};
-    const debts: Record<string, number> = {};
-    const prices: Record<string, number | null> = {};
-    const borrowApy: Record<string, number | null> = {};
-    for (const t of BASIS_DEPOSIT_TOKENS) {
-      balances[t] = margin?.collateral.filter((c) => c.symbol === t).reduce((s, c) => s + c.amount, 0) ?? 0;
-      debts[t] = margin?.debts.filter((d) => d.symbol === t).reduce((s, d) => s + d.debt, 0) ?? 0;
-      prices[t] = margin?.prices?.[t]?.usd ?? null;
-      const pool = pools[t];
-      borrowApy[t] = pool ? pool.borrowApr * 100 : null;
-    }
-    return { connected: Boolean(userAddress), hasMargin: Boolean(margin?.exists), balances, debts, prices, borrowApy, hf: v3.now?.hf ?? null };
-  }, [snapshot, pools, userAddress, v3.now]);
-
-  if (!vault) {
+  if (!view || view.def.kind !== "basis") {
     return (
       <div className="v3">
         <div className="page">
@@ -61,41 +42,41 @@ export function BasisVaultPage({ id }: { id: string }) {
       </div>
     );
   }
-  const v = vault;
-  const st = (l: string, val: React.ReactNode, tip?: string, cls = "") => (
-    <article>
-      <div className="lbl">
-        {l}
-        {tip && <Info text={tip} />}
-      </div>
-      <div className={`fm-sv ${cls}`}>{val}</div>
-    </article>
-  );
+  const { def, state, funding } = view;
+  const fundingNow = funding?.now ?? 0;
+  const tvl = state?.navUsd ?? 0;
+  const cap = state?.capUsd ?? 0;
 
   return (
     <div className="v3">
       <div className="page">
         <BackLink href={BACK} />
         <div className="fm-vh">
-          <Icon sym={v.asset} className="fm-ico28" />
-          <h1>{v.name}</h1>
+          <Icon sym={def.asset} className="fm-ico28" />
+          <h1>{def.name}</h1>
           <span className="fm-tag">Vault</span>
           <VTag name="Jupiter" />
           <VTag name="Phoenix" />
-          <PreviewBadge />
         </div>
         <section className="fm-stats fm-dnp num">
-          {st("Vault APY (7D)", pct(v.apy7, 1), "Average yearly yield over the last 7 days, after perp fees, execution and the vault fee (sample data).")}
-          {st("Vault APY (30D)", pct(v.apy30, 1), "The same yield averaged over the last 30 days (sample data).")}
-          {st("Funding Now", spct(v.fundingNow, 1), "Annualised funding rate on Phoenix right now; when positive, shorts get paid (sample data).", v.fundingNow >= 0 ? "pos" : "neg")}
-          {st("Net Delta", spct(v.delta, 2), "Spot leg minus short leg as a share of the vault; near zero means price moves cancel out.")}
-          {st(
-            "TVL / Cap",
-            <>
-              {usdC(v.tvl)} <small>/ {usdC(v.cap)}</small>
-            </>,
-            "Money in the vault now, and the most it accepts (sample data).",
-          )}
+          <Stat label="Vault APY (7D)" value={pct(state?.apy7 ?? 0, 1)} tip="Annualised share-price change over the last 7 days, after Phoenix fees and execution. 0.00% until 7 days of share prices are recorded." />
+          <Stat label="Vault APY (30D)" value={pct(state?.apy30 ?? 0, 1)} tip="The same over the last 30 days. 0.00% until 30 days are recorded." />
+          <Stat
+            label="Funding Now"
+            value={spct(fundingNow, 1)}
+            tip={`Phoenix's current hourly funding on ${def.asset}-PERP, annualised (× 24 × 365). When positive, shorts get paid.`}
+            cls={fundingNow >= 0 ? "pos" : "neg"}
+          />
+          <Stat label="Net Delta" value={spct(state?.netDeltaPct ?? 0, 2)} tip="Spot leg minus short leg, as a share of the short; near zero means price moves cancel out." />
+          <Stat
+            label="TVL / Cap"
+            value={
+              <>
+                {usdC(tvl)} <small>/ {usdC(cap)}</small>
+              </>
+            }
+            tip="Net asset value in the vault now, and the most total exposure it accepts."
+          />
         </section>
         <div className="fm-cols fm-dnp">
           <div className="fm-main">
@@ -109,11 +90,38 @@ export function BasisVaultPage({ id }: { id: string }) {
               onChange={setLeft}
             />
             <div className="fm-panel dp">
-              {left === "an" ? <BasisAnalytics vault={v} /> : left === "tx" ? <BasisTransactions vault={v} /> : <BasisOverview vault={v} token={token} borrowApy={account.borrowApy[token]} />}
+              {left === "an" ? (
+                <BasisAnalytics view={view} />
+              ) : left === "tx" ? (
+                <VaultTransactions def={def} state={state} position={position} />
+              ) : (
+                <BasisOverview view={view} borrowApy={account.usdcBorrowApy} />
+              )}
             </div>
           </div>
           <aside className="fm-aside">
-            <BasisActionPanel vault={v} token={token} onToken={setToken} account={account} />
+            <VaultActionPanel id={vid} state={state} account={account} />
+            <Tiles
+              items={[
+                ["Total Value Locked", usdC(tvl)],
+                ["Vault APY (7D)", pct(state?.apy7 ?? 0, 1)],
+              ]}
+            />
+            <YieldList
+              rows={[
+                ["Your Position", usd(position.valueUsd)],
+                ["Earnings", usd(position.earnedUsd ?? 0), (position.earnedUsd ?? 0) > 0 ? "pos" : (position.earnedUsd ?? 0) < 0 ? "neg" : ""],
+                ["Receipt", `${position.shares > 0 ? `${position.shares.toLocaleString("en-US", { maximumFractionDigits: 6 })} ` : ""}${def.symbol}`],
+              ]}
+            />
+            <HowItWorks
+              steps={[
+                ["Borrow on Margin", "Against any collateral Vanna accepts."],
+                ["Deposit USDC", def.id === "basis-sol" ? "From your wallet; a second approval moves the shares to margin." : "From your margin account."],
+                ["Vault hedges", def.id === "basis-sol" ? "SOL held at Phoenix, an equal 1x SOL-PERP short." : `Spot ${def.asset} via Jupiter, an equal 1x short on Phoenix.`],
+                ["Earn funding", "Shares stay in your margin account and count toward its health factor."],
+              ]}
+            />
           </aside>
         </div>
       </div>

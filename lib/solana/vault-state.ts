@@ -33,6 +33,13 @@ export interface LiveVault {
   shortUsd: number | null;
   netDeltaPct: number | null;
   phoenixEquityUsd: number | null;
+  /** USD value of the spot leg (asset units × token price at Phoenix's mark). */
+  assetValueUsd: number | null;
+  /** Phoenix mark price of one market unit (the perp's base), USD. */
+  markPriceUsd: number | null;
+  /** Phoenix's effective collateral and maintenance margin for the vault's trader account, USD. */
+  phoenixEffectiveUsd: number | null;
+  phoenixMaintenanceUsd: number | null;
   exitFeeBps: number;
   apy7: number | null;
   apy30: number | null;
@@ -56,6 +63,10 @@ export async function readLiveVault(def: VaultDefinition): Promise<LiveVault> {
     shortUsd: null,
     netDeltaPct: null,
     phoenixEquityUsd: null,
+    assetValueUsd: null,
+    markPriceUsd: null,
+    phoenixEffectiveUsd: null,
+    phoenixMaintenanceUsd: null,
     exitFeeBps: def.id === "perena-junior" ? 100 : 0,
     apy7: null,
     apy30: null,
@@ -130,6 +141,10 @@ export async function readLiveVault(def: VaultDefinition): Promise<LiveVault> {
       base.assetUnits = Number(state.assetUnits) / 10 ** v.assetDecimals;
       base.shortUsd = Number(state.shortNotional) / 1e6;
       base.phoenixEquityUsd = Number(state.phoenixEquity) / 1e6;
+      base.assetValueUsd = Number(state.assetValue) / 1e6;
+      base.markPriceUsd = Number(state.markPrice) / 1e6;
+      base.phoenixEffectiveUsd = Number(state.margin.effectiveCollateral) / 1e6;
+      base.phoenixMaintenanceUsd = Number(state.margin.maintenanceMargin) / 1e6;
       base.netDeltaPct =
         state.shortNotional > 0n
           ? Number(

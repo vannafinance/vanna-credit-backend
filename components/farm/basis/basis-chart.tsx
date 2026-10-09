@@ -1,18 +1,23 @@
 "use client";
 
 /**
- * Small SVG line / bar chart for the basis-vault pages (APY vs borrow, share price, funding) — the
+ * Small SVG line / bar chart for the Farm vault pages (APY vs borrow, share price, funding) — the
  * design's farm.js `lineChart` / `barChart`, styled by `.fm-chart` (farm-v3.css). Measures its own
  * width, draws nice y-axis steps and dated x labels, and reports the hovered index through
- * `onHover` so the card can show a readout line.
+ * `onHover` so the card can show a readout line. With fewer than two points it draws nothing and
+ * shows `empty` instead (a real series is never padded).
  */
 import { useEffect, useId, useRef, useState } from "react";
-import { seriesLabel } from "@/lib/farm/basis-vaults";
+
+/** "Oct 9" (UTC) for a series timestamp. */
+export const dayLabel = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
 interface BasisChartProps {
   data: number[];
-  /** Series index of data[0] (for the date labels). */
-  start: number;
+  /** Unix ms of each point (for the date labels). */
+  dates: number[];
+  /** Shown instead of the chart when there are fewer than two points. */
+  empty?: string;
   kind?: "line" | "bar";
   /** Dashed horizontal reference line (e.g. the borrow APY). */
   reference?: number;
@@ -34,21 +39,29 @@ function niceStep(span: number): number {
   return 10 * p;
 }
 
-export function BasisChart({ data, start, kind = "line", reference, includeZero, formatAxis, onHover, small, ariaLabel }: BasisChartProps) {
+export function BasisChart({ data, dates, empty, kind = "line", reference, includeZero, formatAxis, onHover, small, ariaLabel }: BasisChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const gid = useId().replace(/:/g, "");
   const [size, setSize] = useState({ w: 600, h: small ? 200 : 220 });
   const [hover, setHover] = useState<number | null>(null);
+  const drawn = data.length >= 2;
 
+  // Re-attach when the chart replaces the empty state (a different element).
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => setSize({ w: Math.max(260, entry.contentRect.width), h: entry.contentRect.height || (small ? 200 : 220) }));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [small]);
+  }, [small, drawn]);
 
   const n = data.length;
+  if (n < 2)
+    return (
+      <div ref={ref} className={`fm-chart fm-chart-e ${small ? "sm" : ""}`} role="img" aria-label={ariaLabel}>
+        <span>{empty ?? "Not enough history yet"}</span>
+      </div>
+    );
   const W = size.w;
   const H = size.h;
 
@@ -114,7 +127,7 @@ export function BasisChart({ data, start, kind = "line", reference, includeZero,
           ))}
           {xLabels.map((i, j) => (
             <text key={`${i}-${j}`} x={x(i)} y={H - 6} textAnchor={j === 0 ? "start" : j === labelCount - 1 ? "end" : "middle"}>
-              {seriesLabel(start + i)}
+              {dayLabel(dates[i])}
             </text>
           ))}
         </g>

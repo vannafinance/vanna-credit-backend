@@ -7,7 +7,8 @@
  *
  * Data: Kamino reserve metrics (`useFarmPools`, GET /api/farm/pools), the margin account's Kamino
  * cTokens and their earnings / net APY ({@link useFarmAccount}), farm history decoded from the margin
- * account's on-chain events (`useMarginHistory`). Basis and Perena rows use deployed vault state.
+ * account's on-chain events (`useMarginHistory`). Basis and Perena rows use deployed vault state
+ * (./vault-rows.tsx), in the same row / sortable-header style as the Kamino rows.
  */
 import "./farm-v3.css";
 import { useEffect, useMemo, useState } from "react";
@@ -19,8 +20,9 @@ import { hfZone, LIQ_HF } from "@/lib/account-model";
 import { explorerUrl } from "@/lib/solana/config";
 import { isFarmListed } from "@/lib/solana/farm";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
-import { useVaultAccount } from "@/lib/farm/use-vaults";
-import { LiveVaultTable } from "./live-vault-table";
+import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
+import { positionOf, vaultHref } from "@/lib/farm/basis-live";
+import { VaultTable } from "./vault-rows";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
@@ -58,6 +60,8 @@ export function FarmList() {
   const [thr, setThr] = useState("");
   const [thrOpen, setThrOpen] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
+  const [perenaSort, setPerenaSort] = useState<SortState>(null);
+  const liveVaults = useVaults();
   const thrRef = useOutside(thrOpen, () => setThrOpen(false));
 
   // "Back to pools" from a basis vault lands on /farm?category=delta-neutral.
@@ -70,6 +74,7 @@ export function FarmList() {
     setVaultSel([]);
     setThr("");
     setSort(null);
+    setPerenaSort(null);
     setThrOpen(false);
   };
   const dn = tab === "vaults" && cat === "dn";
@@ -202,11 +207,46 @@ export function FarmList() {
     );
   };
 
-  const dnTable = () => <LiveVaultTable kind="basis" query={q} keepAsset={keepAsset}/>;
+  const dnTable = () => <VaultTable kind="basis" query={q} keepAsset={keepAsset} sort={sort} onSort={setSort} />;
+  const perenaTable = () => (
+    <>
+      <h2 className="fm-tblh">Perena vaults</h2>
+      <VaultTable kind="perena" query={q} keepAsset={keepAsset} sort={perenaSort} onSort={setPerenaSort} />
+    </>
+  );
 
   const posTable = () => {
-    if (!farm.rows.length && vaultHoldings.length) return null;
-    if (!farm.connected || !farm.rows.length) return <div className="fm-empty">{farm.positionsLoading ? "Loading positions…" : "No farm positions yet"}</div>;
+    // Kamino cTokens and Basis / Perena receipts held in the margin account, one table.
+    const vaultItems = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0) && keepAsset(v.asset)).map((v) => {
+      const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
+      const apy = liveVaults.data.find((x) => x.id === v.id)?.apy7 ?? 0;
+      const basis = v.kind === "basis";
+      return {
+        v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy / 100 },
+        el: (
+          <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k5" aria-label={`Open ${v.name}`}>
+            <Cell
+              v={
+                <span className="fm-tk">
+                  <Icon sym={v.asset} className="fm-ico16" />
+                  {v.name}
+                </span>
+              }
+              mini={[basis ? "Basis" : "Perena", v.symbol]}
+            />
+            <Cell v={<Venue name={basis ? "Jupiter · Phoenix" : "Perena"} />} />
+            <Cell v={`${nf(p.shares, 4)} ${v.symbol}`} mini={usd(p.valueUsd)} />
+            {p.earnedUsd === null ? (
+              <Cell v={usd(0)} mini="history incomplete" />
+            ) : (
+              <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
+            )}
+            <Cell v={pct(apy)} mini="7D vault APY" />
+          </Link>
+        ),
+      };
+    });
+    if (!farm.connected || (!farm.rows.length && !vaultItems.length)) return <div className="fm-empty">{farm.positionsLoading ? "Loading positions…" : "No farm positions yet"}</div>;
     const items = farm.rows
       .filter((r) => keepAsset(r.symbol))
       .map((r: FarmPositionRow) => ({
@@ -234,7 +274,7 @@ export function FarmList() {
           </Link>
         ),
       }));
-    const rows = sortRows(items, sort).map((x) => x.el);
+    const rows = sortRows([...items, ...vaultItems], sort).map((x) => x.el);
     return (
       <div className="fm-tbl">
         <SortHead
@@ -246,7 +286,7 @@ export function FarmList() {
             ["Protocol", "prot"],
             ["Holdings", "hold"],
             ["Earnings", "earn", "Redeemable now minus supplied (net of withdrawals), from your on-chain history, at today's price."],
-            ["APY", "apy", "Kamino's current supply APY."],
+            ["APY", "apy", "Kamino's current supply APY; for Basis and Perena vaults, the recorded 7-day vault APY."],
           ]}
         />
         {rows.length ? rows : <div className="fm-none">No positions match these filters</div>}
@@ -269,7 +309,7 @@ export function FarmList() {
                   {r.symbol}
                 </span>
               }
-              mini={r.type === "farm-deposit" ? "Supply" : "Withdraw"}
+              mini={r.type === "farm-deposit" ? (r.vaultId ? "Deposit" : "Supply") : "Withdraw"}
             />
             <Cell v={<Venue name={r.vaultId?.startsWith("basis-") ? "Jupiter · Phoenix" : r.vaultId ? "Perena" : "Kamino"} />} mini={timeLbl(r.timestamp)} />
             <Cell v={tokFmt(Number(r.amount), r.symbol)} />
@@ -303,7 +343,7 @@ export function FarmList() {
   };
 
   const pos = tab === "positions";
-  const body = pos ? (posTab === "history" ? histTable() : <>{posTable()}<LiveVaultTable positions query={q}/></>) : dn ? dnTable() : <>{lendTable()}<LiveVaultTable kind="perena" query={q} keepAsset={keepAsset}/></>;
+  const body = pos ? (posTab === "history" ? histTable() : posTable()) : dn ? dnTable() : <>{lendTable()}{perenaTable()}</>;
 
   return (
     <div className="v3">

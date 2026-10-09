@@ -1,50 +1,25 @@
 "use client";
 
 /**
- * Left-column tabs of a basis-vault page: Overview (yield breakdown, APY vs borrow APY, both legs,
- * risks), Analytics (statistics, share price / funding, monthly returns, capital allocation) and
- * All Transactions. Vault figures are sample data (lib/farm/basis-vaults.ts); the borrow APY the
- * vault is compared against is the real Vanna pool rate of the selected deposit token.
+ * Left-column tabs of a basis-vault page: Overview (yield breakdown, APY vs USDC borrow APY, both
+ * legs, risks) and Analytics (statistics, share price / funding). All Transactions lives in
+ * ../vault-parts.tsx. Every figure is live ({@link VaultView}, lib/farm/basis-live.ts): fork vault
+ * state, recorded share-price history, Phoenix funding history; the borrow APY the vault is compared
+ * against is the real Vanna USDC pool rate. Figures that need more history than exists render as 0.
  * Styled by the design's `.fm-card` family (components/farm/farm-v3.css).
  */
 import { useState, type ReactNode } from "react";
-import { HEDGE, SERIES_DAYS, monthlyReturns, seriesLabel, type BasisVault } from "@/lib/farm/basis-vaults";
+import type { VaultView } from "@/lib/farm/basis-live";
 import { Icon } from "@/components/v3/icons";
 import { Info, Seg } from "@/components/v3/ui";
-import { nf, pct, spct, usdC } from "@/components/v3/format";
+import { nf, pct, spct, usd } from "@/components/v3/format";
 import { Chips } from "../fm-ui";
-import { BasisChart } from "./basis-chart";
+import { Card, RANGES, inRange, priceAxis } from "../vault-parts";
+import { BasisChart, dayLabel } from "./basis-chart";
 
 const pctAxis = (t: number, step: number) => pct(t, step < 1 ? 1 : 0);
-/** Share price shrinks to ~4 significant digits on the axis. */
-const priceAxis = (t: number, step: number) => nf(t, Math.max(2, -Math.floor(Math.log10(step))));
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** Range chips used above every basis chart. */
-export const RANGES: [number, string][] = [
-  [7, "1 Week"],
-  [30, "1 Month"],
-  [90, "3 Months"],
-  [SERIES_DAYS, "All Time"],
-];
 const sign = (v: number) => (v >= 0 ? "pos" : "neg");
-
-/** The design's `.fm-card` with its header row. */
-function Card({ title, sub, right, children }: { title?: ReactNode; sub?: ReactNode; right?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="fm-card">
-      {(title || right) && (
-        <div className="fm-ch">
-          <div>
-            {title && <h3>{title}</h3>}
-            {sub}
-          </div>
-          {right}
-        </div>
-      )}
-      {children}
-    </section>
-  );
-}
+const z = (v: number | null | undefined) => (v !== null && v !== undefined && Number.isFinite(v) ? v : 0);
 
 // ── Overview ───────────────────────────────────────────────────────────────
 
@@ -74,44 +49,58 @@ function Risk({ icon, title, level, value, caption }: { icon: ReactNode; title: 
   );
 }
 
-export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVault; token: string; borrowApy: number | null }) {
+export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy: number | null }) {
   const [range, setRange] = useState(30);
   const [hover, setHover] = useState<number | null>(null);
+  const { def, state, funding } = view;
+  const perp = `${def.asset}-PERP`;
+  const sol = def.id === "basis-sol";
 
-  const gross = v.funding7 * HEDGE - v.perpFee * HEDGE - v.exec;
+  // Yield breakdown: the 7-day average funding on the share of NAV held short, the vault fee (none),
+  // and whatever the realised 7-day APY leaves after funding (Phoenix fees, execution, mark moves).
+  const hedge = view.hedgeShare ?? 0;
+  const funding7 = funding?.stats.avg7 ?? null;
+  const fundingPart = z(funding7) * hedge;
+  const apy7 = state?.apy7 ?? null;
+  const residual = apy7 !== null && funding7 !== null ? apy7 - fundingPart : 0;
   const parts: [string, string, number][] = [
-    ["Funding", `${pct(v.funding7, 1)} on the half held short`, v.funding7 * HEDGE],
-    ["Phoenix fees", "Position and borrow fees", -v.perpFee * HEDGE],
-    ["Execution", "Jupiter swaps, rebalancing", -v.exec],
-    ["Vault fee", `${v.fee}% of profit`, (-gross * v.fee) / 100],
+    ["Funding", `${pct(z(funding7), 1)} 7-day average on the ${nf(hedge * 100, 0)}% held short`, fundingPart],
+    ["Phoenix fees + execution", apy7 === null ? "Shown once 7 days of share-price history exist" : "Realised 7D APY minus the funding share", residual],
+    ["Vault fee", "No vault, deposit or exit fee", 0],
   ];
-  const max = Math.max(...parts.map((p) => Math.abs(p[2])));
-  const leg = v.tvl * HEDGE;
-  const spot = leg * (1 + v.delta / 100);
-  const maxLeg = Math.max(leg, spot);
-  const dq = v.price > 1e4 ? 3 : 1;
-  const spread = borrowApy === null ? null : v.apy7 - borrowApy;
-  const squeeze = 98;
-  const nd = v.negativeDays30;
+  const max = Math.max(1e-9, ...parts.map((p) => Math.abs(p[2])));
 
-  const s = SERIES_DAYS - range;
-  const series = v.apy.slice(s);
+  // Legs.
+  const spotUsd = z(state?.assetValueUsd);
+  const shortUsd = z(state?.shortUsd);
+  const maxLeg = Math.max(spotUsd, shortUsd, 1e-9);
+  const mark = z(state?.markPriceUsd);
+  const shortUnits = mark > 0 ? shortUsd / mark : 0;
+  const dq = mark > 1e4 ? 5 : 4;
+  const equity = z(state?.phoenixEquityUsd);
+  const totalCap = spotUsd + Math.max(0, equity);
+  const split = totalCap > 0 ? `${nf((spotUsd / totalCap) * 100, 0)} / ${nf((Math.max(0, equity) / totalCap) * 100, 0)}` : "0 / 0";
+  const delta = z(state?.netDeltaPct);
+  const liq = view.shortLiqRise;
+  const liqText = shortUsd > 0 ? `+${nf(z(liq), 1)}%` : "None";
+
+  // Risks.
+  const nd = funding?.stats.negativeDays30 ?? 0;
+  const fd = funding?.stats.days30 ?? 0;
+  const spread = z(apy7) - z(borrowApy);
+
+  // Vault APY vs USDC borrow chart.
+  const s = inRange(view.apyDays, range);
   const readout =
-    hover !== null ? (
+    hover !== null && s[hover] ? (
       <>
-        {seriesLabel(s + hover)} · Vault <b>{pct(series[hover], 1)}</b>
-        {borrowApy !== null && (
-          <>
-            {" "}· {token} borrow <b>{pct(borrowApy, 1)}</b> · Spread <b className={sign(series[hover] - borrowApy)}>{spct(series[hover] - borrowApy, 1)}</b>
-          </>
-        )}
+        {dayLabel(s[hover].at)} · Vault <b>{pct(s[hover].value, 1)}</b> · USDC borrow <b>{pct(z(borrowApy), 1)}</b> · Spread{" "}
+        <b className={sign(s[hover].value - z(borrowApy))}>{spct(s[hover].value - z(borrowApy), 1)}</b>
       </>
-    ) : spread !== null ? (
+    ) : (
       <>
         Spread today <b className={sign(spread)}>{spct(spread, 1)}</b> per borrowed dollar
       </>
-    ) : (
-      <>{token} borrow APY unavailable</>
     );
 
   return (
@@ -131,73 +120,86 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
             </div>
           ))}
           <div className="fm-wfr tot">
-            <span className="t">Vault APY</span>
+            <span className="t">Vault APY (7D)</span>
             <span />
-            <span className="v">{pct(v.apy7, 1)}</span>
+            <span className="v">{pct(z(apy7), 1)}</span>
           </div>
         </div>
       </Card>
 
-      <Card title={`Vault APY vs ${token} borrow APY`} sub={<p className="fm-ro num">{readout}</p>} right={<Chips value={range} options={RANGES} onChange={setRange} />}>
-        <BasisChart data={series} start={s} reference={borrowApy ?? undefined} includeZero formatAxis={pctAxis} onHover={setHover} ariaLabel="Daily vault APY with the borrow APY as a dashed line" />
+      <Card title="Vault APY vs USDC borrow APY" sub={<p className="fm-ro num">{readout}</p>} right={<Chips value={range} options={RANGES} onChange={setRange} />}>
+        <BasisChart
+          data={s.map((p) => p.value)}
+          dates={s.map((p) => p.at)}
+          reference={borrowApy ?? undefined}
+          includeZero
+          formatAxis={pctAxis}
+          onHover={setHover}
+          empty="Daily vault APY appears once the share price has been recorded on three different days"
+          ariaLabel="Daily vault APY with the USDC borrow APY as a dashed line"
+        />
         <div className="fm-legend">
           <span>
             <i />
-            Vault APY
+            Vault APY (day over day)
           </span>
           <span>
             <i className="d" />
-            {token} borrow APY · follows the token you deposit
+            USDC borrow APY · Vanna pool
           </span>
         </div>
       </Card>
 
-      <Card title="Positions" sub={<p className="fm-sub">Both legs · rebalanced {v.rebalanced}</p>} right={<span className="mini ok">Neutral</span>}>
+      <Card
+        title="Positions"
+        sub={<p className="fm-sub">Both legs · live from the vault&apos;s accounts</p>}
+        right={<span className={`mini ${Math.abs(delta) <= 2 ? "ok" : ""}`}>{Math.abs(delta) <= 2 ? "Neutral" : "Drifted"}</span>}
+      >
         <div className="fm-legs num">
           <div className="fm-leg">
             <span className="fm-side l">LONG</span>
             <span>
-              <b>{v.asset} spot</b>
+              <b>{def.asset} spot</b>
               <small>
-                <Icon sym="JUP" className="fm-ico12" />
-                Jupiter
+                {sol ? <Icon sym="PHX" className="fm-ico12" /> : <Icon sym="JUP" className="fm-ico12" />}
+                {sol ? "Held at Phoenix" : "Jupiter · vault token account"}
               </small>
             </span>
             <span>
-              {nf(spot / v.price, dq)} {v.asset}
+              {nf(z(state?.assetUnits), dq)} {def.asset}
             </span>
-            <span className="usd">{usdC(spot)}</span>
+            <span className="usd">{usd(spotUsd)}</span>
           </div>
           <div className="fm-leg">
             <span className="fm-side s">SHORT</span>
             <span>
-              <b>{v.perp}</b>
+              <b>{perp}</b>
               <small>
                 <Icon sym="PHX" className="fm-ico12" />
                 Phoenix · 1x
               </small>
             </span>
             <span>
-              {nf(leg / v.price, dq)} {v.asset}
+              {nf(shortUnits, dq)} {def.asset}
             </span>
-            <span className="usd">{usdC(leg)}</span>
+            <span className="usd">{usd(shortUsd)}</span>
           </div>
         </div>
         <div className="fm-bal" aria-hidden="true">
           <span className="l">
-            <i style={{ width: `${(spot / maxLeg) * 100}%` }} />
+            <i style={{ width: `${(spotUsd / maxLeg) * 100}%` }} />
           </span>
           <span className="r">
-            <i style={{ width: `${(leg / maxLeg) * 100}%` }} />
+            <i style={{ width: `${(shortUsd / maxLeg) * 100}%` }} />
           </span>
         </div>
         <div className="fm-balk num">
-          <span>Long {usdC(spot)}</span>
-          <span>Short {usdC(leg)}</span>
+          <span>Long {usd(spotUsd)}</span>
+          <span>Short {usd(shortUsd)}</span>
         </div>
         <div className="fm-ms num">
           <div>
-            <b>{spct(v.delta, 2)}</b>
+            <b>{spct(delta, 2)}</b>
             <span>Net delta</span>
           </div>
           <div>
@@ -205,27 +207,42 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
             <span>Hedge</span>
           </div>
           <div>
-            <b>+{squeeze}%</b>
-            <span>{v.asset} rise to short liquidation</span>
+            <b>{liqText}</b>
+            <span>
+              {def.asset} rise to short liquidation
+              {sol && shortUsd > 0 ? " (excl. SOL collateral gain)" : ""}
+            </span>
           </div>
           <div>
-            <b>50 / 50</b>
-            <span>Spot / short margin</span>
+            <b>{split}</b>
+            <span>{sol ? "Spot / USDC margin (SOL is the margin)" : "Spot / short margin"}</span>
           </div>
         </div>
       </Card>
 
       <Card title="Risks">
         <div className="fm-rk num">
-          <Risk icon={ICONS.down} title="Negative funding" level={nd <= 3 ? "low" : nd <= 6 ? "med" : "high"} value={`${nd} / 30 days`} caption="shorts paid instead of earning" />
+          <Risk
+            icon={ICONS.down}
+            title="Negative funding"
+            level={nd <= 3 ? "low" : nd <= 6 ? "med" : "high"}
+            value={`${nd} / ${fd || 30} days`}
+            caption={`${perp} days shorts paid instead of earning`}
+          />
           <Risk
             icon={ICONS.scale}
             title="Below borrow APY"
-            level={spread === null ? "med" : spread >= 3 ? "low" : spread >= 0 ? "med" : "high"}
-            value={spread === null ? pct(0, 1) : spct(spread, 1)}
-            caption={`spread over ${token} borrow`}
+            level={spread >= 3 ? "low" : spread >= 0 ? "med" : "high"}
+            value={spct(spread, 1)}
+            caption="7D vault APY over USDC borrow"
           />
-          <Risk icon={ICONS.up} title="Short squeeze" level="low" value={`+${squeeze}%`} caption={`${v.asset} rise to liquidation`} />
+          <Risk
+            icon={ICONS.up}
+            title="Short squeeze"
+            level={shortUsd <= 0 || z(liq) >= 50 ? "low" : z(liq) >= 20 ? "med" : "high"}
+            value={liqText}
+            caption={`${def.asset} rise to liquidation`}
+          />
           <Risk icon={ICONS.venue} title="Venue risk" level="med" value="2 venues" caption="Phoenix, Jupiter, oracles" />
         </div>
       </Card>
@@ -235,36 +252,29 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
 
 // ── Analytics ──────────────────────────────────────────────────────────────
 
-export function BasisAnalytics({ vault: v }: { vault: BasisVault }) {
+export function BasisAnalytics({ view }: { view: VaultView }) {
   const [perf, setPerf] = useState<"share" | "funding">("share");
-  const [range, setRange] = useState(90);
+  const [range, setRange] = useState(30);
   const [hover, setHover] = useState<number | null>(null);
-  const [fees, setFees] = useState<"gross" | "net">("net");
-  const [basis, setBasis] = useState<"roi" | "apy">("roi");
-  const m = monthlyReturns(v, fees, basis);
-
-  const s = SERIES_DAYS - range;
-  const data = perf === "share" ? v.sharePrice.slice(s) : v.funding.slice(s);
+  const { def, state, stats, funding } = view;
+  const perp = `${def.asset}-PERP`;
+  const fd = funding?.stats.days30 ?? 0;
+  const positive = fd ? ((fd - (funding?.stats.negativeDays30 ?? 0)) / fd) * 100 : 0;
+  const fDays = (funding?.days ?? []).map((d) => ({ at: d.at, value: d.apr }));
+  const shown = inRange(perf === "share" ? view.sharePriceDays : fDays, range);
   const readout =
-    hover === null ? (
-      perf === "share" ? `USDC per ${v.share}, net of fees` : `${v.perp} on Phoenix, annualised, daily`
+    hover === null || !shown[hover] ? (
+      perf === "share" ? `USD per ${def.symbol}, daily, from recorded vault reads` : `${perp} on Phoenix mainnet, annualised, daily average`
     ) : perf === "share" ? (
       <>
-        {seriesLabel(s + hover)} · <b>{nf(data[hover], 4)}</b> USDC per {v.share}
+        {dayLabel(shown[hover].at)} · <b>{nf(shown[hover].value, 6)}</b> USD per {def.symbol}
       </>
     ) : (
       <>
-        {seriesLabel(s + hover)} · Funding <b className={sign(data[hover])}>{spct(data[hover], 1)}</b> · Vault that day <b>{pct(v.apy[s + hover], 1)}</b>
+        {dayLabel(shown[hover].at)} · Funding <b className={sign(shown[hover].value)}>{spct(shown[hover].value, 1)}</b>
       </>
     );
-
-  const leg = v.tvl * HEDGE;
-  const idle = v.tvl * 0.004;
-  const alloc: [string, string, number, string, string?][] = [
-    ["Jupiter", `Spot ${v.asset}`, leg - idle / 2, "var(--long)", "JUP"],
-    ["Phoenix", `${v.perp} short margin (USDC)`, leg - idle / 2, "var(--short)", "PHX"],
-    ["Idle", "USDC buffer for withdrawals", idle, "var(--quiet)"],
-  ];
+  const since = stats.firstAt ? `Annualised, from ${dayLabel(stats.firstAt)}` : "Annualised, since recording began";
   const sg = (k: string, value: string, d: string, tip?: string) => (
     <div key={k}>
       <div className="lbl">
@@ -278,17 +288,17 @@ export function BasisAnalytics({ vault: v }: { vault: BasisVault }) {
 
   return (
     <>
-      <Card title="Statistics">
+      <Card title="Statistics" sub={<p className="fm-sub">From recorded hourly share prices and Phoenix&apos;s published funding</p>}>
         <div className="fm-sg num">
-          {sg("Net APY 30D", pct(v.apy30, 1), "After all fees")}
-          {sg("Net APY 90D", pct(v.apy90, 1), "After all fees")}
-          {sg("Since launch", pct(v.apyAll, 1), `Annualised, from ${seriesLabel(0)}`)}
-          {sg("ROI", spct(v.roi, 2), "Since launch, net")}
-          {sg("Sharpe ratio", nf(v.sharpe, 2), "Daily returns, annualised", "Mean daily return divided by its standard deviation, times the square root of 365.")}
-          {sg("Max drawdown", pct(v.maxDrawdown, 2), "Since launch", "Largest fall in share price from a previous high.")}
-          {sg("Positive funding", `${nf(((30 - v.negativeDays30) / 30) * 100, 0)}%`, "Days in the last 30")}
-          {sg("Avg funding 30D", spct(v.funding30, 1), `${v.perp}, annualised`)}
-          {sg("Vault fee", `${v.fee}%`, "Of profit · no deposit or exit fee")}
+          {sg("Net APY 30D", pct(z(state?.apy30), 1), "After all costs", "Annualised share-price change over 30 days; 0.00% until 30 days are recorded.")}
+          {sg("Net APY 90D", pct(z(stats.apy90), 1), "After all costs", "Annualised share-price change over 90 days; 0.00% until 90 days are recorded.")}
+          {sg("Since launch", pct(z(stats.sinceLaunch), 1), since)}
+          {sg("ROI", spct(z(stats.roi), 2), "Share price since recording began")}
+          {sg("Sharpe ratio", nf(z(stats.sharpe), 2), "Daily returns, annualised", "Mean daily return divided by its standard deviation, times the square root of 365. Needs 3 daily returns.")}
+          {sg("Max drawdown", pct(z(stats.maxDrawdown), 2), "Since recording began", "Largest fall in share price from a previous high.")}
+          {sg("Positive funding", `${nf(positive, 0)}%`, `Days in the last ${fd || 30}`)}
+          {sg("Avg funding 30D", spct(z(funding?.stats.avg30), 1), `${perp}, annualised`)}
+          {sg("Vault fee", "0%", "No vault, deposit or exit fee")}
         </div>
       </Card>
 
@@ -311,173 +321,16 @@ export function BasisAnalytics({ vault: v }: { vault: BasisVault }) {
         <p className="fm-ro num">{readout}</p>
         <BasisChart
           key={perf}
-          data={data}
-          start={s}
+          data={shown.map((p) => p.value)}
+          dates={shown.map((p) => p.at)}
           kind={perf === "share" ? "line" : "bar"}
           formatAxis={perf === "share" ? priceAxis : pctAxis}
           onHover={setHover}
+          empty={perf === "share" ? "Share-price history starts recording when the vault is read; the chart appears after two days" : "Phoenix funding history is unavailable right now"}
           ariaLabel={perf === "share" ? "Share price line chart" : "Daily funding rate bar chart"}
         />
       </section>
-
-      <Card
-        title="Monthly returns"
-        sub={
-          <p className="fm-sub num">
-            Since launch {spct(m.since, 1)} {fees} · from {seriesLabel(0)}
-          </p>
-        }
-        right={
-          <div className="fm-tgl">
-            FEES{" "}
-            <Seg
-              small
-              value={fees}
-              options={[
-                ["gross", "Gross"],
-                ["net", "Net"],
-              ]}
-              onChange={setFees}
-            />{" "}
-            BASIS{" "}
-            <Seg
-              small
-              value={basis}
-              options={[
-                ["roi", "ROI"],
-                ["apy", "APY"],
-              ]}
-              onChange={setBasis}
-            />
-          </div>
-        }
-      >
-        <div className="fm-mtw">
-          <table className="fm-mt num">
-            <thead>
-              <tr>
-                <th>Year</th>
-                {MONTHS.map((mo) => (
-                  <th key={mo}>{mo}</th>
-                ))}
-                <th>YTD</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.keys(m.rows).map((ys) => {
-                const y = Number(ys);
-                return (
-                  <tr key={y}>
-                    <td className="y">{y}</td>
-                    {MONTHS.map((_, i) => {
-                      const cell = m.rows[y][i];
-                      return cell ? (
-                        <td key={i} className={sign(cell.value)}>
-                          {spct(cell.value, 1)}
-                          {cell.mtd && <sup>MTD</sup>}
-                        </td>
-                      ) : (
-                        <td key={i} className="e">
-                          –
-                        </td>
-                      );
-                    })}
-                    <td className={`y ${sign(m.ytd[y])}`}>{spct(m.ytd[y], 1)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <Card title="Where the capital sits" sub={<p className="fm-sub num">{usdC(v.tvl)} across 2 venues</p>}>
-        <div className="fm-al">
-          {alloc.map(([name, , amount, color]) => (
-            <i key={name} style={{ width: `${(amount / v.tvl) * 100}%`, background: color }} />
-          ))}
-        </div>
-        {alloc.map(([name, sub, amount, color, logo]) => (
-          <div key={name} className="fm-alr num">
-            <span className="sw" style={{ background: color }} />
-            <span>
-              <b>
-                {logo && <Icon sym={logo} className="fm-ico14" />}
-                {name}
-              </b>
-              <small>{sub}</small>
-            </span>
-            <span>{usdC(amount)}</span>
-            <span className="p">{pct((amount / v.tvl) * 100, 1)}</span>
-          </div>
-        ))}
-      </Card>
     </>
   );
 }
 
-// ── All Transactions ───────────────────────────────────────────────────────
-
-export function BasisTransactions({ vault: v }: { vault: BasisVault }) {
-  const [tab, setTab] = useState<"current" | "vault">("current");
-  const N = SERIES_DAYS;
-  const dp = v.price > 1e4 ? 4 : 2;
-  // Vault-wide activity (sample): daily funding settlements and a keeper rebalance.
-  const activity: string[][] = [
-    [seriesLabel(N - 1), "Funding settled", `+${usdC((v.tvl * v.apy7) / 36500)}`, "0", "Vault"],
-    [seriesLabel(N - 2), "Rebalance", `Short +${nf(504 / v.price, dp)} ${v.asset}`, "0", "Keeper"],
-    [seriesLabel(N - 2), "Funding settled", `+${usdC((v.tvl * v.apy[N - 2]) / 36500)}`, "0", "Vault"],
-    [seriesLabel(N - 3), "Funding settled", `+${usdC((v.tvl * v.apy[N - 3]) / 36500)}`, "0", "Vault"],
-  ];
-  return (
-    <>
-      <section className="fm-card">
-        <div className="fm-pvh">
-          <div>
-            <div className="lbl">My Vault Position</div>
-            <div className="fm-big num">{usdC(0)}</div>
-          </div>
-        </div>
-        <div className="fm-nopos">No position in this vault yet</div>
-      </section>
-      <section className="fm-card">
-        <div className="fm-ch">
-          <h3>All Transactions</h3>
-          <Seg
-            small
-            value={tab}
-            options={[
-              ["current", "Current Position"],
-              ["vault", "Vault Activity"],
-            ]}
-            onChange={setTab}
-          />
-        </div>
-        {tab === "current" ? (
-          <div className="fm-nopos">No position in this vault yet</div>
-        ) : (
-          <div className="fm-mtw">
-            <table className="fm-txt num">
-              <thead>
-                <tr>
-                  {["Date", "Action", "Amount", "Shares", "By"].map((h) => (
-                    <th key={h}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {activity.map((row, i) => (
-                  <tr key={i}>
-                    {row.map((cell, j) => (
-                      <td key={j}>{cell}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </>
-  );
-}

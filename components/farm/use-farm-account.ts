@@ -140,6 +140,8 @@ export function useFarmAccount() {
     poolsLoading,
     positionsLoading,
     history,
+    /** True when the margin history scan reached the oldest signature (cost bases are known). */
+    historyComplete: Boolean(page?.complete),
     ...result,
     hf: account.now?.hf ?? null,
     hasMargin: account.hasMargin,

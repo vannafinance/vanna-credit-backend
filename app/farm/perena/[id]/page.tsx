@@ -1,7 +1,10 @@
 "use client";
+
+/** Live Perena vault page (V3 design): see components/farm/perena/perena-vault.tsx. */
 import { useParams } from "next/navigation";
-import { LiveVaultPage } from "@/components/farm/live-vault-page";
+import { PerenaVaultPage } from "@/components/farm/perena/perena-vault";
+
 export default function PerenaVaultRoute() {
   const params = useParams();
-  return <LiveVaultPage id={`perena-${params?.id ?? ""}`} />;
+  return <PerenaVaultPage id={(params?.id as string) ?? ""} />;
 }
