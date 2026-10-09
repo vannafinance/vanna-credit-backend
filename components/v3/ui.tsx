@@ -251,9 +251,10 @@ export interface StatItem {
   sub?: ReactNode;
   valueClass?: string;
 }
-export function StatStrip({ items, n }: { items: StatItem[]; n?: number }) {
+/** `center`: the Margin page's strip look (icon + label on one centered line, centered value). */
+export function StatStrip({ items, n, center = false }: { items: StatItem[]; n?: number; center?: boolean }) {
   return (
-    <section className={`fs ${items.length % 2 ? "odd" : ""}`} style={{ ["--n" as string]: n ?? items.length }}>
+    <section className={`fs ${items.length % 2 ? "odd" : ""} ${center ? "c" : ""}`} style={{ ["--n" as string]: n ?? items.length }}>
       {items.map((it, k) => (
         <article key={k}>
           <div className="hd">

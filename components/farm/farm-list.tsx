@@ -7,8 +7,9 @@
  *
  * Data: Kamino reserve metrics (`useFarmPools`, GET /api/farm/pools), the margin account's Kamino
  * cTokens and their earnings / net APY ({@link useFarmAccount}), farm history decoded from the margin
- * account's on-chain events (`useMarginHistory`). Basis and Perena rows use deployed vault state
- * (./vault-rows.tsx), in the same row / sortable-header style as the Kamino rows.
+ * account's on-chain events (`useMarginHistory`). Basis rows use deployed vault state
+ * (./vault-rows.tsx), in the same row / sortable-header style as the Kamino rows; Perena vaults get
+ * their own table under the Kamino one (Lending/Single Assets), with Perena's published APY.
  */
 import "./farm-v3.css";
 import { useEffect, useMemo, useState } from "react";
@@ -21,9 +22,8 @@ import { explorerUrl } from "@/lib/solana/config";
 import { isFarmListed } from "@/lib/solana/farm";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
-import { positionOf, vaultHref } from "@/lib/farm/basis-live";
+import { perenaProduct, positionOf, usePerenaMarket, vaultHref } from "@/lib/farm/basis-live";
 import { VaultTable } from "./vault-rows";
-import { PerenaCards } from "./perena/perena-cards";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
@@ -61,7 +61,9 @@ export function FarmList() {
   const [thr, setThr] = useState("");
   const [thrOpen, setThrOpen] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
+  const [perenaSort, setPerenaSort] = useState<SortState>(null);
   const liveVaults = useVaults();
+  const perenaMarket = usePerenaMarket();
   const thrRef = useOutside(thrOpen, () => setThrOpen(false));
 
   // "Back to pools" from a basis vault lands on /farm?category=delta-neutral.
@@ -102,6 +104,7 @@ export function FarmList() {
   const strip = farm.connected && (
     <div className="fm-fsw">
       <StatStrip
+        center
         n={5}
         items={[
           { icon: IC.wallet, label: "Your Deposit TVL", value: usd(t.tvl + vaultTvl) },
@@ -144,7 +147,8 @@ export function FarmList() {
               </>
             ),
             value: hfFmt(hf),
-            valueClass: hf === null ? "" : hfZone(hf),
+            // Same colouring as Margin: green "No debt", zone colour otherwise.
+            valueClass: hf === null ? "z-ok" : hfZone(hf),
           },
         ]}
       />
@@ -206,8 +210,71 @@ export function FarmList() {
     );
   };
 
-  const dnTable = () => <VaultTable kind="basis" query={q} keepAsset={keepAsset} sort={sort} onSort={setSort} />;
-  const perenaTable = () => <PerenaCards query={q} keepAsset={keepAsset} />;
+  // Perena vaults: their own table under the Kamino one (a vault has no borrow side, so it gets its
+  // own columns), in the same row / pill / sortable-header style.
+  const perenaTable = () => {
+    const query = q.trim().toLowerCase();
+    const items = VAULTS.filter((v) => v.kind === "perena" && (!query || `${v.name} ${v.symbol} perena usdc`.toLowerCase().includes(query)) && keepAsset(v.asset)).map((v) => {
+      const st = liveVaults.data.find((x) => x.id === v.id);
+      const product = perenaProduct(perenaMarket, v.id);
+      const apy = product.apy7 ?? 0;
+      const tvl = st?.navUsd ?? 0;
+      const px = st?.sharePriceUsd ?? 0;
+      const supply = px > 0 ? tvl / px : 0;
+      const held = vaultHoldings.find((c) => c.mint === v.mint);
+      return {
+        v: { asset: v.symbol, prot: "Perena", tvl, px, apy, holders: product.holders ?? 0, hold: held?.usd ?? 0 },
+        el: (
+          <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k7" aria-label={`Open ${v.name} vault`}>
+            <Cell
+              v={
+                <span className="fm-tk">
+                  <Icon sym="SOL" className="fm-chn" />
+                  <Icon sym={v.symbol} className="fm-ico16" />
+                  {v.symbol}
+                </span>
+              }
+              mini={["Perena", "Vault"]}
+            />
+            <Cell v={<Venue name="Perena" />} />
+            <Cell v={`${cmp(supply)} ${v.symbol}`} mini={usd(tvl)} />
+            <Cell v={usd(px, 6)} mini="USDC per share" />
+            <Cell v={pct(apy)} cls={apy > 0 ? "pos" : ""} />
+            <Cell v={nf(product.holders ?? 0, 0)} />
+            <Cell v={`${nf(held?.amount ?? 0, 4)} ${v.symbol}`} mini={usd(held?.usd ?? 0)} />
+          </Link>
+        ),
+      };
+    });
+    if (!items.length) return null;
+    return (
+      <>
+        <h2 className="fm-tblh">
+          <Icon sym="Perena" className="fm-ico16 fm-inl" />
+          Perena vaults
+        </h2>
+        <div className="fm-tbl" aria-label="Perena vaults">
+          <SortHead
+            cls="k7"
+            sort={perenaSort}
+            onSort={setPerenaSort}
+            cols={[
+              ["Asset", "asset"],
+              ["Protocol", "prot"],
+              ["Total Value Locked", "tvl", "Receipt supply × share price, read on chain by Vanna."],
+              ["Share Price", "px", "USDC per receipt, from Perena's on-chain price account."],
+              ["APY (7D)", "apy", "Perena's published 7-day APY (api.perena.org), as on app.perena.org/earn."],
+              ["Holders", "holders", "Wallets holding the receipt, from Perena's public API."],
+              ["Holding", "hold"],
+            ]}
+          />
+          {sortRows(items, perenaSort).map((x) => x.el)}
+        </div>
+      </>
+    );
+  };
+
+  const dnTable = () => <VaultTable query={q} keepAsset={keepAsset} keepApy={keepThr} sort={sort} onSort={setSort} />;
 
   const posTable = () => {
     // Kamino cTokens and Basis / Perena receipts held in the margin account, one table.
@@ -422,7 +489,7 @@ export function FarmList() {
                   </button>
                 )}
               />
-              {!dn && <span className="fm-ddw" ref={thrRef}>
+              <span className="fm-ddw" ref={thrRef}>
                 <button type="button" className="fm-chip" aria-haspopup="dialog" aria-expanded={thrOpen} onClick={() => setThrOpen((o) => !o)}>
                   {dn ? "Vault APY" : "Total Borrow"} <span>{thrLbl}</span>
                 </button>
@@ -460,7 +527,7 @@ export function FarmList() {
                     />
                   </div>
                 )}
-              </span>}
+              </span>
             </div>
           )}
         </div>

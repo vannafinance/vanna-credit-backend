@@ -154,6 +154,20 @@ html.dark .v3{
   .v3 .fs .s{margin-top:-4px}
 }
 
+/* StatStrip `center` — the Margin page's stats strip (components/margin/margin-v3.css .mg-stats). */
+@media (min-width:768px){
+  .v3 .fs.c{border-color:var(--line-2)}
+  .v3 .fs.c article{height:auto;min-height:120px;padding:16px 8px;align-items:center;gap:6px}
+  .v3 .fs.c .hd{justify-content:center;gap:6px;width:100%;min-height:42px}
+  .v3 .fs.c .ic{width:24px;height:24px;flex:none}
+  .v3 .fs.c .k{font-size:11px;text-align:center;line-height:1.25;justify-content:center}
+  .v3 .fs.c .v{font-size:18px;text-align:center}
+  .v3 .fs.c .s{margin-top:0;text-align:center}
+}
+@media (min-width:1024px){.v3 .fs.c .v{font-size:22px}}
+/* A zone colour on a strip value (health factor) must win over the strip's text colour. */
+.v3 .fs .v.z-ok{color:var(--ok)} .v3 .fs .v.z-caution{color:var(--caution)} .v3 .fs .v.z-warn{color:var(--warn)} .v3 .fs .v.z-danger{color:var(--danger)}
+
 /* toolbar + segmented */
 .v3 .bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px}
 .v3 .seg{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--field);flex-wrap:wrap}

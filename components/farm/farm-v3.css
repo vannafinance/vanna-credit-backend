@@ -414,3 +414,7 @@ html:not(.dark) .v3 .fm-act.k .fm-cta:disabled{background:#a7a7a7;color:#fff}   
 .v3 .fm-pc-hold b{color:var(--text);font-weight:600}
 .v3 .fm-tw > .fm-pcs-grid{min-width:0}
 .v3 .fm-tblh{display:flex;align-items:center;gap:8px}
+/* Delta-neutral list: "Jupiter · Phoenix" wraps instead of being cut off in the 8-column grid. */
+.v3 .fm-tbl[aria-label="Delta-neutral vaults"] .fm-ven > span{white-space:normal;line-height:1.3}
+/* Perena vaults table (seven columns, same row style as the Kamino table above it). */
+.v3 .fm-tr.k7{grid-template-columns:repeat(7,minmax(0,1fr))}

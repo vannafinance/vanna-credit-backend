@@ -218,6 +218,38 @@ export function BottomPanel({
                 </tbody>
               </table>
             </div>
+            {/* Narrow bottom panel: one card per position instead of a sideways-scrolling table. */}
+            <div className="px-pcards num">
+              {rows.map((r) => (
+                <div key={r.key} className="px-card">
+                  <div className="px-card-h">
+                    <Img src={marketIcon(r.key)} className="px-mk-ic" />
+                    <b>{r.key}-PERP</b>
+                    <SideTag s={r.side} />
+                    <span className="px-card-lev">{levFmt(r.leverage)}</span>
+                    <button type="button" className="px-close-btn px-card-close" disabled={busy} onClick={() => setClosing({ row: r, pct: 100 })}>
+                      Close
+                    </button>
+                  </div>
+                  <div className="px-card-g">
+                    <Cell k="Size">
+                      {tokAmt(r.tokens, r.key)} {r.key}
+                    </Cell>
+                    <Cell k="Entry">${price(r.entry)}</Cell>
+                    <Cell k="Mark">${price(r.mark)}</Cell>
+                    <Cell k="Liq. price">
+                      <LiqCell row={r} hf={hf} />
+                    </Cell>
+                    <Cell k="PnL (ROE)">
+                      <span className={upDn(r.pnl)}>
+                        {sUsd(r.pnl)} ({spct(r.collateral > 0 ? (r.pnl / r.collateral) * 100 : 0)})
+                      </span>
+                    </Cell>
+                    <Cell k="Equity">{usd(r.equity)}</Cell>
+                  </div>
+                </div>
+              ))}
+            </div>
           </>
         )
       ) : tab === "history" ? (
