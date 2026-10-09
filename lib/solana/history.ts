@@ -1,3 +1,4 @@
+import { Buffer } from "buffer"; // the `buffer` package (hex / base64), not the browser global
 import { VAULTS, vaultByMint, BASIS_PROGRAM, PERENA_PROGRAM } from "./vault-catalogue";
 import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */

@@ -1,4 +1,7 @@
 // Adapted from credit-layer/scripts/src/perena.ts (feature/phoenix-titan).
+// The `buffer` package's Buffer (as in kamino.ts / phoenix.ts): the browser's global Buffer polyfill
+// has no writeBigUInt64LE, which broke Perena deposits / withdrawals in the app.
+import { Buffer } from "buffer";
 import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
