@@ -16,22 +16,22 @@ const ACTION_LABEL: Record<PerpHistoryRow["action"], string> = {
 };
 
 const time = (unix: number) =>
-  unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
 
 /** The margin's Phoenix actions, decoded from the wallet's transactions (newest first). */
 const TradeHistoryTable = ({ rows, loading }: { rows: PerpHistoryRow[]; loading: boolean }) => {
   const columns: PerpsColumn<PerpHistoryRow>[] = [
     { id: "time", header: "Time", render: (r) => time(r.timestamp) },
     { id: "action", header: "Action", render: (r) => <span className={`font-semibold ${r.action === "nofill" ? "text-[#999999]" : ""}`} title={r.action === "nofill" ? "Nothing on the book inside your price limit — the USDC stayed in Phoenix" : undefined}>{ACTION_LABEL[r.action]}</span> },
-    { id: "market", header: "Market", render: (r) => (r.market ? `${r.market}-PERP` : "—") },
+    { id: "market", header: "Market", render: (r) => (r.market ? `${r.market}-PERP` : "N/A") },
     {
       id: "side",
       header: "Side",
       render: (r) =>
-        r.side ? <span className={`font-semibold ${r.side === "long" ? "text-[#24A0A9]" : "text-[#FC5457]"}`}>{r.side === "long" ? "Long" : "Short"}</span> : "—",
+        r.side ? <span className={`font-semibold ${r.side === "long" ? "text-[#24A0A9]" : "text-[#FC5457]"}`}>{r.side === "long" ? "Long" : "Short"}</span> : "N/A",
     },
-    { id: "size", header: "Size", render: (r) => (r.sizeUsd == null ? "—" : `$${fmtUsd(r.sizeUsd)}`) },
-    { id: "usdc", header: "USDC", render: (r) => (r.usdc == null ? "—" : `${fmtUsd(r.usdc)} USDC`) },
+    { id: "size", header: "Size", render: (r) => `$${fmtUsd(r.sizeUsd)}` },
+    { id: "usdc", header: "USDC", render: (r) => `${fmtUsd(r.usdc)} USDC` },
     {
       id: "tx",
       header: "Tx",

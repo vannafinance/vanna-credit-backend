@@ -45,14 +45,14 @@ export function TraderFarm({ p }: { p: Portfolio }) {
           rows={[
             ["Total Farm Value", usd(tot)],
             ["Active Vaults", String(list.length)],
-            ["APY before borrow cost", wApy === null ? "—" : pct(wApy), wApy !== null && wApy > 0 ? "pf-up" : "", TT.farmApy],
-            ["Share of Margin Account", holdings > 0 ? pct((tot / holdings) * 100, 1) : "—", "", TT.farmShare],
+            ["APY before borrow cost", pct(wApy ?? 0), wApy !== null && wApy > 0 ? "pf-up" : "", TT.farmApy],
+            ["Share of Margin Account", pct(holdings > 0 ? (tot / holdings) * 100 : 0, 1), "", TT.farmShare],
           ]}
         />
         <ChartCard
           title="Farm Equity"
           value={usd(tot)}
-          sub={earned === null ? "earned: —" : `${sUsd(earned)} earned`}
+          sub={`${earned === null ? usd(0) : sUsd(earned)} earned`}
           series={null}
           empty="Value over time isn't recorded on-chain; the current figure is above."
         />
@@ -123,9 +123,9 @@ export function TraderFarm({ p }: { p: Portfolio }) {
                   <Ct key="h" desc={`${tokFmt(f.receipts, f.symbol, false)} ${f.receiptSymbol} · ${usd(f.liquidityUsd)}`}>
                     {tokFmt(f.underlying, f.symbol)}
                   </Ct>,
-                  <Ct key="y">{apy === null ? "—" : pct(apy * 100)}</Ct>,
+                  <Ct key="y">{pct((apy ?? 0) * 100)}</Ct>,
                   <Ct key="e" desc={e === null ? "" : tokFmt(e, f.symbol)}>
-                    {e === null ? "—" : <span className={e > 0 ? "pos" : ""}>{sUsd(e * (px[f.symbol] ?? 0))}</span>}
+                    {e === null ? usd(0) : <span className={e > 0 ? "pos" : ""}>{sUsd(e * (px[f.symbol] ?? 0))}</span>}
                   </Ct>,
                 ],
               };

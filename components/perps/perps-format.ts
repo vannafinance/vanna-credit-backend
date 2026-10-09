@@ -17,7 +17,8 @@ export const pairSlug = (marketKey: string) => `${marketKey.toLowerCase()}usdc`;
 
 /** Price with precision scaled to its magnitude (BTC 2dp, small prices more). */
 export function fmtPrice(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
+  // Unknown / not-yet-loaded prints the zero form ("0.00"), never a placeholder dash.
+  if (value == null || !Number.isFinite(value)) value = 0;
   const abs = Math.abs(value);
   const digits = abs >= 1000 ? 2 : abs >= 1 ? 3 : 5;
   return value.toLocaleString("en-US", {
@@ -28,7 +29,8 @@ export function fmtPrice(value: number | null | undefined): string {
 
 /** USD amount with 2 decimals. */
 export function fmtUsd(value: number | null | undefined, digits = 2): string {
-  if (value == null || !Number.isFinite(value)) return "—";
+  // Unknown / not-yet-loaded prints the zero form ("0.00"), never a placeholder dash.
+  if (value == null || !Number.isFinite(value)) value = 0;
   return value.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
@@ -37,7 +39,8 @@ export function fmtUsd(value: number | null | undefined, digits = 2): string {
 
 /** Base-asset exposure, with enough precision for small BTC/ETH orders. */
 export function fmtTokenSize(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  // Unknown / not-yet-loaded (or a nonsensical negative size) prints "0", never a placeholder dash.
+  if (value == null || !Number.isFinite(value) || value < 0) value = 0;
   if (value > 0 && value < 0.00000001) return "<0.00000001";
   return value.toLocaleString("en-US", { maximumFractionDigits: 8 });
 }

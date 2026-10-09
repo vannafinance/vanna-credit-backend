@@ -18,7 +18,7 @@ import type { Portfolio } from "./use-portfolio";
 import { ChartCard, HistNav, InfoCard, PTable, TT, TxCell, sign, when } from "./pf-ui";
 
 const SideTxt = ({ s }: { s: "long" | "short" | null }) =>
-  s ? <b className={s === "long" ? "pf-long" : "pf-short"}>{s === "long" ? "Long" : "Short"}</b> : <>—</>;
+  s ? <b className={s === "long" ? "pf-long" : "pf-short"}>{s === "long" ? "Long" : "Short"}</b> : <>N/A</>;
 const Mkt = ({ k }: { k: string }) => (
   <span className="pf-mk">
     <Icon sym={k} className="ico pf-i16" />
@@ -48,7 +48,7 @@ export function TraderPerps({ p }: { p: Portfolio }) {
             ["Perps Value", usd(value), "", TT.perpsValue],
             ["Open Size", usd(size), "", TT.perpsSize],
             ["Unrealized PnL", sUsd(pnl), sign(pnl), TT.perpsPnl],
-            ["Realized PnL", realized === null ? "—" : sUsd(realized), realized === null ? "" : sign(realized), TT.perpsReal],
+            ["Realized PnL", realized === null ? usd(0) : sUsd(realized), realized === null ? "" : sign(realized), TT.perpsReal],
             ["Open Positions", String(list.length)],
           ]}
         />
@@ -87,7 +87,7 @@ export function TraderPerps({ p }: { p: Portfolio }) {
                     </span>
                   ),
                   <SideTxt key="s" s={x.side} />,
-                  x.sizeUsd !== null ? usd(x.sizeUsd) : x.usdc !== null ? tokFmt(x.usdc, "USDC") : "—",
+                  x.sizeUsd !== null ? usd(x.sizeUsd) : x.usdc !== null ? tokFmt(x.usdc, "USDC") : usd(0),
                   <TxCell key="t" sig={x.signature} plain />,
                 ],
               }))}

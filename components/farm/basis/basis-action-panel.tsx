@@ -134,7 +134,7 @@ export function BasisActionPanel({ vault: v, token, onToken, account }: { vault:
               )}
             </span>
           </div>
-          <div className="fm-amt-u num">~ {usdIn === null ? "—" : usd(usdIn)}</div>
+          <div className="fm-amt-u num">~ {usd(usdIn ?? 0)}</div>
           <div className="fm-amt-f">
             <span className="fm-pcs">
               {[10, 25, 50, 100].map((p) => (
@@ -156,12 +156,12 @@ export function BasisActionPanel({ vault: v, token, onToken, account }: { vault:
                 <div className="lbl">
                   Net APY <Info text={`Borrow APY is charged only on the part of this deposit that came from your ${t} loan.`} />
                 </div>
-                <div className={`big ${units && netApy !== null && netApy < 0 ? "n" : ""}`}>{units && netApy !== null ? pct(netApy, 1) : "—"}</div>
+                <div className={`big ${units && netApy !== null && netApy < 0 ? "n" : ""}`}>{pct(units && netApy !== null ? netApy : 0, 1)}</div>
                 <div className="f">{formula}</div>
               </div>
               <div className="r">
                 <div className="lbl">Est. earnings</div>
-                <div className="big">{units && perYear !== null ? usd(perYear / 12) : "—"}</div>
+                <div className="big">{usd(units && perYear !== null ? perYear / 12 : 0)}</div>
                 <div className="f">{units && perYear !== null ? `per month · ${usd(perYear, 0)} a year` : ""}</div>
               </div>
             </div>
@@ -174,7 +174,7 @@ export function BasisActionPanel({ vault: v, token, onToken, account }: { vault:
               </div>
               <div className="kv">
                 <span>Deposit token borrow APY</span>
-                <span>{borrow == null ? "—" : pct(borrow, 2)}</span>
+                <span>{pct(borrow ?? 0, 2)}</span>
               </div>
               {account.hf !== null && (
                 <div className="kv">
@@ -213,8 +213,8 @@ export function BasisActionPanel({ vault: v, token, onToken, account }: { vault:
       />
       <YieldList
         rows={[
-          ["Your Position", "—"],
-          ["Earnings", "—"],
+          ["Your Position", usd(0)],
+          ["Earnings", usd(0)],
           ["Receipt", v.share],
         ]}
       />

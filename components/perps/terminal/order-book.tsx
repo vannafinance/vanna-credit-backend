@@ -98,7 +98,7 @@ function BookRows({ marketKey, book, mark, change, d }: { marketKey: string; boo
       <div className="px-bk num">
         <div className="px-bk-side asks">{ar.slice().reverse().map((l) => row(l, "a"))}</div>
         <div className="px-bk-mid">
-          <b className={change === null ? "" : upDn(change)}>{mark ? price(mark) : "—"}</b>
+          <b className={change === null ? "" : upDn(change)}>{price(mark || 0)}</b>
           <span>{spread !== null && mid ? `Spread ${nf(spread, d)} · ${nf((spread / mid) * 100, 3)}%` : book ? "No liquidity" : "Loading…"}</span>
         </div>
         <div className="px-bk-side bids">{br.map((l) => row(l, "b"))}</div>

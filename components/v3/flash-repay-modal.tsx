@@ -296,7 +296,7 @@ export function Review({
   const perpsTotal = p.phoenixValueUsd;
   const farmTotal = p.farm.reduce((a, f) => a + f.usd, 0);
   const pnlCell = (v: number | null, tag?: string) =>
-    v === null ? <span className="mg-mut">—</span> : (
+    v === null ? <span className="mg-mut">{sUsd(0)}</span> : (
       <>
         <span className={v >= 0 ? "pos" : "neg"}>{sUsd(v)}</span>
         {tag && <small className="mg-mut"> {tag}</small>}
@@ -383,7 +383,7 @@ export function Review({
                         <small>Phoenix trader account</small>
                       </div>
                     </span>
-                    <span className="num">—</span>
+                    <span className="num">N/A</span>
                     <span className="num">{pnlCell(null)}</span>
                     <span className="mg-fr-get num">+{nf(p.phoenixIdleUsdc, 2)} USDC</span>
                   </div>
@@ -494,7 +494,7 @@ export function Review({
             <div className="kv">
               <span>Account leverage</span>
               <span className="num">
-                {leverage !== null ? levFmt(leverage) : "—"} {IC.arrow} {transfer ? "—" : levFmt(1)}
+                {levFmt(leverage ?? 0)} {IC.arrow} {levFmt(transfer ? 0 : 1)}
               </span>
             </div>
             <div className="kv">

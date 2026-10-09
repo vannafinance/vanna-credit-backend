@@ -171,15 +171,15 @@ export function LiveVaultPage({ id }: { id: string }) {
           {[
             [
               "Total value locked",
-              state?.navUsd == null ? "—" : usd(state.navUsd),
+              usd(state?.navUsd ?? 0),
             ],
             [
               "Share price",
-              state?.sharePriceUsd == null ? "—" : usd(state.sharePriceUsd, 6),
+              usd(state?.sharePriceUsd ?? 0, 6),
             ],
             [
               "Vault APY (7D)",
-              state?.apy7 == null ? "—" : `${nf(state.apy7, 2)}%`,
+              `${nf(state?.apy7 ?? 0, 2)}%`,
             ],
             ["Your position", usd(holding?.usd ?? 0)],
           ].map(([label, value]) => (
@@ -251,9 +251,7 @@ export function LiveVaultPage({ id }: { id: string }) {
                       <tr>
                         <td>{def.asset} collateral</td>
                         <td>
-                          {state?.assetUnits == null
-                            ? "—"
-                            : `${nf(state.assetUnits, 6)} ${def.asset}`}
+                          {`${nf(state?.assetUnits ?? 0, 6)} ${def.asset}`}
                         </td>
                         <td>
                           {id === "basis-sol"
@@ -264,16 +262,14 @@ export function LiveVaultPage({ id }: { id: string }) {
                       <tr>
                         <td>{def.asset}-PERP short</td>
                         <td>
-                          {state?.shortUsd == null ? "—" : usd(state.shortUsd)}
+                          {usd(state?.shortUsd ?? 0)}
                         </td>
                         <td>Phoenix</td>
                       </tr>
                       <tr>
                         <td>Phoenix equity</td>
                         <td>
-                          {state?.phoenixEquityUsd == null
-                            ? "—"
-                            : usd(state.phoenixEquityUsd)}
+                          {usd(state?.phoenixEquityUsd ?? 0)}
                         </td>
                         <td>Phoenix</td>
                       </tr>
@@ -324,7 +320,7 @@ export function LiveVaultPage({ id }: { id: string }) {
                           {r.type === "farm-deposit" ? "Deposit" : "Withdraw"}
                         </td>
                         <td>{r.amount}</td>
-                        <td>{r.receiptAmount ?? "—"}</td>
+                        <td>{r.receiptAmount ?? "0"}</td>
                         <td>
                           <a
                             className="fm-link"
@@ -441,9 +437,7 @@ export function LiveVaultPage({ id }: { id: string }) {
                   <dd>
                     {walletDeposit
                       ? "After shares move to margin"
-                      : usable.healthFactor == null
-                        ? "—"
-                        : hfFmt(usable.healthFactor)}
+                      : hfFmt(usable.healthFactor)}
                   </dd>
                 </div>
                 {def.kind === "basis" && (

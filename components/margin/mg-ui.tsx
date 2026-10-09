@@ -8,7 +8,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Info } from "@/components/v3/ui";
 import { Icon, IC } from "@/components/v3/icons";
-import { nf } from "@/components/v3/format";
+import { nf, usd } from "@/components/v3/format";
 
 // ---------------------------------------------------------------------------------------------
 // Icons (the design's margin.js svgs)
@@ -191,7 +191,7 @@ const perUsd = (v: number) => (v >= 100 ? v.toFixed(2) : v >= 1 ? v.toFixed(4) :
 /** "1 SOL = $114.92" pill; a click flips it to "$1 = 0.0087 SOL". */
 export function RatioBtn({ sym, price }: { sym: string; price: number }) {
   const [inv, setInv] = useState(false);
-  const text = !(price > 0) ? `1 ${sym} = —` : inv ? `$1 = ${perUsd(1 / price)} ${sym}` : `1 ${sym} = $${pxFmt(price)}`;
+  const text = !(price > 0) ? `1 ${sym} = ${usd(0)}` : inv ? `$1 = ${perUsd(1 / price)} ${sym}` : `1 ${sym} = $${pxFmt(price)}`;
   return (
     <button type="button" className="mg-ratio" aria-label="Swap the price direction" onClick={() => setInv((v) => !v)}>
       <span>{text}</span>

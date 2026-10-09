@@ -86,9 +86,7 @@ export function LiveVaultTable({
               v={
                 positions
                   ? usd(holding?.usd ?? 0)
-                  : state?.navUsd == null
-                    ? "—"
-                    : usd(state.navUsd)
+                  : usd(state?.navUsd ?? 0)
               }
               mini={state?.error ? "Data unavailable" : undefined}
             />
@@ -96,9 +94,7 @@ export function LiveVaultTable({
               v={
                 positions
                   ? `${nf(holding?.amount ?? 0, 6)} ${v.symbol}`
-                  : state?.sharePriceUsd == null
-                    ? "—"
-                    : usd(state.sharePriceUsd, 6)
+                  : usd(state?.sharePriceUsd ?? 0, 6)
               }
             />
             <Cell

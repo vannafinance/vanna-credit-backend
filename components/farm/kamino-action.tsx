@@ -250,11 +250,11 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
             </div>
             <div className="kv">
               <span>APY</span>
-              <span>{apy === null ? "—" : pct(apy * 100)}</span>
+              <span>{pct((apy ?? 0) * 100)}</span>
             </div>
             <div className="kv">
               <span>Projected monthly earnings</span>
-              <span className="pos">{apy === null || !price ? "—" : usd((amount * price * apy) / 12)}</span>
+              <span className="pos">{usd(apy === null || !price ? 0 : (amount * price * apy) / 12)}</span>
             </div>
             {hf && (
               <div className="kv">
@@ -334,7 +334,7 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
         <span>Your Vault Position</span>
         <b className="num">
           <Icon sym={pool.symbol} className="fm-ico16" />
-          {position ? `${tokFmt(position.underlying, pool.symbol)} · ${usd(position.liquidityUsd)}` : "—"}
+          {`${tokFmt(position ? position.underlying : 0, pool.symbol)} · ${usd(position ? position.liquidityUsd : 0)}`}
         </b>
       </div>
       <div className="fm-wbox">
@@ -361,7 +361,7 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
           ) : position && valid ? (
             `~ ${tokFmt(out, pool.symbol)} · ${usd((position.liquidityUsd * percent) / 100)}`
           ) : (
-            "~ —"
+            `~ ${tokFmt(0, pool.symbol)} · ${usd(0)}`
           )}
         </div>
         <div className="fm-wpcs">

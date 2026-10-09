@@ -47,7 +47,7 @@ export function PositionsBox() {
                     {r.via}
                   </>
                 ) : (
-                  "—"
+                  "N/A"
                 )}
               </span>
               <span className="mut" data-l="Health after">

@@ -297,7 +297,7 @@ export function EarnForm({
                 setAll(false);
               }}
             />
-            <div className="earn-fusd num">~ {price > 0 ? usd(a * price) : "—"}</div>
+            <div className="earn-fusd num">~ {usd(price > 0 ? a * price : 0)}</div>
           </div>
         </div>
         <div className="earn-fr2">
@@ -339,7 +339,7 @@ export function EarnForm({
           This pool is empty — the first supply must be at least {minFirstSupply} {sym}.
         </div>
       )}
-      <div className="earn-res">Reserve: {pool?.reserve ? shortAddr(pool.reserve) : "—"}</div>
+      <div className="earn-res">Reserve: {pool?.reserve ? shortAddr(pool.reserve) : "N/A"}</div>
     </section>
   );
 }

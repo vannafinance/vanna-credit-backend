@@ -43,7 +43,7 @@ function Addr({ value }: { value: string }) {
 }
 
 const SOURCE: Record<string, string> = { scope: "Kamino Scope", pyth: "Pyth" };
-const ageFmt = (s: number | null) => (s === null ? "—" : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${nf(s / 3600, 1)}h`);
+const ageFmt = (s: number | null) => (s === null ? "N/A" : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${nf(s / 3600, 1)}h`);
 
 export function RightColumn({ m }: { m: MarginScreen }) {
   const [orc, setOrc] = useState(false);
@@ -65,7 +65,7 @@ export function RightColumn({ m }: { m: MarginScreen }) {
         ["Total Borrowed value", "$0.00", TIPS.borrowed],
         ["Net Available Collateral", "$0.00", TIPS.equity],
         ["Total Value", "$0.00", TIPS.value],
-        ["Net Health Factor", "—", TIPS.hf],
+        ["Net Health Factor", "No debt", TIPS.hf],
         ["Net Borrow Rate", "0.00%", TIPS.rate],
       ];
 
@@ -125,12 +125,12 @@ export function RightColumn({ m }: { m: MarginScreen }) {
                   <span>
                     <Icon sym={t.symbol} />
                     {t.symbol}
-                    <span className="mini">{e?.source ? (SOURCE[e.source] ?? e.source) : "—"}</span>
+                    <span className="mini">{e?.source ? (SOURCE[e.source] ?? e.source) : "N/A"}</span>
                   </span>
                   <span className="num">
-                    {e?.usd ? `$${pxFmt(e.usd)}` : "—"}
+                    {e?.usd ? `$${pxFmt(e.usd)}` : usd(0)}
                     <span className={`mini ${e ? (e.stale ? "" : "ok") : ""}`} title={e?.stale ? "Older than the asset's max price age" : "Within the asset's max price age"}>
-                      {e ? `${e.stale ? "stale" : "fresh"} · ${ageFmt(e.ageSecs)}` : "—"}
+                      {e ? `${e.stale ? "stale" : "fresh"} · ${ageFmt(e.ageSecs)}` : "N/A"}
                     </span>
                   </span>
                 </div>

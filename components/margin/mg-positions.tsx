@@ -137,7 +137,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
     ) : (
       <span className="mg-mut">$0</span>
     );
-  const collCell = data.coll.length || data.idle.length ? [...data.coll, ...data.idle].map(asset) : <span className="mg-mut">—</span>;
+  const collCell = data.coll.length || data.idle.length ? [...data.coll, ...data.idle].map(asset) : <span className="mg-mut">$0</span>;
   const hfCell = <span className={nd ? "z-ok" : hfZone(n.hf)}>{hfFmt(n.hf)}</span>;
   const intr = data.debts.length ? usd(data.interestUsd) : "$0.00";
 
@@ -271,10 +271,10 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
                       <span className="mg-an">{r.symbol}</span>
                     </div>
                   ) : (
-                    "—"
+                    "N/A"
                   )}
                 </div>
-                <div className="mg-td num">{a !== null ? tokFmt(a, r.symbol, false) : "—"}</div>
+                <div className="mg-td num">{a !== null ? tokFmt(a, r.symbol, false) : "0"}</div>
                 <div className="mg-td">{tx(r.signature)}</div>
               </div>
             );

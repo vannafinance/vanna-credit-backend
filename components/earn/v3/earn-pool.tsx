@@ -53,12 +53,12 @@ export function EarnPool({ id, initialTab = "details", initialMode = "supply" }:
   const px = d.prices[sym] ?? 0;
   const status = p ? (p.initialised ? p.status : "Not initialised") : "…";
   const ok = Boolean(p?.initialised);
-  const u = (n: number) => (px > 0 ? `$${fQ(n * px, 2)}` : "—");
+  const u = (n: number) => (px > 0 ? `$${fQ(n * px, 2)}` : `$${fQ(0, 2)}`);
   const strip: [string, string, string?][] = [
-    ["Total Supply", ok ? u(p.totalSupplied) : "—", ok ? `${fQ(p.totalSupplied)} ${sym}` : undefined],
-    ["Available Liquidity", ok ? u(p.availableLiquidity) : "—", ok ? `${fQ(p.availableLiquidity)} ${sym}` : undefined],
-    ["Utilization Rate", ok ? fP(p.utilization * 100) : "—"],
-    ["Supply APY", ok ? fP(p.supplyApr * 100) : "—"],
+    ["Total Supply", ok ? u(p.totalSupplied) : u(0), ok ? `${fQ(p.totalSupplied)} ${sym}` : undefined],
+    ["Available Liquidity", ok ? u(p.availableLiquidity) : u(0), ok ? `${fQ(p.availableLiquidity)} ${sym}` : undefined],
+    ["Utilization Rate", ok ? fP(p.utilization * 100) : fP(0)],
+    ["Supply APY", ok ? fP(p.supplyApr * 100) : fP(0)],
   ];
   const withdrawOnly = !token.lendable;
   const steps: [string, string][] = [

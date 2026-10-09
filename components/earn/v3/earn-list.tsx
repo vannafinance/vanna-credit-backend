@@ -73,7 +73,7 @@ export function EarnList({ initialTab = "vaults" }: { initialTab?: "vaults" | "p
   const netS = useMemo(() => seriesFor("net", tfNet, syms, d.seriesInput, d.now, null), [tfNet, d.seriesInput, d.now]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Share-rounding residue (±$0.000001 right after a supply) is not a loss: show $0.00, not −$0.00.
-  const netValue = d.earnedSummary.usd === null ? "—" : usd(Math.abs(d.earnedSummary.usd) < 0.005 ? 0 : d.earnedSummary.usd);
+  const netValue = d.earnedSummary.usd === null ? usd(0) : usd(Math.abs(d.earnedSummary.usd) < 0.005 ? 0 : d.earnedSummary.usd);
   const depNote =
     d.depositMissingPrice.length > 0
       ? `Excludes ${d.depositMissingPrice.join(", ")} (no oracle price right now).`
@@ -104,12 +104,12 @@ export function EarnList({ initialTab = "vaults" }: { initialTab?: "vaults" | "p
           onClick: () => go(s),
           cells: [
             poolCell(s, p),
-            ok ? { t: `${fT(p.totalSupplied)} ${s}`, v: p.totalSupplied * px, tags: [usdOr(p.totalSupplied, px)] } : { t: "—" },
-            ok ? { t: fP(p.supplyApr * 100), v: p.supplyApr * 100, tags: [fP(p.supplyApr * 100)] } : { t: "—" },
-            ok ? { t: `${fT(p.totalBorrowed)} ${s}`, v: p.totalBorrowed * px, tags: [usdOr(p.totalBorrowed, px)] } : { t: "—" },
-            ok ? { t: fP(p.borrowApr * 100), v: p.borrowApr * 100, tags: [fP(p.borrowApr * 100)] } : { t: "—" },
-            ok ? { t: fP(p.utilization * 100), v: p.utilization * 100, tags: [fP(p.utilization * 100)] } : { t: "—" },
-            connected ? { t: `${fT(mine)} ${s}`, v: mine * px, tags: [usdOr(mine, px)] } : { t: "—", v: 0, tags: ["Connect wallet"] },
+            ok ? { t: `${fT(p.totalSupplied)} ${s}`, v: p.totalSupplied * px, tags: [usdOr(p.totalSupplied, px)] } : { t: `${fT(0)} ${s}`, v: 0 },
+            ok ? { t: fP(p.supplyApr * 100), v: p.supplyApr * 100, tags: [fP(p.supplyApr * 100)] } : { t: fP(0), v: 0 },
+            ok ? { t: `${fT(p.totalBorrowed)} ${s}`, v: p.totalBorrowed * px, tags: [usdOr(p.totalBorrowed, px)] } : { t: `${fT(0)} ${s}`, v: 0 },
+            ok ? { t: fP(p.borrowApr * 100), v: p.borrowApr * 100, tags: [fP(p.borrowApr * 100)] } : { t: fP(0), v: 0 },
+            ok ? { t: fP(p.utilization * 100), v: p.utilization * 100, tags: [fP(p.utilization * 100)] } : { t: fP(0), v: 0 },
+            connected ? { t: `${fT(mine)} ${s}`, v: mine * px, tags: [usdOr(mine, px)] } : { t: `${fT(0)} ${s}`, v: 0, tags: ["Connect wallet"] },
           ],
         };
       }),

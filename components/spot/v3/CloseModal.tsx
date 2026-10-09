@@ -17,7 +17,7 @@ import type { SwapProvider } from "@/lib/solana/aggregator";
 import { describeError } from "@/lib/solana/errors";
 import { Modal, Seg } from "@/components/v3/ui";
 import { BeforeAfter } from "@/components/v3/icons";
-import { hfFmt, levFmt, price, sUsd, tokFmt } from "@/components/v3/format";
+import { hfFmt, levFmt, price, sUsd, tokFmt, usd } from "@/components/v3/format";
 import { AUTO_SLIPPAGE_PERCENT } from "./swap-modals";
 import { executeClose, planClose, type ClosePlan } from "./close-position";
 import { withSwap } from "./swap-model";
@@ -122,7 +122,7 @@ export function CloseModal({ position: p, onClose }: { position: SpotPosition; o
         <div className="kv">
           <span>Entry · Mark</span>
           <span>
-            {p.entry !== null ? `$${price(p.entry)}` : "—"} · ${price(p.mark)}
+            {p.entry !== null ? `$${price(p.entry)}` : usd(0)} · ${price(p.mark)}
           </span>
         </div>
         {plan ? (
@@ -145,7 +145,7 @@ export function CloseModal({ position: p, onClose }: { position: SpotPosition; o
             )}
             <div className="kv">
               <span>Realized P&amp;L (est.)</span>
-              <span className={realized === null ? "" : realized >= 0 ? "pos" : "neg"}>{realized === null ? "— (no entry price)" : sUsd(realized)}</span>
+              <span className={realized === null ? "" : realized >= 0 ? "pos" : "neg"}>{realized === null ? `${usd(0)} (no entry price)` : sUsd(realized)}</span>
             </div>
             {sim && (
               <>

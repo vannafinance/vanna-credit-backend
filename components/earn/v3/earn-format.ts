@@ -40,8 +40,8 @@ export const fXr = (x: number): string => x.toFixed(9).replace(/\.?0+$/, "");
 export const dLabel = (t: number): string =>
   new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-/** "$x" when the asset has an oracle price, "—" otherwise (never a made-up $1). */
-export const usdOr = (amount: number, price: number): string => (price > 0 ? fU(amount * price) : "—");
+/** "$x" when the asset has an oracle price, "$0.00" otherwise (never a made-up $1). */
+export const usdOr = (amount: number, price: number): string => (price > 0 ? fU(amount * price) : fU(0));
 
 /** Short base58 for addresses: "H37YVB…2QJcGC". */
 export const shortAddr = (a: string): string => (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-6)}` : a);

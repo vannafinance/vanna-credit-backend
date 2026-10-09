@@ -66,7 +66,7 @@ export function TraderSpot({ p }: { p: Portfolio }) {
                   <Icon sym={x.symbol} className="ico pf-i16" />
                   {tokFmt(Number(x.amount) || 0, x.symbol)}
                 </Ct>,
-                <Ct key="v">{x.via ? <Venue name={x.via} /> : "—"}</Ct>,
+                <Ct key="v">{x.via ? <Venue name={x.via} /> : "N/A"}</Ct>,
                 <Success key="s" />,
                 <TxCell key="h" sig={x.signature} />,
               ],
@@ -94,7 +94,7 @@ export function TraderSpot({ p }: { p: Portfolio }) {
               cells: [
                 <TokCell key="a" sym={x.symbol} tags={<LsTag side={x.side} />} />,
                 <Ct key="v" desc="Margin account">
-                  {x.via ? <Venue name={x.via} /> : "—"}
+                  {x.via ? <Venue name={x.via} /> : "N/A"}
                 </Ct>,
                 <Ct key="b" desc={x.side === "short" ? "borrowed" : x.source === "deposit" ? "deposited" : "held"}>
                   {x.side === "short" ? "−" : ""}
@@ -104,14 +104,15 @@ export function TraderSpot({ p }: { p: Portfolio }) {
                 <Ct key="e" desc={`$${price(x.mark)}`}>
                   {x.entry === null ? (
                     <>
-                      —<Info text={x.note} />
+                      {usd(0)}
+                      <Info text={x.note} />
                     </>
                   ) : (
                     `$${price(x.entry)}`
                   )}
                 </Ct>,
                 x.pnl === null ? (
-                  <Ct key="p">—</Ct>
+                  <Ct key="p">{usd(0)}</Ct>
                 ) : (
                   <Ct key="p" desc={<span className={sign(x.pnl)}>{spct(x.pnlPct ?? 0, 2)}</span>}>
                     <span className={sign(x.pnl)}>{sUsd(x.pnl)}</span>

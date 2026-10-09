@@ -222,7 +222,7 @@ export function BasisOverview({ vault: v, token, borrowApy }: { vault: BasisVaul
             icon={ICONS.scale}
             title="Below borrow APY"
             level={spread === null ? "med" : spread >= 3 ? "low" : spread >= 0 ? "med" : "high"}
-            value={spread === null ? "—" : spct(spread, 1)}
+            value={spread === null ? pct(0, 1) : spct(spread, 1)}
             caption={`spread over ${token} borrow`}
           />
           <Risk icon={ICONS.up} title="Short squeeze" level="low" value={`+${squeeze}%`} caption={`${v.asset} rise to liquidation`} />
@@ -424,10 +424,10 @@ export function BasisTransactions({ vault: v }: { vault: BasisVault }) {
   const dp = v.price > 1e4 ? 4 : 2;
   // Vault-wide activity (sample): daily funding settlements and a keeper rebalance.
   const activity: string[][] = [
-    [seriesLabel(N - 1), "Funding settled", `+${usdC((v.tvl * v.apy7) / 36500)}`, "—", "Vault"],
-    [seriesLabel(N - 2), "Rebalance", `Short +${nf(504 / v.price, dp)} ${v.asset}`, "—", "Keeper"],
-    [seriesLabel(N - 2), "Funding settled", `+${usdC((v.tvl * v.apy[N - 2]) / 36500)}`, "—", "Vault"],
-    [seriesLabel(N - 3), "Funding settled", `+${usdC((v.tvl * v.apy[N - 3]) / 36500)}`, "—", "Vault"],
+    [seriesLabel(N - 1), "Funding settled", `+${usdC((v.tvl * v.apy7) / 36500)}`, "0", "Vault"],
+    [seriesLabel(N - 2), "Rebalance", `Short +${nf(504 / v.price, dp)} ${v.asset}`, "0", "Keeper"],
+    [seriesLabel(N - 2), "Funding settled", `+${usdC((v.tvl * v.apy[N - 2]) / 36500)}`, "0", "Vault"],
+    [seriesLabel(N - 3), "Funding settled", `+${usdC((v.tvl * v.apy[N - 3]) / 36500)}`, "0", "Vault"],
   ];
   return (
     <>
@@ -435,7 +435,7 @@ export function BasisTransactions({ vault: v }: { vault: BasisVault }) {
         <div className="fm-pvh">
           <div>
             <div className="lbl">My Vault Position</div>
-            <div className="fm-big num">—</div>
+            <div className="fm-big num">{usdC(0)}</div>
           </div>
         </div>
         <div className="fm-nopos">No position in this vault yet</div>

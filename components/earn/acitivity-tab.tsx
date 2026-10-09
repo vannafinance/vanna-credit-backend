@@ -60,7 +60,7 @@ export const ActivityTab = () => {
   const symbol = token.symbol;
   const tokenPrices = useTokenPrices([symbol]);
   const price = tokenPrices[symbol] ?? 0;
-  const usd = (n: number) => (price > 0 ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
+  const usd = (n: number) => (price > 0 ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "$0.00");
 
   const filteredTransactions = useMemo(() => {
     return (recentTransactions ?? [])
@@ -122,11 +122,11 @@ export const ActivityTab = () => {
         rows: [
           {
             cell: [
-              { title: "-", description: historyLoading ? "Loading…" : "No transactions yet" },
-              { title: "-" },
-              { title: "-" },
-              { title: "-" },
-              { title: "-" },
+              { title: "None", description: historyLoading ? "Loading…" : "No transactions yet" },
+              { title: "N/A" },
+              { title: `0 ${symbol}` },
+              { title: "N/A" },
+              { title: "None" },
             ],
           },
         ],
@@ -154,7 +154,7 @@ export const ActivityTab = () => {
             badge: 'green',
           },
           {
-            title: tx.hash ? `${tx.hash.slice(0, 8)}...${tx.hash.slice(-4)}` : "—",
+            title: tx.hash ? `${tx.hash.slice(0, 8)}...${tx.hash.slice(-4)}` : "None",
             clickable: tx.hash ? "link" : undefined,
             link: tx.hash ? explorerUrl("tx", tx.hash) : undefined,
           },

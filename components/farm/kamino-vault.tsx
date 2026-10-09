@@ -39,7 +39,7 @@ const COLS = {
 } as const;
 type TxTab = keyof typeof COLS;
 
-const m = (v: number | null, kind: "pct" | "usd") => (v === null || !Number.isFinite(v) ? "—" : kind === "pct" ? pct(v * 100) : usd(v));
+const m = (v: number | null, kind: "pct" | "usd") => (kind === "pct" ? pct(v !== null && Number.isFinite(v) ? v * 100 : 0) : usd(v !== null && Number.isFinite(v) ? v : 0));
 
 export function KaminoVault({ id }: { id: string }) {
   const { pool, isLoading } = useFarmPool(id);
@@ -105,7 +105,7 @@ export function KaminoVault({ id }: { id: string }) {
             />
             <YieldList
               rows={[
-                ["Your Position", position ? usd(position.liquidityUsd) : "—"],
+                ["Your Position", usd(position ? position.liquidityUsd : 0)],
                 ["Receipt", pool.receiptSymbol],
               ]}
             />
@@ -134,7 +134,7 @@ function Analytics({ pool }: { pool: FarmPoolConfig }) {
       <span>{sub}</span>
     </div>
   );
-  const tok = (v: number | null) => (v === null ? "—" : `${cmp(v)} ${pool.symbol}`);
+  const tok = (v: number | null) => `${cmp(v ?? 0)} ${pool.symbol}`;
   return (
     <>
       <h2 className="fm-h21">Statistics</h2>
@@ -208,9 +208,9 @@ function Transactions({ pool, position, farm }: { pool: FarmPoolConfig; position
   return (
     <>
       <dl className="fm-position-summary num">
-        <div><dt>Position value</dt><dd>{position ? usd(position.liquidityUsd) : "—"}</dd></div>
-        <div><dt>Receipt balance</dt><dd>{position ? `${nf(position.receipts, 6)} ${pool.receiptSymbol}` : "—"}</dd></div>
-        <div><dt>Earned yield</dt><dd>{position?.earnedUsd != null ? usd(position.earnedUsd) : "—"}</dd>
+        <div><dt>Position value</dt><dd>{usd(position ? position.liquidityUsd : 0)}</dd></div>
+        <div><dt>Receipt balance</dt><dd>{`${nf(position ? position.receipts : 0, 6)} ${pool.receiptSymbol}`}</dd></div>
+        <div><dt>Earned yield</dt><dd>{usd(position?.earnedUsd ?? 0)}</dd>
           {position?.since && <small>Since {new Date(position.since).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>}
         </div>
       </dl>

@@ -199,7 +199,7 @@ export function BottomPanel({
                       <td>
                         <span className={`px-2l ${upDn(r.pnl)}`}>
                           <b>{sUsd(r.pnl)}</b>
-                          <small>{r.collateral > 0 ? spct((r.pnl / r.collateral) * 100) : "—"}</small>
+                          <small>{spct(r.collateral > 0 ? (r.pnl / r.collateral) * 100 : 0)}</small>
                         </span>
                       </td>
                       <td>
@@ -209,7 +209,7 @@ export function BottomPanel({
                         </span>
                       </td>
                       <td className="r">
-                        <button type="button" className="px-btn-s" disabled={busy} onClick={() => setClosing({ row: r, pct: 100 })}>
+                        <button type="button" className="px-close-btn" disabled={busy} onClick={() => setClosing({ row: r, pct: 100 })}>
                           Close
                         </button>
                       </td>
@@ -230,22 +230,22 @@ export function BottomPanel({
               Vanna margin account
             </div>
             <Kv k="Health factor" tip="How safe the whole margin account is: holdings ÷ debt. It can be liquidated at 1.10 or below." cls={hfZone(hf)}>
-              {now ? hfFmt(now.hf) : "—"}
+              {hfFmt(now ? now.hf : Infinity)}
             </Kv>
             <Kv k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity).">
-              {now ? levFmt(now.leverage) : "—"}
+              {levFmt(now ? now.leverage : 0)}
             </Kv>
             <Kv k="Total collateral" tip="Everything the margin account holds, including the Phoenix account, at the oracle prices.">
-              {now ? usd(now.holdings) : "—"}
+              {usd(now ? now.holdings : 0)}
             </Kv>
             <Kv k="Total debt" tip="Everything the margin account has borrowed, at today's prices.">
-              {now ? usd(now.debt) : "—"}
+              {usd(now ? now.debt : 0)}
             </Kv>
             <Kv k="Margin USDC available" tip="Idle USDC in your margin account that orders can use.">
               {nf(available, 2)} USDC
             </Kv>
             <Kv k="Room before liquidation" tip="The smallest single price move that liquidates the account, every other price unchanged." cls={room ? roomZone(room) : ""} sub={room ? roomSub(room) : undefined}>
-              {room ? roomText(room) : "—"}
+              {room ? roomText(room) : "None"}
             </Kv>
             <button type="button" className="px-lnk" onClick={() => router.push("/margin")}>
               Deposit / Borrow USDC on the Margin page
@@ -352,9 +352,9 @@ function HistoryTable({ rows, loading }: { rows: PerpHistoryRow[]; loading: bool
       </div>
     );
   const t = (unix: number) =>
-    unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
-  const size = (h: PerpHistoryRow) => (h.sizeUsd == null ? "—" : usd(h.sizeUsd));
-  const usdc = (h: PerpHistoryRow) => (h.usdc == null ? "—" : `${nf(h.usdc, 2)} USDC`);
+    unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
+  const size = (h: PerpHistoryRow) => usd(h.sizeUsd ?? 0);
+  const usdc = (h: PerpHistoryRow) => `${nf(h.usdc ?? 0, 2)} USDC`;
   const label = (h: PerpHistoryRow) => (
     <b className={h.action === "nofill" ? "px-mut" : ""} title={h.action === "nofill" ? "Nothing on the book inside your price limit — the USDC stayed in Phoenix" : undefined}>
       {ACTION_LABEL[h.action]}
@@ -385,8 +385,8 @@ function HistoryTable({ rows, loading }: { rows: PerpHistoryRow[]; loading: bool
               <tr key={`${h.signature}-${i}`}>
                 <td>{t(h.timestamp)}</td>
                 <td>{label(h)}</td>
-                <td>{h.market ? `${h.market}-PERP` : "—"}</td>
-                <td>{h.side ? <SideTag s={h.side} /> : "—"}</td>
+                <td>{h.market ? `${h.market}-PERP` : "N/A"}</td>
+                <td>{h.side ? <SideTag s={h.side} /> : "N/A"}</td>
                 <td>{size(h)}</td>
                 <td>{usdc(h)}</td>
                 <td className="r tx">{tx(h)}</td>

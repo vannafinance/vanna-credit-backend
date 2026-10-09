@@ -78,7 +78,7 @@ export function MarketBar({
           <Img src={marketIcon(k)} className="px-pair-ic" />
           <span className="px-pair-t">
             <b>{pairName(k)}</b>
-            <small>Perps · Max {focus?.info.maxLeverage ?? "—"}x</small>
+            <small>Perps · Max {focus?.info.maxLeverage ?? 0}x</small>
           </span>
           <Chev up={open === "px-pair"} />
         </button>
@@ -108,8 +108,8 @@ export function MarketBar({
                     <Img src={marketIcon(r.info.key)} className="px-pm-ic" />
                     {pairName(r.info.key)}
                   </span>
-                  <span>{r.live ? price(r.live.markPx) : "—"}</span>
-                  <span className={c === null ? "" : upDn(c)}>{c === null ? "—" : spct(c)}</span>
+                  <span>{price(r.live?.markPx ?? 0)}</span>
+                  <span className={c === null ? "" : upDn(c)}>{spct(c ?? 0)}</span>
                   <span>{r.info.maxLeverage}x</span>
                 </button>
               );
@@ -119,22 +119,22 @@ export function MarketBar({
       </div>
 
       <div className="px-mark num" title="Phoenix mark price">
-        <b>{live ? price(live.markPx) : "—"}</b>
+        <b>{price(live?.markPx ?? 0)}</b>
         <small>
-          {ch === null ? "—" : <span className={upDn(ch)}>{spct(ch)}</span>} 24h
+          {ch === null ? spct(0) : <span className={upDn(ch)}>{spct(ch)}</span>} 24h
         </small>
       </div>
 
       <div className="px-stats num">
         <Stat k="Index price" tip={`Phoenix's oracle price of ${k}; funding pulls the mark price toward it. Vanna values your position at its own on-chain index.`}>
-          {live ? `$${price(live.oraclePx)}` : "—"}
+          {`$${price(live?.oraclePx ?? 0)}`}
         </Stat>
-        <Stat k="24h volume">{live ? usdC(live.dayNtlVlm) : "—"}</Stat>
+        <Stat k="24h volume">{usdC(live?.dayNtlVlm ?? 0)}</Stat>
         <Stat k="Open interest" tip="The total size of all open longs and shorts on this Phoenix market.">
-          {live ? usdC(live.openInterest * live.markPx) : "—"}
+          {usdC(live ? live.openInterest * live.markPx : 0)}
         </Stat>
         <Stat k="Funding / 1h" tip="The hourly payment between longs and shorts (longs pay when positive); the timer counts down to the next one.">
-          {live ? <span className={upDn(live.funding)}>{spct(live.funding, 4)}</span> : "—"}
+          {live ? <span className={upDn(live.funding)}>{spct(live.funding, 4)}</span> : spct(0, 4)}
           <span className="px-cd">
             <ClockIcon />
             <span>{countdown}</span>
@@ -147,7 +147,7 @@ export function MarketBar({
               {status.text}
             </span>
           ) : (
-            "—"
+            "N/A"
           )}
         </Stat>
       </div>
@@ -196,7 +196,7 @@ function StripItem({ on, k, tip, cls, children }: { on: boolean; k: string; tip:
         {k}
         <Info text={tip} placement="bottom" />
       </span>
-      <b className={`px-ai-v num ${on ? cls ?? "" : "px-mut"}`}>{on ? children : "—"}</b>
+      <b className={`px-ai-v num ${on ? cls ?? "" : "px-mut"}`}>{children}</b>
     </div>
   );
 }
@@ -238,7 +238,7 @@ export function AccountStrip({
           tip={room ? `The smallest single price move that liquidates the account; ${roomSub(room)}.` : "The smallest single price move that liquidates the account."}
           cls={room ? roomZone(room) : ""}
         >
-          {room ? roomText(room) : "—"}
+          {room ? roomText(room) : "None"}
         </StripItem>
         <StripItem on={on} k="Available" tip="Idle USDC in your margin account that an order can use as collateral.">
           {nf(available, 2)} USDC

@@ -198,7 +198,7 @@ const GO = (
 const short = (sig: string) => `${sig.slice(0, 4)}…${sig.slice(4, 8)}`;
 /** Transaction link to the explorer (custom-RPC cluster = the fork). */
 export function TxCell({ sig, plain }: { sig: string; plain?: boolean }) {
-  if (!sig) return <>—</>;
+  if (!sig) return <>N/A</>;
   return (
     <a className={plain ? "pf-txl" : "pf-tx"} href={explorerUrl("tx", sig)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
       {short(sig)}
@@ -209,7 +209,7 @@ export function TxCell({ sig, plain }: { sig: string; plain?: boolean }) {
 
 /** "Oct 7, 15:04" — one date format on every history (ms since epoch). */
 export const when = (ms: number) => {
-  if (!ms) return "—";
+  if (!ms) return "N/A";
   const d = new Date(ms);
   return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };

@@ -4,7 +4,7 @@
  * Every asset list here comes from the token registry (lib/solana/tokens.ts) — never a
  * hardcoded symbol list — and every figure is derived from on-chain data passed in by the
  * caller. Nothing here fabricates a fallback number: an unknown value is `null` and renders
- * as "—".
+ * as a zero ("$0.00", "0.00%") — the UI never shows a placeholder dash.
  */
 import { findToken, TOKENS, type TokenInfo } from "@/lib/solana/tokens";
 import type { EarnedInterest } from "@/lib/solana/history";
@@ -20,7 +20,7 @@ export const resolveToken = (value: string | null | undefined): TokenInfo | unde
 
 /** Compact token amount: 1_250_000 → "1.25M", 1_250 → "1.25K", else up to `decimals` places. */
 export const fmtCompact = (n: number, decimals = 4): string => {
-  if (!Number.isFinite(n)) return "—";
+  if (!Number.isFinite(n)) return "0";
   const abs = Math.abs(n);
   if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (abs >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
@@ -31,7 +31,7 @@ export const fmtCompact = (n: number, decimals = 4): string => {
 
 /** USD with 2 decimals; sub-cent positives render as "<$0.01" instead of a misleading "$0.00". */
 export const fmtUsd = (n: number | null | undefined): string => {
-  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  if (n === null || n === undefined || !Number.isFinite(n)) return "$0.00";
   if (n > 0 && n < 0.01) return "<$0.01";
   // Share-rounding residue (e.g. −0.000001 right after a supply) is not a real loss.
   if (n < 0 && n > -0.005) return "$0.00";
@@ -41,18 +41,18 @@ export const fmtUsd = (n: number | null | undefined): string => {
 
 /** Fraction (0.052) → "5.20%". */
 export const fmtPct = (fraction: number | null | undefined, decimals = 2): string =>
-  fraction === null || fraction === undefined || !Number.isFinite(fraction) ? "—" : `${(fraction * 100).toFixed(decimals)}%`;
+  fraction === null || fraction === undefined || !Number.isFinite(fraction) ? `${(0).toFixed(decimals)}%` : `${(fraction * 100).toFixed(decimals)}%`;
 
 /** Short base58 address: "H37YVB...GJcGC". */
 export const shortAddress = (addr: string | null | undefined): string =>
-  addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "—";
+  addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "N/A";
 
 /**
  * Aggregate earned interest in USD across the registry.
  *
  * Returns `{ usd, partial, unknownSymbols }`:
  * - an asset whose `earned` is null is NEVER counted as 0 — it is listed in `unknownSymbols` and
- *   makes the total `partial` (the caller must label it or show "—");
+ *   makes the total `partial` (the caller must label it or show a zero);
  * - `usd` is null when earned interest is unknown for every asset that has a position/history.
  *
  * (A previous Stellar bug defaulted missing history to a zero cost basis and showed 100% of the

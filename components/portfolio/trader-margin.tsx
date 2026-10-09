@@ -40,7 +40,7 @@ const mBadge = (t: string) =>
 const amountOf = (r: MarginHistoryRow) => {
   const a = Number(r.amount) || 0;
   if (r.type === "swap") return `${tokFmt(a, r.symbol)} → ${tokFmt(Number(r.toAmount) || 0, r.toSymbol ?? "")}`;
-  return a > 0 && r.symbol ? tokFmt(a, r.symbol) : "—";
+  return r.symbol ? tokFmt(a, r.symbol) : "0";
 };
 
 function Stat({ k, v, tip }: { k: string; v: React.ReactNode; tip: string }) {
@@ -77,17 +77,17 @@ export function TraderMargin({ p }: { p: Portfolio }) {
   const pNow = live ? hfPos(hf) : null;
   const pLiq = hfPos(LIQ_HF);
 
-  // Until the margin account has loaded (`now` null) every figure is "—", never a misleading $0.
-  const d = (v: React.ReactNode) => (now ? v : "—");
+  // Until the margin account has loaded (`now` null) every figure shows its zero form: holdings
+  // and debt default to 0, leverage to 0.00x, and the health factor reads "No debt" (never 0).
   const cells: [string, React.ReactNode, string][] = [
-    ["Total Margin Balance", d(usd(holdings)), TT.value],
-    ["Total Collateral Deposited", T.netDeposited === null ? "—" : usd(T.netDeposited), TT.coll],
-    ["Total Loan Taken", d(usd(debt)), TT.borrowed],
-    ["Cross Account Leverage", now ? levFmt(now.leverage) : "—", TT.lev],
-    ["Health Factor", d(live ? <span className={hfZone(hf)}>{hfFmt(hf)}</span> : hfFmt(hf)), TT.hf],
-    ["Cross Margin Ratio", d(pct(holdings > 0 ? (debt / holdings) * 100 : 0, 1)), TT.ratio],
-    ["Collateral Left Before Liquidation", d(noDebt ? "No debt" : usd(left)), TT.left],
-    ["Net Borrowed Interest Accrued", T.interest === null ? "—" : usd(T.interest), TT.interest],
+    ["Total Margin Balance", usd(holdings), TT.value],
+    ["Total Collateral Deposited", usd(T.netDeposited ?? 0), TT.coll],
+    ["Total Loan Taken", usd(debt), TT.borrowed],
+    ["Cross Account Leverage", levFmt(now?.leverage ?? 0), TT.lev],
+    ["Health Factor", live ? <span className={hfZone(hf)}>{hfFmt(hf)}</span> : hfFmt(hf), TT.hf],
+    ["Cross Margin Ratio", pct(holdings > 0 ? (debt / holdings) * 100 : 0, 1), TT.ratio],
+    ["Collateral Left Before Liquidation", noDebt ? "No debt" : usd(left), TT.left],
+    ["Net Borrowed Interest Accrued", usd(T.interest ?? 0), TT.interest],
   ];
 
   // Token amounts from the account snapshot (receipts and the venue line excluded from "collateral").
@@ -150,7 +150,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
               liquidation price
               <Info text={TT.liqColl} />
             </div>
-            <b className={`num ${room?.state === "now" ? "z-danger" : ""}`}>{!now ? "—" : lp ? `$${price(lp)}` : noDebt ? "No debt" : "None"}</b>
+            <b className={`num ${room?.state === "now" ? "z-danger" : ""}`}>{lp ? `$${price(lp)}` : noDebt ? "No debt" : "None"}</b>
             <span className="num">{!lp || mv === null ? "" : room?.state === "now" ? "reached: liquidatable now" : `${spct(mv, 1)} from $${price(volPx)}`}</span>
           </div>
           <div className="pf-liq-n">
@@ -158,7 +158,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
               Room before liquidation
               <Info text={TT.room} />
             </div>
-            <b className={`num ${room ? roomZone(room) : ""}`}>{room ? roomText(room) : "—"}</b>
+            <b className={`num ${room ? roomZone(room) : ""}`}>{room ? roomText(room) : "No debt"}</b>
             <span className="num">{room ? roomSub(room) : ""}</span>
           </div>
         </div>
@@ -199,7 +199,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
                         {r.symbol}
                       </>
                     ) : (
-                      "—"
+                      "None"
                     )}
                   </span>
                   <span className="pf-mc num" data-l="Amount">
@@ -248,7 +248,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
                     </div>
                   </div>
                 )}
-                {!collBal.length && venue <= 0.005 && <span className="pf-zero">—</span>}
+                {!collBal.length && venue <= 0.005 && <span className="pf-zero">{usd(0)}</span>}
               </div>
               <div className="pf-mc pf-stack" data-l="Borrowed Assets">
                 {debts.length ? (
@@ -269,17 +269,17 @@ export function TraderMargin({ p }: { p: Portfolio }) {
                     );
                   })
                 ) : (
-                  <span className="pf-zero">$0</span>
+                  <span className="pf-zero">{usd(0)}</span>
                 )}
               </div>
               <div className="pf-mc pf-strong num" data-l="Leverage Taken">
-                {now ? levFmt(now.leverage) : "—"}
+                {levFmt(now?.leverage ?? 0)}
               </div>
               <div className="pf-mc pf-strong num" data-l="Health Factor">
                 <span className={live ? hfZone(hf) : ""}>{hfFmt(hf)}</span>
               </div>
               <div className="pf-mc num" data-l="Interest accrued">
-                {T.interest === null ? "—" : usd(T.interest)}
+                {usd(T.interest ?? 0)}
               </div>
               <div className="pf-mc pf-stack" data-l="Action">
                 {debts.length ? (

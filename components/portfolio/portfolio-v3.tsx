@@ -74,7 +74,7 @@ function Card({ ic, label, tip, children, cls = "" }: { ic: React.ReactNode; lab
 
 const Chip = ({ label, v }: { label: string; v: number | null }) => (
   <span className={`pf-chip ${v === null ? "" : v > 0.004 ? "pf-ok" : v < -0.004 ? "pf-bad" : ""}`}>
-    {label} {v === null ? "—" : sUsd(v)}
+    {label} {sUsd(v ?? 0)}
   </span>
 );
 
@@ -120,7 +120,7 @@ function Header({ p }: { p: Portfolio }) {
       </Card>
       <Card ic={IP.pulse} label="Health factor" tip={TT.hf}>
         <div className={`pf-big num ${zone}`}>
-          {now ? hfFmt(hf) : "—"}
+          {hfFmt(now ? hf : null)}
           {live && <span className={`pf-pill ${zone}`}>{hfLabel(hf)}</span>}
         </div>
         <HfBar hf={live ? hf : null} />
@@ -128,7 +128,7 @@ function Header({ p }: { p: Portfolio }) {
           <span className="pf-chip">Borrowed {usd(now?.debt ?? 0)}</span>
           <span className="pf-chip">Leverage {now ? levFmt(now.leverage) : "0.00x"}</span>
           <span className="pf-chip">
-            Interest accrued {on ? (T.interest === null ? "—" : usd(T.interest)) : usd(0)}
+            Interest accrued {usd(on ? (T.interest ?? 0) : 0)}
             <Info text={TT.interest} />
           </span>
         </div>

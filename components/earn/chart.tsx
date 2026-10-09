@@ -610,8 +610,8 @@ export const Chart = memo(function Chart({ type, currencyTab, height, containerW
                     <div className="w-full h-fit flex flex-col gap-1">
                       <p className={`text-[16px] font-semibold ${isDark ? "text-white" : "text-[#111111]"}`}>
                         {selectedDepositApy === "Deposit APY"
-                          ? supplyAPY != null ? `${(supplyAPY * 100).toFixed(2)}%` : "—"
-                          : borrowAPY != null ? `${(borrowAPY * 100).toFixed(2)}%` : "—"}
+                          ? `${((supplyAPY ?? 0) * 100).toFixed(2)}%`
+                          : `${((borrowAPY ?? 0) * 100).toFixed(2)}%`}
                       </p>
                     </div>
                   )}

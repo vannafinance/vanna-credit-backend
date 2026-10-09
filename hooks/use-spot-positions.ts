@@ -404,7 +404,7 @@ export function computeSpotPositions(input: SpotPositionsInput): SpotPosition[] 
 }
 
 const fmtQty = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n >= 100 ? 2 : 6 });
-const fmtPx = (n: number | null) => (n === null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: n >= 100 ? 2 : 4 }));
+const fmtPx = (n: number | null) => (n === null ? '0.00' : n.toLocaleString('en-US', { maximumFractionDigits: n >= 100 ? 2 : 4 }));
 
 export interface SpotPositionsResult {
   positions: SpotPosition[];

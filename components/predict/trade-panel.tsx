@@ -93,9 +93,9 @@ function BuyPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: PanelS
         </summary>
         <div className="rows num">
           <Kv k="Avg price" v={cf(a ? q.avg : ask(o, s))} />
-          <Kv k="Shares" v={a ? shf(q.sh) : "—"} />
-          <Kv k={<>Pays if right <Info text={INFO.pays} /></>} v={a ? usd(q.sh) : "—"} cls="g" />
-          <Kv k="Profit if right" v={a ? `${sUsd(q.sh - a)} (${pct(((q.sh - a) / a) * 100, 0)})` : "—"} cls="g" />
+          <Kv k="Shares" v={shf(a ? q.sh : 0)} />
+          <Kv k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(a ? q.sh : 0)} cls="g" />
+          <Kv k="Profit if right" v={a ? `${sUsd(q.sh - a)} (${pct(((q.sh - a) / a) * 100, 0)})` : `${usd(0)} (${pct(0, 0)})`} cls="g" />
         </div>
       </details>
       <div className="pd-eb">
@@ -121,7 +121,7 @@ function BuyPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: PanelS
           <span>
             Est. yield <Info text={INFO.estYield} />
           </span>
-          <b>{a ? `+${usd(mo)} / month in ${L} shares` : "—"}</b>
+          <b>{`+${usd(a ? mo : 0)} / month in ${L} shares`}</b>
         </div>
         {!sd.scarce && (
           <div className="pd-eb-r t num">
@@ -147,12 +147,12 @@ function BuyPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: PanelS
           </div>
         )}
         <div className="pd-route num">
-          <Step i={1} k="Buy" v={a ? `${shf(q.sh)} ${L}` : "—"} sub={a ? `avg ${cf(q.avg)}` : "on World"} tip={INFO.buyStep} />
+          <Step i={1} k="Buy" v={`${shf(a ? q.sh : 0)} ${L}`} sub={a ? `avg ${cf(q.avg)}` : "on World"} tip={INFO.buyStep} />
           <Step i={2} k="Vault" v={`${pct(sd.share * 100, 0)} matched`} sub={sd.scarce ? "smaller side" : "larger side"} tip={INFO.vaultStep} />
           <Step
             i={3}
             k="Earn pool"
-            v={a ? <><Icon sym="USDC" className="pd-i14" />{fx.newPairs > 0.005 ? `+${usd(fx.newPairs)}` : "+$0.00"}</> : "—"}
+            v={<><Icon sym="USDC" className="pd-i14" />{a && fx.newPairs > 0.005 ? `+${usd(fx.newPairs)}` : "+$0.00"}</>}
             sub={fx.newPairs > 0.005 || !a ? "new USDC lent" : "shares existing pairs"}
             tip={INFO.newUsd}
           />
@@ -251,9 +251,9 @@ function SellPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: Panel
   else
     steps = (
       <>
-        <Step i={1} k="Withdraw" v={n ? <>{usdIco}{usd(r.needUsd)}</> : "—"} sub="USDC from Earn pool" />
-        <Step i={2} k="Split" v={n ? `${shf(r.needUsd)} pairs` : "—"} sub={`keep ${L}, ${other} stays`} />
-        <Step i={3} k="Sell" v={n ? `${shf(n)} ${L}` : "—"} sub={`avg ${cf(n ? qAll.avg : bid(o, s))}`} />
+        <Step i={1} k="Withdraw" v={<>{usdIco}{usd(n ? r.needUsd : 0)}</>} sub="USDC from Earn pool" />
+        <Step i={2} k="Split" v={`${shf(n ? r.needUsd : 0)} pairs`} sub={`keep ${L}, ${other} stays`} />
+        <Step i={3} k="Sell" v={`${shf(n || 0)} ${L}`} sub={`avg ${cf(n ? qAll.avg : bid(o, s))}`} />
       </>
     );
   let lbl = `Sell ${L}`;
@@ -274,9 +274,9 @@ function SellPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: Panel
         <summary>More details {IC.chev}</summary>
         <div className="rows num">
           <Kv k="Avg price" v={cf(n ? qAll.avg : bid(o, s))} />
-          <Kv k="You receive" v={n ? `${usd(r.queued ? qNow.usd : qAll.usd)}${r.queued ? " now" : ""}` : "—"} cls="g" />
-          <Kv k={<>Incl. yield <Info text={INFO.earned} /></>} v={n ? `${sUsd((ySh * qAll.avg) / 100)} (${shf(ySh)} sh)` : "—"} cls="e" />
-          <Kv k="P&L on these shares" v={n ? <span className={qAll.usd - cost >= 0 ? "pos" : "neg"}>{sUsd(qAll.usd - cost)}</span> : "—"} />
+          <Kv k="You receive" v={n ? `${usd(r.queued ? qNow.usd : qAll.usd)}${r.queued ? " now" : ""}` : usd(0)} cls="g" />
+          <Kv k={<>Incl. yield <Info text={INFO.earned} /></>} v={n ? `${sUsd((ySh * qAll.avg) / 100)} (${shf(ySh)} sh)` : `${usd(0)} (${shf(0)} sh)`} cls="e" />
+          <Kv k="P&L on these shares" v={n ? <span className={qAll.usd - cost >= 0 ? "pos" : "neg"}>{sUsd(qAll.usd - cost)}</span> : usd(0)} />
         </div>
       </details>
       <div className="pd-eb sell">
@@ -284,7 +284,7 @@ function SellPreview({ e, o, st, act }: { e: PredictEvent; o: Outcome; st: Panel
           <span>
             {IC.bolt}Sell in one step <Info text={INFO.split} />
           </span>
-          <b className="num">{n ? usd(r.queued ? qNow.usd : qAll.usd) : "—"}</b>
+          <b className="num">{usd(n ? (r.queued ? qNow.usd : qAll.usd) : 0)}</b>
         </div>
         <div className="pd-route num">{steps}</div>
         {r.fromVault > 0 && myShare < 0.999 && (

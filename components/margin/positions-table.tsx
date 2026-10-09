@@ -82,7 +82,7 @@ const formatTokenName = (asset: string): string => {
 const formatInterestUsd = (value: number): string => formatUsdValue(value);
 
 const formatHealthFactor = (hf: number): string => {
-  if (!Number.isFinite(hf) || hf <= 0) return "-";
+  if (!Number.isFinite(hf) || hf <= 0) return "No debt";
   if (hf >= HEALTH_FACTOR_INFINITY_SENTINEL) return "∞";
   return hf.toFixed(2);
 };
@@ -482,13 +482,13 @@ export const Positionstable = ({
   ) => {
     const date = item.timestamp
       ? new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
-      : '—';
+      : 'N/A';
 
     const badgeConfig = historyBadge(item.type);
 
     const shortHash = item.hash
       ? `${item.hash.slice(0, 8)}...${item.hash.slice(-4)}`
-      : '—';
+      : 'N/A';
 
     return (
       <motion.article
@@ -525,13 +525,13 @@ export const Positionstable = ({
             />
           )}
           <span className={`text-[13px] font-medium ${isDark ? "text-white" : ""}`}>
-            {item.asset ? canonicalToken(item.asset) : '—'}
+            {item.asset ? canonicalToken(item.asset) : 'N/A'}
           </span>
         </div>
 
         {/* Amount */}
         <div className={`w-full flex items-center py-[16px] px-[12px] text-[13px] font-medium ${isDark ? "text-white" : ""}`}>
-          {item.type === 'create' ? '—' : formatTokenAmount(parseFloat(String(item.amount ?? '0')) || 0)}
+          {item.type === 'create' ? '0' : formatTokenAmount(parseFloat(String(item.amount ?? '0')) || 0)}
         </div>
 
         {/* Tx Hash */}
@@ -546,7 +546,7 @@ export const Positionstable = ({
               {shortHash}
             </a>
           ) : (
-            <span className={`text-[13px] ${isDark ? "text-[#666666]" : "text-[#A0A0A0]"}`}>—</span>
+            <span className={`text-[13px] ${isDark ? "text-[#666666]" : "text-[#A0A0A0]"}`}>N/A</span>
           )}
         </div>
       </motion.article>
@@ -858,7 +858,7 @@ export const Positionstable = ({
           <div>
             <p className={lbl}>Leverage</p>
             <p className={`text-[13px] font-semibold ${item.leverage > 0 ? (isDark ? "text-white" : "text-[#111]") : isDark ? "text-[#666]" : "text-[#A0A0A0]"}`}>
-              {item.leverage > 0 ? `${item.leverage}x` : "-"}
+              {item.leverage > 0 ? `${item.leverage}x` : "0.00x"}
             </p>
           </div>
           <div>
@@ -903,9 +903,9 @@ export const Positionstable = ({
   ) => {
     const date = item.timestamp
       ? new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
-      : '—';
+      : 'N/A';
     const badgeConfig = historyBadge(item.type);
-    const shortHash = item.hash ? `${item.hash.slice(0, 8)}...${item.hash.slice(-4)}` : '—';
+    const shortHash = item.hash ? `${item.hash.slice(0, 8)}...${item.hash.slice(-4)}` : 'N/A';
     return (
       <div
         key={`mobile-history-${idx}`}
@@ -939,7 +939,7 @@ export const Positionstable = ({
             {shortHash}
           </a>
         ) : (
-          <span className={`text-[12px] shrink-0 ${isDark ? "text-[#666666]" : "text-[#A0A0A0]"}`}>—</span>
+          <span className={`text-[12px] shrink-0 ${isDark ? "text-[#666666]" : "text-[#A0A0A0]"}`}>N/A</span>
         )}
       </div>
     );

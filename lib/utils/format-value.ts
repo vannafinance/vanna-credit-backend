@@ -34,12 +34,18 @@ export function formatValue(
     useLargeFormat = false,
   } = options;
 
-  // Handle null, undefined, or zero values
-  if (value === null || value === undefined || (value === 0 && showZeroAsDash)) {
+  // Handle null, undefined, NaN or zero values: render the unit's zero form
+  // ("0.00%", "0.0x", "$0.00", ...) instead of a placeholder. A missing health
+  // factor means there is no debt — never show it as 0 (that reads as liquidated).
+  const isMissing = value === null || value === undefined || !Number.isFinite(value);
+  if (type === "health-factor" && isMissing) {
+    return "No debt";
+  }
+  if (value === 0 && showZeroAsDash && type !== "health-factor") {
     return "0";
   }
 
-  const numValue = value;
+  const numValue = isMissing ? 0 : (value as number);
 
   // Format number with specified decimals
   const formatNumber = (num: number, dec: number = decimals) =>
@@ -73,9 +79,9 @@ export function formatValue(
     case "time-minutes":
       // 0 here means "no scheduled liquidation" (no debt or healthy position).
       // Showing "0m" looks like the user is about to be liquidated, which is
-      // exactly the opposite. Render "—" instead.
+      // exactly the opposite. Render "None" instead.
       if (numValue <= 0) {
-        return "—";
+        return "None";
       }
       formatted = formatNumber(numValue, 0);
       suffix = "m";
@@ -83,7 +89,7 @@ export function formatValue(
 
     case "time-hours":
       if (numValue <= 0) {
-        return "—";
+        return "None";
       }
       formatted = formatNumber(numValue, 0);
       suffix = "h";

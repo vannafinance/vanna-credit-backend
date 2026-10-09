@@ -64,14 +64,14 @@ export function LendingPools({ p }: { p: Portfolio }) {
         ["Total Holdings", usd(sup), "", TT.holdings],
         ["Supplied Assets", String(rows.length)],
         ["Avg Supply APY", pct(avgApy), rows.length ? "pf-up" : ""],
-        ["Interest earned", earned === null ? "—" : sUsd(earned), earned !== null && earned > 0.004 ? "pf-up" : "", TT.lendInt],
+        ["Interest earned", earned === null ? usd(0) : sUsd(earned), earned !== null && earned > 0.004 ? "pf-up" : "", TT.lendInt],
       ]}
     />
   );
   const chart = (
     <ChartCard
       title="Lending P&L"
-      value={earned === null ? "—" : sUsd(earned)}
+      value={earned === null ? usd(0) : sUsd(earned)}
       sub="30D"
       series={series ? [{ name: "Interest earned", color: "var(--pf-c-l)", pts: series.pts }] : null}
       labels={series?.labels}
@@ -105,7 +105,7 @@ export function LendingPools({ p }: { p: Portfolio }) {
       ".9fr",
       (r) =>
         r.earnUsd === null ? (
-          <Ct desc="history can't prove the cost basis">—</Ct>
+          <Ct desc="history can't prove the cost basis">{usd(0)}</Ct>
         ) : (
           <Ct desc={tokFmt(r.earned ?? 0, r.sym)}>
             <span className="pos">{sUsd(r.earnUsd)}</span>

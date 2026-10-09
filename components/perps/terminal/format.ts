@@ -19,7 +19,7 @@ export const usdC = (n: number) => {
 export const sUsd = (n: number, d = 2) => `${n >= 0 ? "+$" : "−$"}${nf(Math.abs(n), d)}`;
 export const spct = (n: number, d = 2) => `${n >= 0 ? "+" : "−"}${nf(Math.abs(n), d)}%`;
 export const price = (n: number) => (n >= 10 ? nf(n, 2) : nf(n, 4));
-export const levFmt = (l: number) => (Number.isFinite(l) ? `${nf(l, 2)}x` : "—");
+export const levFmt = (l: number) => `${nf(Number.isFinite(l) ? l : 0, 2)}x`;
 export const hfFmt = (h: number) => (Number.isFinite(h) && h < 100 ? nf(h, 2) : "No debt");
 export const upDn = (v: number) => (v >= 0 ? "pos" : "neg");
 

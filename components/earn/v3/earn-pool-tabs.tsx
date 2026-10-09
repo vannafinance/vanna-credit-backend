@@ -105,7 +105,7 @@ export function TabDetails({ sym, d }: { sym: string; d: D }) {
   const a = p?.asset ?? null;
   const r = p?.reserve ?? null;
   const px = d.prices[sym] ?? 0;
-  const u = (n: number) => (px > 0 ? `$${fL(n * px)}` : "—");
+  const u = (n: number) => (px > 0 ? `$${fL(n * px)}` : `$${fL(0)}`);
 
   if (isLoading || !p?.reserve) {
     return (
@@ -126,8 +126,8 @@ export function TabDetails({ sym, d }: { sym: string; d: D }) {
     ["Supply APY", fP(p.supplyApr * 100), `${fL(p.totalSupplied)} ${sym}`, "Yearly interest suppliers earn now: borrow rate × utilization × (1 − reserve factor), from the on-chain rate curve."],
     ["Borrow APY", fP(p.borrowApr * 100), undefined, "Yearly interest borrowers pay now; it moves with utilization."],
     ["Utilization Rate", fP(p.utilization * 100), undefined, "Share of the supplied assets that is currently borrowed."],
-    ["Liquidation Bonus", a ? fP(a.liquidationBonusBps / 100) : "—", `Liquidatable at HF ${LIQUIDATION_HEALTH_FACTOR.toFixed(2)} or below`, `Extra paid to a liquidator who takes this asset from a margin account at health factor ${LIQUIDATION_HEALTH_FACTOR.toFixed(2)} or below.`],
-    ["Oracle Price", px > 0 ? `$${px.toFixed(px < 1 ? 4 : 2)}` : "—", a ? `${oracleSourceLabel(a.oracle)} · max age ${a.maxPriceAgeSecs}s` : undefined, "Price the program uses to value this asset."],
+    ["Liquidation Bonus", a ? fP(a.liquidationBonusBps / 100) : fP(0), `Liquidatable at HF ${LIQUIDATION_HEALTH_FACTOR.toFixed(2)} or below`, `Extra paid to a liquidator who takes this asset from a margin account at health factor ${LIQUIDATION_HEALTH_FACTOR.toFixed(2)} or below.`],
+    ["Oracle Price", px > 0 ? `$${px.toFixed(px < 1 ? 4 : 2)}` : usd(0), a ? `${oracleSourceLabel(a.oracle)} · max age ${a.maxPriceAgeSecs}s` : undefined, "Price the program uses to value this asset."],
     ["Share Token Exchange Rate", fXr(p.exchangeRate), `${sym} per v${sym}`, `How much ${sym} one v${sym} share is worth; it rises as interest accrues.`],
     ["Reserve Factor", fP(p.reserveFactor * 100), undefined, "Part of the interest borrowers pay that the protocol keeps instead of passing to suppliers."],
     ["Supply Cap", p.supplyCapUi === null ? "Uncapped" : `${fL(p.supplyCapUi)} ${sym}`, p.supplyCapUi === null ? undefined : `${Math.min(100, (p.totalSupplied / p.supplyCapUi) * 100).toFixed(2)}% used`, "Most this vault accepts in total; Uncapped means no limit."],
@@ -171,7 +171,7 @@ export function TabDetails({ sym, d }: { sym: string; d: D }) {
               <div key={h} className="earn-ad">
                 <div className="earn-sch">{h}</div>
                 <div className="earn-adr">
-                  <span>{v ? shortAddr(v) : "—"}</span>
+                  <span>{v ? shortAddr(v) : "N/A"}</span>
                   {v && (
                     <>
                       <button type="button" className="earn-adb" aria-label="Copy address" onClick={() => copy(v)}>
@@ -234,10 +234,10 @@ export function TabPositions({ sym, d }: { sym: string; d: D }) {
             { ic: sym, t: sym, tags: ["Vanna", "Vault"] },
             { t: `${fT(d.positions[sym]?.shares ?? 0)} v${sym}` },
             { t: `${fT(v)} ${sym}` },
-            { t: px > 0 ? fU(v * px) : "—" },
+            { t: fU(px > 0 ? v * px : 0) },
             { t: fP(apy) },
             earnedTok === null
-              ? { t: "—", d: earnedE?.reason ?? "Reading history…" }
+              ? { t: `${fT(0)} ${sym}`, d: earnedE?.reason ?? "Reading history…" }
               : { t: `${fT(Math.max(0, earnedTok))} ${sym}`, d: px > 0 ? usd(Math.max(0, earnedTok) * px) : "" },
           ],
         },
@@ -340,7 +340,7 @@ export function TabActivity({ sym, d }: { sym: string; d: D }) {
   const hs = connected ? d.transactions.filter((h) => h.symbol === sym).sort((a, b) => b.timestamp - a.timestamp) : [];
   const txRows: Row[] = hs.length
     ? hs.map((h) => ({ key: h.signature + h.type, cells: histCells(h, px) }))
-    : [{ key: "none", cells: [{ t: "-", d: d.historyLoading ? "Loading…" : "No transactions yet" }, { t: "-" }, { t: "-" }, { t: "-" }, { t: "-" }] }];
+    : [{ key: "none", cells: [{ t: "None", d: d.historyLoading ? "Loading…" : "No transactions yet" }, { t: "N/A" }, { t: `0 ${sym}` }, { t: "N/A" }, { t: "None" }] }];
   return (
     <section className="earn-act" aria-label="Activity Overview">
       <h2>Pool Composition</h2>
@@ -397,10 +397,10 @@ export function TabCollateral() {
       key: t.symbol,
       cells: [
         { ic: t.symbol, t: t.symbol },
-        { t: a ? (a.collateralEnabled ? "Enabled" : "Disabled") : "—" },
-        { t: a ? (a.borrowEnabled ? "Enabled" : "Disabled") : "—" },
-        { t: !a ? "—" : a.maxCollateralPerMargin === 0n ? "Uncapped" : `${fT(Number(fromRaw(a.maxCollateralPerMargin, t.decimals)))} ${t.symbol}` },
-        { t: a ? fP(a.liquidationBonusBps / 100) : "—" },
+        { t: a ? (a.collateralEnabled ? "Enabled" : "Disabled") : "N/A" },
+        { t: a ? (a.borrowEnabled ? "Enabled" : "Disabled") : "N/A" },
+        { t: !a ? "N/A" : a.maxCollateralPerMargin === 0n || a.maxCollateralPerMargin === 0xffff_ffff_ffff_ffffn ? "Uncapped" : `${fT(Number(fromRaw(a.maxCollateralPerMargin, t.decimals)))} ${t.symbol}` },
+        { t: a ? fP(a.liquidationBonusBps / 100) : fP(0) },
       ],
     };
   });

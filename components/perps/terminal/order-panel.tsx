@@ -291,14 +291,14 @@ export function OrderPanel(p: OrderPanelProps) {
           <Img src={PHOENIX_ICON} className="px-od-ic" />
           Order on Phoenix
         </div>
-        <Row k="Est. entry price" tip="The average price this size fills at on the live Phoenix order book." v={o.mark ? `~$${price(o.c > 0 ? o.entry : o.mark)}` : "—"} />
-        <Row k={limLabel} tip={`The worst price the order accepts with ${slip}% slippage; beyond it nothing fills.`} v={o.mark ? `$${price(o.limit)}` : "—"} />
+        <Row k="Est. entry price" tip="The average price this size fills at on the live Phoenix order book." v={o.mark ? `~$${price(o.c > 0 ? o.entry : o.mark)}` : `$${price(0)}`} />
+        <Row k={limLabel} tip={`The worst price the order accepts with ${slip}% slippage; beyond it nothing fills.`} v={o.mark ? `$${price(o.limit)}` : `$${price(0)}`} />
         <Row
           k="Liq. price (est.)"
           tip={`The ${K} index price, moving against this ${side}, at which the whole margin account would be liquidated (None: the rest of the account covers it).`}
           v={
             !o.after ? (
-              "—"
+              <span className="px-mut">None</span>
             ) : o.liq ? (
               <>
                 ${price(o.liq)}
@@ -312,8 +312,8 @@ export function OrderPanel(p: OrderPanelProps) {
             )
           }
         />
-        <Row k="Zero-equity price" tip="The price at which this order's own collateral would be used up; it is not a liquidation price." v={o.ze ? `$${price(o.ze)}` : "—"} />
-        <Row k={`Fee (${nf(takerFee * 100, 3)}%)`} tip="Phoenix's taker fee for opening this size, taken from the collateral." v={o.c > 0 ? usd(o.fee) : "—"} />
+        <Row k="Zero-equity price" tip="The price at which this order's own collateral would be used up; it is not a liquidation price." v={o.ze ? `$${price(o.ze)}` : <span className="px-mut">None</span>} />
+        <Row k={`Fee (${nf(takerFee * 100, 3)}%)`} tip="Phoenix's taker fee for opening this size, taken from the collateral." v={usd(o.c > 0 ? o.fee : 0)} />
         {p.existing && live && (
           <p className="px-od-n">{p.existing.side === side ? `Adds to your ${K} ${side}.` : `Reduces your ${K} ${p.existing.side} first.`}</p>
         )}
@@ -326,7 +326,7 @@ export function OrderPanel(p: OrderPanelProps) {
             Margin account · after this order
           </span>
         </div>
-        <SimRow on={live} k="Health factor" tip="How safe the whole margin account is: it can be liquidated at 1.10 or below." v0={now ? hfFmt(now.hf) : "—"} z0={now ? hz(now.hf) : ""} v1={a1 ? hfFmt(a1.hf) : null} z1={a1 ? hz(a1.hf) : ""} />
+        <SimRow on={live} k="Health factor" tip="How safe the whole margin account is: it can be liquidated at 1.10 or below." v0={hfFmt(now ? now.hf : Infinity)} z0={now ? hz(now.hf) : ""} v1={a1 ? hfFmt(a1.hf) : null} z1={a1 ? hz(a1.hf) : ""} />
         {live && now && (
           <div className="px-hfm" aria-hidden="true">
             <i className="px-hfm-liq" style={{ left: `${hfPos(LIQ_HF)}%` }} />
@@ -334,13 +334,13 @@ export function OrderPanel(p: OrderPanelProps) {
             {a1 && <i className="px-hfm-aft" style={{ left: `${hfPos(a1.hf)}%` }} />}
           </div>
         )}
-        <SimRow on={live} k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity)." v0={now ? levFmt(now.leverage) : "—"} v1={a1 ? levFmt(a1.leverage) : null} />
+        <SimRow on={live} k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity)." v0={levFmt(now ? now.leverage : 0)} v1={a1 ? levFmt(a1.leverage) : null} />
         <SimRow on={live} k="Available USDC" tip="Idle USDC in your margin account; this order takes its collateral from here." v0={nf(p.available, 2)} v1={a1 ? nf(p.available - o.c, 2) : null} />
         <SimRow
           on={live}
           k="Room before liquidation"
           tip="The smallest single price move that liquidates the account, every other price unchanged."
-          v0={p.room0 ? roomText(p.room0) : "—"}
+          v0={p.room0 ? roomText(p.room0) : "None"}
           z0={p.room0 ? roomZone(p.room0) : ""}
           v1={o.room1 ? roomText(o.room1) : null}
           z1={o.room1 ? roomZone(o.room1) : ""}
@@ -408,10 +408,10 @@ function SimRow({ on, k, tip, v0, z0, v1, z1, sub }: { on: boolean; k: string; t
           <>
             <span className={`o ${z0 ?? ""}`}>{v0}</span>
             <Arrow />
-            {v1 !== null ? <b className={z1 ?? ""}>{v1}</b> : <span className="px-mut">—</span>}
+            {v1 !== null ? <b className={z1 ?? ""}>{v1}</b> : <span className="px-mut">{v0}</span>}
           </>
         ) : (
-          <span className="px-mut">—</span>
+          <span className="px-mut">{v0}</span>
         )}
       </span>
     </div>

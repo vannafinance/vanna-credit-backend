@@ -109,11 +109,11 @@ export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
   const dash = m.loading;
 
   const stats: [React.ReactNode, string, React.ReactNode, string][] = [
-    [SIC.health, "Net Health Factor", <span key="h" className={nd ? "z-ok" : hfZone(n.hf)}>{dash ? "—" : nd ? "No debt" : hfFmt(n.hf)}</span>, TIPS.hf],
-    [SIC.liq, "Collateral Left Before Liquidation", dash ? "—" : nd ? <span className="z-ok">No debt</span> : usdC(liqBuffer(n)), TIPS.buffer],
-    [SIC.dollar, "Net Available Collateral", dash ? "—" : usdC(n.equity), TIPS.equity],
-    [SIC.retry, "Net amount Borrowed", dash ? "—" : usdC(n.debt), TIPS.borrowed],
-    [SIC.bag, "Net Leverage Taken", dash ? "—" : levFmt(n.leverage), TIPS.lev],
+    [SIC.health, "Net Health Factor", <span key="h" className={nd ? "z-ok" : hfZone(n.hf)}>{dash || nd ? "No debt" : hfFmt(n.hf)}</span>, TIPS.hf],
+    [SIC.liq, "Collateral Left Before Liquidation", dash ? usdC(0) : nd ? <span className="z-ok">No debt</span> : usdC(liqBuffer(n)), TIPS.buffer],
+    [SIC.dollar, "Net Available Collateral", usdC(dash ? 0 : n.equity), TIPS.equity],
+    [SIC.retry, "Net amount Borrowed", usdC(dash ? 0 : n.debt), TIPS.borrowed],
+    [SIC.bag, "Net Leverage Taken", levFmt(dash ? 0 : n.leverage), TIPS.lev],
   ];
 
   return (

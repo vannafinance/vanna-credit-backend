@@ -376,7 +376,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
   }, [onPreview, tokenIn, tokenOut, quoteUsd, isQuoteLoading]);
 
   const formatHfLabel = (hf: number): string => {
-    if (!Number.isFinite(hf) || hf <= 0) return "—";
+    if (!Number.isFinite(hf) || hf <= 0) return "No debt";
     return hf.toFixed(2);
   };
 

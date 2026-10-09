@@ -225,5 +225,5 @@ export function oracleSourceLabel(o: OracleConfigState): string {
   if (isSet(o.scopePrices)) parts.push("Kamino Scope");
   if (isSet(o.pythPrice)) parts.push(parts.length ? (isSet(o.pythFactor) ? "Pyth × factor fallback" : "Pyth fallback") : "Pyth");
   if (isSet(o.klendReserve)) parts.push("× Kamino rate");
-  return parts.join(" → ") || "—";
+  return parts.join(" → ") || "None";
 }

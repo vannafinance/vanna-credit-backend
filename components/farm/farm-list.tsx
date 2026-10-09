@@ -41,7 +41,7 @@ const parseThr = (s: string) => {
 };
 const dateLbl = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 const timeLbl = (ms: number) =>
-  ms ? new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+  ms ? new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "Never";
 
 export function FarmList() {
   const farm = useFarmAccount();
@@ -106,10 +106,10 @@ export function FarmList() {
             label: (
               <>
                 Your Earnings{" "}
-                <Info text="Underlying you can redeem now minus what you supplied (net of withdrawals), from your margin account's on-chain history, at today's price. Shows — when that history is incomplete." />
+                <Info text="Underlying you can redeem now minus what you supplied (net of withdrawals), from your margin account's on-chain history, at today's price. Shows $0.00 when that history is incomplete." />
               </>
             ),
-            value: vaultHoldings.length > 0 || t.earned === null ? "—" : usd(t.earned),
+            value: usd(vaultHoldings.length > 0 || t.earned === null ? 0 : t.earned),
             valueClass: t.earned !== null && t.earned > 0 ? "pos" : "",
           },
           {
@@ -119,7 +119,7 @@ export function FarmList() {
                 Net Farm APY <Info text={netTip} />
               </>
             ),
-            value: vaultHoldings.length > 0 || t.netApy === null ? "—" : pct(t.netApy * 100),
+            value: pct(vaultHoldings.length > 0 || t.netApy === null ? 0 : t.netApy * 100),
             valueClass: t.netApy !== null && t.netApy < 0 ? "neg" : "",
             sub: t.grossApy === null ? (farm.rows.length || vaultHoldings.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
           },
@@ -130,7 +130,7 @@ export function FarmList() {
                 Pending Rewards <Info text="Kamino farm reward emissions aren't read by the app yet, so they aren't shown." />
               </>
             ),
-            value: "—",
+            value: usd(0),
           },
           {
             icon: IC.heart,
@@ -139,7 +139,7 @@ export function FarmList() {
                 Net Health Factor <Info text={`Your margin account's health factor, the same number as on Margin; at ${nf(LIQ_HF, 2)} or below it can be liquidated.`} />
               </>
             ),
-            value: hf === null ? "—" : hfFmt(hf),
+            value: hfFmt(hf),
             valueClass: hf === null ? "" : hfZone(hf),
           },
         ]}
@@ -169,11 +169,11 @@ export function FarmList() {
                 mini={["Kamino", "Supply"]}
               />
               <Cell v={<Venue name="Kamino" />} />
-              <Cell v={p.totalSupply === null ? "—" : `${cmp(p.totalSupply)} ${p.symbol}`} mini={p.totalSupplyUsd === null ? undefined : usd(p.totalSupplyUsd)} />
-              <Cell v={p.totalBorrow === null ? "—" : `${cmp(p.totalBorrow)} ${p.symbol}`} mini={p.totalBorrowUsd === null ? undefined : usd(p.totalBorrowUsd)} />
-              <Cell v={p.supplyApy === null ? "—" : pct(p.supplyApy * 100)} />
-              <Cell v={p.borrowApy === null ? "—" : pct(p.borrowApy * 100)} />
-              <Cell v={p.utilization === null ? "—" : pct(p.utilization * 100)} />
+              <Cell v={`${cmp(p.totalSupply ?? 0)} ${p.symbol}`} mini={usd(p.totalSupplyUsd ?? 0)} />
+              <Cell v={`${cmp(p.totalBorrow ?? 0)} ${p.symbol}`} mini={usd(p.totalBorrowUsd ?? 0)} />
+              <Cell v={pct((p.supplyApy ?? 0) * 100)} />
+              <Cell v={pct((p.borrowApy ?? 0) * 100)} />
+              <Cell v={pct((p.utilization ?? 0) * 100)} />
               <Cell v={pos ? tokFmt(pos.underlying, p.symbol) : `0 ${p.symbol}`} mini={pos ? usd(pos.liquidityUsd) : "$0.00"} />
             </Link>
           ),
@@ -226,11 +226,11 @@ export function FarmList() {
             <Cell v={<Venue name="Kamino" />} />
             <Cell v={tokFmt(r.underlying, r.symbol)} mini={usd(r.liquidityUsd)} />
             {r.earnedUsd === null ? (
-              <Cell v="—" mini="history incomplete" />
+              <Cell v={usd(0)} mini="history incomplete" />
             ) : (
               <Cell v={sUsd(r.earnedUsd)} mini={r.since ? `since ${dateLbl(r.since)}` : undefined} cls={r.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={r.apy === null ? "—" : pct(r.apy * 100)} />
+            <Cell v={pct((r.apy ?? 0) * 100)} />
           </Link>
         ),
       }));

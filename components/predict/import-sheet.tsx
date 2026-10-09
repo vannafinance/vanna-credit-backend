@@ -69,7 +69,7 @@ function ImpRow({ x, onMove }: { x: ImportItem; onMove: (x: ImportItem) => void 
         <small>at {nowC}</small>
       </span>
       <span className="num">
-        <b className={m.apy ? "pos" : "mut"}>{m.apy ? p2(m.apy) : "—"}</b>
+        <b className={m.apy ? "pos" : "mut"}>{p2(m.apy || 0)}</b>
         <small>APY</small>
       </span>
       <span className="pd-i-a">{act}</span>
