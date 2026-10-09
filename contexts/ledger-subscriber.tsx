@@ -1,16 +1,14 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 type LedgerCtx = {
   /** Increments (throttled) whenever the fork produces new slots. */
   tick: number;
-  /** Latest observed slot. */
-  latestLedger: number;
 };
 
-const LedgerContext = createContext<LedgerCtx>({ tick: 0, latestLedger: 0 });
+const LedgerContext = createContext<LedgerCtx>({ tick: 0 });
 
 /** Name kept from the Stellar app ("ledger" tick) so every consumer's invalidation pattern is unchanged. */
 export const useLedgerTick = () => useContext(LedgerContext);
@@ -31,8 +29,8 @@ const POLL_INTERVAL_MS = 10_000;
  * WebSocket never stalls the UI.
  */
 export function LedgerSubscriberProvider({ children }: { children: React.ReactNode }) {
+  // Only the throttled tick is state: storing every slot (~2.5/s) re-rendered every consumer.
   const [tick, setTick] = useState(0);
-  const [latestLedger, setLatestLedger] = useState(0);
   const { connection } = useConnection();
 
   useEffect(() => {
@@ -45,7 +43,6 @@ export function LedgerSubscriberProvider({ children }: { children: React.ReactNo
       if (cancelled || slot <= lastSlot) return;
       const first = lastSlot === 0;
       lastSlot = slot;
-      setLatestLedger(slot);
       const now = Date.now();
       // The first observation is the baseline; later ones tick at most every TICK_INTERVAL_MS.
       if (!first && now - lastTickAt >= TICK_INTERVAL_MS && document.visibilityState !== "hidden") {
@@ -88,5 +85,6 @@ export function LedgerSubscriberProvider({ children }: { children: React.ReactNo
     };
   }, [connection]);
 
-  return <LedgerContext.Provider value={{ tick, latestLedger }}>{children}</LedgerContext.Provider>;
+  const value = useMemo(() => ({ tick }), [tick]);
+  return <LedgerContext.Provider value={value}>{children}</LedgerContext.Provider>;
 }
