@@ -2,8 +2,8 @@
 
 /**
  * Positions section of the V3 Margin screen: Current Positions (the whole cross-collateral account
- * as one row — collateral deposited, borrowed funds still idle in the vault, borrowed assets with
- * their share, account leverage, health factor, interest accrued, Repay) and Positions History
+ * as one row — collateral deposited (only what the user put in or bought), borrowed assets with
+ * their share and how much of each loan still sits idle in the vault, account leverage, health factor, interest accrued, Repay) and Positions History
  * (decoded on-chain margin events, lib/solana/history.ts). Header chips link to the Spot / Perps /
  * Farm pages with the account's live counts, plus Flash repay.
  */
@@ -118,6 +118,8 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
       data.debts.map((d) => {
         const sh = data.totalDebt > 0 ? Math.round((d.usd / data.totalDebt) * 100) : 0;
         const chip = sh > 0 ? <span className="mg-shp num">{sh}%</span> : null;
+        // Borrowed tokens still in the vault belong to the loan, not to "Collateral Deposited".
+        const idle = data.idle.find((a) => a.sym === d.symbol);
         return (
           <div key={d.symbol} className="mg-as">
             <Icon sym={d.symbol} />
@@ -129,6 +131,12 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
                 {usdL(d.usd)}
                 {inline && chip}
               </div>
+              {idle && (
+                <div className="mg-au num" style={{ whiteSpace: "nowrap" }} title="Borrowed funds still in your margin account. They count toward its health factor until you use or repay them.">
+                  <span className="mg-tag" style={{ marginLeft: 0, marginRight: 4 }}>idle</span>
+                  {tokFmt(idle.amt, idle.sym)}
+                </div>
+              )}
             </div>
             {!inline && chip}
           </div>
@@ -137,7 +145,8 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
     ) : (
       <span className="mg-mut">$0</span>
     );
-  const collCell = data.coll.length || data.idle.length ? [...data.coll, ...data.idle].map(asset) : <span className="mg-mut">$0</span>;
+  // Only deposited / bought collateral; idle borrowed funds are shown under their loan instead.
+  const collCell = data.coll.length ? data.coll.map(asset) : <span className="mg-mut">$0</span>;
   const hfCell = <span className={nd ? "z-ok" : hfZone(n.hf)}>{hfFmt(n.hf)}</span>;
   const intr = data.debts.length ? usd(data.interestUsd) : "$0.00";
 
