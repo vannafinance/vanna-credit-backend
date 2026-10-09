@@ -10,12 +10,12 @@ const LOGO_FILES: Record<string, string> = {
   SOL: "SOL.png", USDC: "USDC.png", USDT: "USDT.svg", ETH: "ETH.svg", BTC: "BTC.svg", JitoSOL: "JitoSOL.png", JupSOL: "JupSOL.png",
   JupUSD: "JupUSD.png", META: "META.png", TSLA: "TSLA.png", TSLAx: "TSLAx.png", AAPLx: "AAPLx.svg", GOOGLx: "GOOGLx.png", NVDAx: "NVDAx.png",
   CASH: "CASH.svg", SKR: "SKR.png", KMNO: "KMNO.png", PHX: "PHX.png", JUP: "JUP.png", TITAN: "TITAN.png", PYTH: "PYTH.png", POLY: "POLY.png",
-  WORLD: "WORLD.png",
+  WORLD: "WORLD.png", "USD*": "USDSTAR.png", "USD* Junior": "USDSTARJ.png", PERENA: "PERENA.png",
 };
 /** Venue logos are rounded squares, token logos circles. */
-const VENUES = new Set(["KMNO", "PHX", "JUP", "TITAN", "PYTH", "POLY", "WORLD"]);
+const VENUES = new Set(["KMNO", "PHX", "JUP", "TITAN", "PYTH", "POLY", "WORLD", "PERENA"]);
 /** Common aliases used across the app. */
-const ALIAS: Record<string, string> = { Kamino: "KMNO", Phoenix: "PHX", Jupiter: "JUP", Titan: "TITAN", Pyth: "PYTH", wSOL: "SOL" };
+const ALIAS: Record<string, string> = { Kamino: "KMNO", Phoenix: "PHX", Jupiter: "JUP", Titan: "TITAN", Pyth: "PYTH", wSOL: "SOL", Perena: "PERENA", "USD*-J": "USD* Junior", USDSTAR: "USD*", USDSTARJ: "USD* Junior" };
 
 export function logoSrc(sym: string): string | null {
   const key = ALIAS[sym] ?? sym;

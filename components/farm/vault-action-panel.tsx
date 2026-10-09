@@ -50,8 +50,25 @@ export function useVaultAccountInputs(): VaultAccountInputs {
   }, [margin, pools]);
 }
 
-export function VaultActionPanel({ id, state, account }: { id: string; state: LiveVault | null; account: VaultAccountInputs }) {
-  const a = useVaultAction(id);
+export function VaultActionPanel({
+  id,
+  state,
+  account,
+  apy7: apyOverride,
+  apySource = "The vault's recorded 7-day APY (0.00% until 7 days of share-price history exist)",
+  initial,
+}: {
+  id: string;
+  state: LiveVault | null;
+  account: VaultAccountInputs;
+  /** 7-day APY to project with, % (Perena: Perena's published APY); defaults to the recorded vault APY. */
+  apy7?: number | null;
+  /** Tooltip wording for where that APY comes from. */
+  apySource?: string;
+  /** Open on deposit or withdraw (from `?action=`). */
+  initial?: "deposit" | "withdraw";
+}) {
+  const a = useVaultAction(id, initial);
   const [pctOn, setPctOn] = useState(0);
   const def = a.def;
   if (!def) return null;
@@ -59,7 +76,7 @@ export function VaultActionPanel({ id, state, account }: { id: string; state: Li
   const units = Number(a.amount) || 0;
   const unit = deposit ? "USDC" : def.symbol;
   const usdIn = deposit ? units * account.usdcPrice : units * (state?.sharePriceUsd ?? 0);
-  const apy7 = state?.apy7 ?? 0;
+  const apy7 = (apyOverride !== undefined ? apyOverride : state?.apy7) ?? 0;
   const borrow = account.usdcBorrowApy;
   const borrowedShare = !units || a.walletDeposit ? 0 : Math.min(units, account.usdcDebt) / units;
   const netApy = apy7 - (borrow ?? 0) * borrowedShare;
@@ -102,7 +119,7 @@ export function VaultActionPanel({ id, state, account }: { id: string; state: Li
             }}
           />
           <span className="fm-tokp">
-            <Icon sym={deposit ? "USDC" : def.asset} className="fm-ico20" />
+            <Icon sym={deposit ? "USDC" : def.kind === "perena" ? def.symbol : def.asset} className="fm-ico20" />
             {unit}
           </span>
         </div>
@@ -143,7 +160,7 @@ export function VaultActionPanel({ id, state, account }: { id: string; state: Li
           <div className="fm-net num">
             <div>
               <div className="lbl">
-                Net APY <Info text="The vault's recorded 7-day APY (0.00% until 7 days of share-price history exist), minus the Vanna USDC borrow APY on the part of this deposit covered by your USDC debt." />
+                Net APY <Info text={`${apySource}, minus the Vanna USDC borrow APY on the part of this deposit covered by your USDC debt.`} />
               </div>
               <div className={`big ${units && netApy < 0 ? "n" : ""}`}>{pct(units ? netApy : 0, 1)}</div>
               <div className="f">{formula}</div>
@@ -173,7 +190,9 @@ export function VaultActionPanel({ id, state, account }: { id: string; state: Li
       {a.walletDeposit && (
         <p className="fm-note">SOL Basis uses wallet USDC. After the vault deposit, a second approval moves the received shares into your margin account.</p>
       )}
-      {def.id === "perena-junior" && !deposit && <p className="fm-note">USD* Junior instant withdrawals include a 1% exit fee.</p>}
+      {def.id === "perena-junior" && !deposit && (
+        <p className="fm-note">Vanna uses Perena&apos;s instant withdrawal, which includes a 1% exit fee (the 7-day cooldown path is not used).</p>
+      )}
       {state?.stale && <p className="fm-warnn">Perena NAV is stale on the fork. Preview refreshes the fork timestamp before simulation.</p>}
       {!state?.registered && <p className="fm-note">Vault registration is being checked.</p>}
       {closed && <p className="fm-warnn">Vault deposits are paused.</p>}

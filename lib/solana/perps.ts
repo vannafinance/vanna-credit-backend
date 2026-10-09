@@ -28,6 +28,7 @@ import { sendInstructions } from "./tx";
 import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { toRaw } from "./math";
 import { getProgram, vannaCoder } from "./program";
+import vannaIdl from "@/idl/vanna_credit_layer.json";
 import { marginPda, marginVault } from "./pdas";
 import type { AssetConfigState } from "./protocol-state";
 import {
@@ -245,7 +246,8 @@ function phoenixCall(p: PerpsContext, data: Buffer, accounts: ReturnType<typeof 
     target: PHOENIX_PROGRAM_ID,
     data,
     cpiAccounts: accounts,
-    validatorAccounts: phoenixValidatorAccounts(p.venue.book),
+    // The target market plus every open position: the validator prices them all.
+    validatorAccounts: phoenixValidatorAccounts(p.venue.book, [...opts.targetAssetIds, ...p.venue.openAssetIds]),
     token: opts.token,
     venue: { asset: p.venueAsset, state: p.venue, targetAssetIds: opts.targetAssetIds, opens: opts.opens, closes: Boolean(opts.closes) },
   });
@@ -484,8 +486,11 @@ const hex = (bytes: number[]) => Buffer.from(bytes).toString("hex");
 const SEL_ORDER = hex(PLACE_MARKET_ORDER);
 const SEL_DEPOSIT = hex(DEPOSIT_FUNDS);
 const SEL_WITHDRAW = hex(WITHDRAW_FUNDS);
-/** `margin_execute`'s named accounts before its remaining accounts (authority … venue_asset). */
-const MARGIN_EXECUTE_NAMED_ACCOUNTS = 7;
+/**
+ * `margin_execute`'s named accounts before its remaining accounts (authority … venue_asset,
+ * event_authority, program — 9 since the emit_cpi upgrade; read from the IDL so it can't drift).
+ */
+const MARGIN_EXECUTE_NAMED_ACCOUNTS = vannaIdl.instructions.find((i) => i.name === "margin_execute")?.accounts.length ?? 9;
 
 /**
  * The margin's Phoenix actions, newest first, decoded from the wallet's transactions: each

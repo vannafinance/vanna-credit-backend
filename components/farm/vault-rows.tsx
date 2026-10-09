@@ -76,7 +76,7 @@ export function VaultTable({
           <Cell
             v={
               <span className="fm-tk">
-                <Icon sym={v.asset} className="fm-ico16" />
+                <Icon sym={basis ? v.asset : v.symbol} className="fm-ico16" />
                 {v.name}
               </span>
             }

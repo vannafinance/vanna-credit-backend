@@ -34,10 +34,33 @@ import {
   type FundingStats,
   type NavPoint,
   type NavStats,
+  type PerenaMarket,
+  type PerenaProduct,
 } from "./nav-math";
 
 /** /farm/basis/sol → "basis-sol"; the route segment of a catalogue id. */
 export const vaultHref = (id: string) => (id.startsWith("basis-") ? `/farm/basis/${id.slice(6)}` : `/farm/perena/${id.slice(7)}`);
+
+/** Perena's published APY / holders / mainnet price for USD* and USD* Junior (GET /api/farm/perena). */
+export function usePerenaMarket(): PerenaMarket | null {
+  const q = useQuery({
+    queryKey: ["farm", "perena-market"],
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+    queryFn: async (): Promise<PerenaMarket> => {
+      const r = await fetchWithTimeout("/api/farm/perena");
+      if (!r.ok) throw new Error("Perena data is unavailable");
+      return r.json();
+    },
+  });
+  return q.data ?? null;
+}
+
+/** The Perena product of a catalogue id (all-null when unknown or not loaded). */
+export function perenaProduct(market: PerenaMarket | null, id: string): PerenaProduct {
+  const p = market ? (id === "perena-junior" ? market.junior : id === "perena-usdstar" ? market.usdstar : null) : null;
+  return p ?? { apy7: null, holders: null, price: null };
+}
 
 /** Recorded hourly share-price observations of one vault. */
 export function useVaultHistory(id: string) {

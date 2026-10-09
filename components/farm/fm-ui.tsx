@@ -11,7 +11,7 @@ import { Icon, IC } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
 
 /** Venue name → logo key. */
-const VSYM: Record<string, string> = { Kamino: "KMNO", Jupiter: "JUP", Phoenix: "PHX" };
+const VSYM: Record<string, string> = { Kamino: "KMNO", Jupiter: "JUP", Phoenix: "PHX", Perena: "PERENA" };
 
 /** One table cell: value line plus optional mini chips. */
 export function Cell({ v, mini, cls = "" }: { v: ReactNode; mini?: ReactNode | ReactNode[]; cls?: string }) {

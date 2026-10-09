@@ -60,11 +60,12 @@ export interface VaultAction {
   move: () => Promise<void>;
 }
 
-export function useVaultAction(id: string): VaultAction {
+/** `initial` opens the form on deposit or withdraw (e.g. from `?action=withdraw`). */
+export function useVaultAction(id: string, initial: VaultCall = "deposit"): VaultAction {
   const def = VAULTS.find((v) => v.id === id);
   const { address, margin } = useVaultAccount();
   const qc = useQueryClient();
-  const [call, setCallState] = useState<VaultCall>("deposit");
+  const [call, setCallState] = useState<VaultCall>(initial);
   const [amount, setAmountState] = useState("");
   const [preview, setPreview] = useState<PreparedVaultAction | null>(null);
   const [busy, setBusy] = useState(false);

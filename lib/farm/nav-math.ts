@@ -175,3 +175,20 @@ export function shortLiquidationRise(shortUsd: number | null, effectiveUsd: numb
   const x = ((effectiveUsd - maintenanceUsd) / (shortUsd + maintenanceUsd)) * 100;
   return Number.isFinite(x) ? Math.max(0, x) : null;
 }
+
+/** One Perena product's published figures (Perena's public API, mainnet); null when unavailable. */
+export interface PerenaProduct {
+  /** 7-day APY, %. */
+  apy7: number | null;
+  holders: number | null;
+  /** Live share price on mainnet, USD. */
+  price: number | null;
+}
+
+/** GET /api/farm/perena payload. */
+export interface PerenaMarket {
+  usdstar: PerenaProduct;
+  junior: PerenaProduct;
+  /** Unix ms of the read. */
+  at: number;
+}

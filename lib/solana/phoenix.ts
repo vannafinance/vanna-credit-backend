@@ -357,8 +357,22 @@ export function phoenixOracleAccounts(margin: PublicKey, ex: PhoenixExchangeStat
   return keys;
 }
 
-/** The validator segment for a Phoenix call: `[market_book, exchange]`. */
-export const phoenixValidatorAccounts = (book: MarketBookState): PublicKey[] => [book.address, PHOENIX_EXCHANGE];
+/**
+ * The validator segment for a Phoenix call: `[market_book, exchange, ...per market: orderbook,
+ * ...index price accounts]` (port of `scripts/src/phoenix.ts::phoenixValidatorSegment`). The
+ * validator values the order's market and every other open position at the oracle index price
+ * (leverage check, close-price band), so those markets' accounts must be in the segment —
+ * otherwise it fails with `InvalidPriceSource`.
+ */
+export function phoenixValidatorAccounts(book: MarketBookState, assetIds: number[] = []): PublicKey[] {
+  const keys: PublicKey[] = [book.address, PHOENIX_EXCHANGE];
+  for (const id of new Set(assetIds)) {
+    const entry = book.markets.find((m) => m.assetId === id);
+    if (!entry) throw new Error(`Phoenix market ${id} is not in Vanna's market book`);
+    keys.push(entry.market, ...oracleAccounts(entry.indexPrice));
+  }
+  return keys;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Instructions (the outside call wrapped by margin_execute)

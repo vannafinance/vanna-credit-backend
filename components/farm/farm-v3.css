@@ -388,3 +388,29 @@ html:not(.dark) .v3 .fm-act.k .fm-cta:disabled{background:#a7a7a7;color:#fff}   
 .v3 .fm-dl dt{font-size:11px;color:var(--label)}
 .v3 .fm-dl dd{margin:4px 0 0;font-size:14px;font-weight:600;color:var(--text)}
 .v3 .fm-dl dd.pos{color:var(--ok)} .v3 .fm-dl dd.neg{color:var(--danger)}
+/* Perena product card (app.perena.org/earn style) — vault page and Farm list */
+.v3 .fm-pc{padding:0;overflow:hidden}
+.v3 .fm-pc-bn{display:block;width:100%;height:120px;object-fit:cover}
+.v3 .fm-pc-in{padding:16px;display:flex;flex-direction:column;gap:12px}
+.v3 .fm-pc-h{display:flex;align-items:center;gap:10px}
+.v3 .fm-pc-h h3{font-size:16px;font-weight:700;line-height:1.3;color:var(--title)}
+.v3 .fm-pc-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.v3 .fm-pc-tr{margin-left:auto;font-size:12px}
+.v3 .fm-pc-st{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.v3 .fm-pc-st > div{background:var(--tile);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.v3 .fm-pc-st span{font-size:11px;color:var(--label)}
+.v3 .fm-pc-st b{font-size:18px;font-weight:600;color:var(--text);white-space:nowrap}
+.v3 .fm-pc-st b.pos{color:var(--ok)}
+.v3 .fm-pc .fm-note{font-size:12px;line-height:1.5}
+.v3 .fm-dl dd.warn{color:var(--warn)}
+.v3 .fm-pcs-grid{display:grid;grid-template-columns:1fr;gap:16px}
+@media (min-width:900px){.v3 .fm-pcs-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.v3 .fm-pc-act{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.v3 .fm-pc-act a{display:grid;place-items:center;height:40px;border-radius:12px;font-size:13px;font-weight:600}
+.v3 .fm-pc-act a.dep{background:var(--violet);color:#fff}
+.v3 .fm-pc-act a.wd{border:1px solid var(--line-2);color:var(--violet-ink)}
+.v3 .fm-pc-act a:hover{filter:brightness(1.06)}
+.v3 .fm-pc-hold{display:flex;justify-content:space-between;font-size:12px;color:var(--label)}
+.v3 .fm-pc-hold b{color:var(--text);font-weight:600}
+.v3 .fm-tw > .fm-pcs-grid{min-width:0}
+.v3 .fm-tblh{display:flex;align-items:center;gap:8px}

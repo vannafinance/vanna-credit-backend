@@ -23,6 +23,7 @@ import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
 import { positionOf, vaultHref } from "@/lib/farm/basis-live";
 import { VaultTable } from "./vault-rows";
+import { PerenaCards } from "./perena/perena-cards";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
@@ -60,7 +61,6 @@ export function FarmList() {
   const [thr, setThr] = useState("");
   const [thrOpen, setThrOpen] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
-  const [perenaSort, setPerenaSort] = useState<SortState>(null);
   const liveVaults = useVaults();
   const thrRef = useOutside(thrOpen, () => setThrOpen(false));
 
@@ -74,7 +74,6 @@ export function FarmList() {
     setVaultSel([]);
     setThr("");
     setSort(null);
-    setPerenaSort(null);
     setThrOpen(false);
   };
   const dn = tab === "vaults" && cat === "dn";
@@ -208,12 +207,7 @@ export function FarmList() {
   };
 
   const dnTable = () => <VaultTable kind="basis" query={q} keepAsset={keepAsset} sort={sort} onSort={setSort} />;
-  const perenaTable = () => (
-    <>
-      <h2 className="fm-tblh">Perena vaults</h2>
-      <VaultTable kind="perena" query={q} keepAsset={keepAsset} sort={perenaSort} onSort={setPerenaSort} />
-    </>
-  );
+  const perenaTable = () => <PerenaCards query={q} keepAsset={keepAsset} />;
 
   const posTable = () => {
     // Kamino cTokens and Basis / Perena receipts held in the margin account, one table.
@@ -228,7 +222,7 @@ export function FarmList() {
             <Cell
               v={
                 <span className="fm-tk">
-                  <Icon sym={v.asset} className="fm-ico16" />
+                  <Icon sym={basis ? v.asset : v.symbol} className="fm-ico16" />
                   {v.name}
                 </span>
               }
