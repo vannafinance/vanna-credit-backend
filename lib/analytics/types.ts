@@ -4,7 +4,7 @@
  *
  * Rules the data obeys:
  *  - every figure is read from the fork's on-chain accounts (or computed from those reads);
- *  - what could not be read is `null` / listed in `reasons` — never 0, never a placeholder;
+ *  - what could not be read is `null` / listed in `reasons` - never 0, never a placeholder;
  *  - reasons are structured codes, not sentences: wording belongs to the UI.
  */
 
@@ -78,7 +78,7 @@ export interface AccountRow {
 export interface AccountView extends AccountRow {
   /** Health-factor readings taken by THIS server on its refresh passes (oldest first). Not chain history. */
   hfTrend: number[];
-  /** Unix time of the earliest scanned transaction that touched the account — not its creation time. */
+  /** Unix time of the earliest scanned transaction that touched the account - not its creation time. */
   firstSeenTime: number | null;
 }
 

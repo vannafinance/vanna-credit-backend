@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/analytics/accounts/:owner — one account (from the snapshot, or looked up on demand and
+ * GET /api/analytics/accounts/:owner - one account (from the snapshot, or looked up on demand and
  * added to it). Read-only: it only reads the wallet's margin PDA.
  */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ owner: string }> }) {

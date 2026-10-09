@@ -55,7 +55,7 @@ interface Registry {
   queue: ConfirmedSignatureInfo[];
   newestSignature: string | null;
   oldestSignature: string | null;
-  /** signatures discovered (queued or inspected) — bounds the look-back */
+  /** signatures discovered (queued or inspected) - bounds the look-back */
   discovered: number;
   inspected: number;
   oldestInspectedTime: number | null;
@@ -236,7 +236,7 @@ export async function registerOwner(owner: PublicKey): Promise<boolean> {
 
 /** Cheap change detector so the store only saves when something moved. */
 export const registryFingerprint = () => `${registry.margins.size}:${registry.inspected}:${registry.discovered}:${registry.queue.length}:${registry.firstSeen.size}`;
-/** The newest signature inspected or queued — used to check a saved state still matches the network. */
+/** The newest signature inspected or queued - used to check a saved state still matches the network. */
 export const newestKnownSignature = () => registry.newestSignature;
 
 export function exportRegistry(): PersistedRegistry {

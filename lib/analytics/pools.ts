@@ -1,7 +1,7 @@
 /**
  * Pure derivations over the protocol read (pools + prices). A pool is valued in USD only when its
  * asset price is fresh and the pool and price were read on the same fork clock; otherwise its USD
- * figures are null — never zero, never a reference price — and totals say which pools they exclude.
+ * figures are null - never zero, never a reference price - and totals say which pools they exclude.
  */
 import { LENDING_TOKENS } from "@/lib/solana/tokens";
 import type { ProtocolOverview } from "./server/store";

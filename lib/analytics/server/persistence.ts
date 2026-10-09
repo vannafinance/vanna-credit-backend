@@ -4,12 +4,12 @@
  *
  * What is saved: the account registry (margin accounts, first-seen times, scan cursors, the queue of
  * transactions not yet inspected), the decoded event ring and the server-measured health readings.
- * What is NOT saved: balances, prices and valuations — those are always re-read from the chain.
+ * What is NOT saved: balances, prices and valuations - those are always re-read from the chain.
  * Everything saved is public chain data; nothing here is secret, so it is stored as plain JSON.
  *
  * Backends (chosen once, never silently mixed):
  *   - ANALYTICS_FIRESTORE_PROJECT set  → Firestore over REST (same auth as the Copilot store; no new
- *                                         dependency). Shared by every instance, last writer wins — safe
+ *                                         dependency). Shared by every instance, last writer wins - safe
  *                                         because the data is derived and re-scannable.
  *   - otherwise in development        → a local JSON file under /.local (git-ignored).
  *   - otherwise (production, no store) → memory only; the dashboard still works and says so.

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * What-if Calculator — the only place scenario controls live. Read-only: it reprices a SAVED baseline
+ * What-if Calculator - the only place scenario controls live. Read-only: it reprices a SAVED baseline
  * of valued accounts under assumptions the user sets, on demand. It never sends a transaction, never
  * changes chain state and never asks for a wallet signature.
  */
@@ -61,7 +61,7 @@ export function WhatIfView() {
 
   return (
     <>
-      <ViewHead title="What-if Calculator" blurb="Reprice the accounts with your own assumptions. Read-only — nothing is sent to the chain." />
+      <ViewHead title="What-if Calculator" blurb="Reprice the accounts with your own assumptions. Read-only - nothing is sent to the chain." />
       <div className="an-row" style={{ gap: 8 }}><span className="an-sim-banner"><Icon name="warning" />Simulated</span><span className="an-muted" style={{ fontSize: 13 }}>Results below are calculated estimates under the assumptions you set, not predictions and not measured facts. <InfoTip k="simulation" /></span></div>
       <div className="an-tabs" role="tablist">
         {([["price", "Price changes"], ["withdrawal", "Liquidity withdrawal"]] as const).map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}
@@ -109,7 +109,7 @@ export function WhatIfView() {
                     <span className="an-arrow"><Icon name="arrow" /></span>
                     <Side label="After (simulated)" c={result.run.result.collateral} d={result.run.result.debt} h={result.run.result.averageHealth} e={result.run.result.eligibleCount} bad={result.run.result.shortfall} tone />
                   </div>
-                  <p className="an-panel-foot">Prices change instantly and everywhere at once. Interest, liquidations actually happening, and recovery of bad debt are <b>not</b> modelled. &quot;Can be liquidated&quot; is eligibility; &quot;bad debt&quot; is debt that collateral no longer covers — they are different things. <InfoTip k="eligibility" /></p>
+                  <p className="an-panel-foot">Prices change instantly and everywhere at once. Interest, liquidations actually happening, and recovery of bad debt are <b>not</b> modelled. &quot;Can be liquidated&quot; is eligibility; &quot;bad debt&quot; is debt that collateral no longer covers - they are different things. <InfoTip k="eligibility" /></p>
                 </Panel>
                 <Panel title="Accounts closest to the line after the change" flush>
                   <div className="an-table-wrap"><table className="an-t">
@@ -122,7 +122,7 @@ export function WhatIfView() {
               </>
             )}
             {baseline && baseline.excluded.length > 0 && (
-              <Panel title="Left out of the baseline" sub={`${baseline.excluded.length} of ${total} accounts — results describe the ${baseline.covered.length} covered accounts only`}>
+              <Panel title="Left out of the baseline" sub={`${baseline.excluded.length} of ${total} accounts - results describe the ${baseline.covered.length} covered accounts only`}>
                 <div className="an-table-wrap"><table className="an-t"><thead><tr><th>Wallet</th><th>Why</th></tr></thead>
                   <tbody>{baseline.excluded.slice(0, 12).map((x) => <tr key={x.address}><td title={x.owner}>{short(x.owner, 5, 5)}</td><td>{x.reasons.length ? x.reasons.map(reasonText).join(" ") : x.venueHeld ? "Holds a Phoenix perps account, which is valued as one lump, so its positions can't be repriced individually." : "Not valued."}</td></tr>)}</tbody></table></div>
                 {baseline.excluded.length > 12 && <p className="an-panel-foot">…and {baseline.excluded.length - 12} more with the same kinds of reasons.</p>}

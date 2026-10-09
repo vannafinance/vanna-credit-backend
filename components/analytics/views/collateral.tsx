@@ -22,9 +22,9 @@ export function CollateralView() {
     <>
       <ViewHead title="Collateral" blurb="The assets accounts can post, how each is set up on-chain, and what accounts actually hold." />
       <div className="an-kpi-grid an-cols-3">
-        <Kpi label="Registered assets" value={protocol ? String(assets.length) : "—"} na={!protocol} sub="Configured on-chain" />
-        <Kpi label="Allowed as collateral" value={protocol ? String(assets.filter((a) => a.allowedAsCollateral).length) : "—"} na={!protocol} sub="Accepted by the protocol" />
-        <Kpi label="Can be borrowed" value={protocol ? String(assets.filter((a) => a.borrowEnabled).length) : "—"} na={!protocol} sub="Borrowing switched on" />
+        <Kpi label="Registered assets" value={protocol ? String(assets.length) : "-"} na={!protocol} sub="Configured on-chain" />
+        <Kpi label="Allowed as collateral" value={protocol ? String(assets.filter((a) => a.allowedAsCollateral).length) : "-"} na={!protocol} sub="Accepted by the protocol" />
+        <Kpi label="Can be borrowed" value={protocol ? String(assets.filter((a) => a.borrowEnabled).length) : "-"} na={!protocol} sub="Borrowing switched on" />
       </div>
       <section className="an-panel an-flush">
         <div className="an-panel-head"><div><h2 className="an-panel-title">Asset settings</h2><p className="an-panel-sub">Read from each asset&apos;s on-chain configuration</p></div></div>

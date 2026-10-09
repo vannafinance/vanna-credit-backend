@@ -25,7 +25,7 @@ export function AlertsView() {
     <>
       <ViewHead title="Alerts" blurb="What needs attention right now, worked out live from the data on these pages." />
       <div className="an-kpi-grid">
-        {PRIORITIES.map(([p, label, tone]) => <Kpi key={p} label={`${p} · ${label}`} value={ready ? String(count(p)) : "—"} na={!ready} tone={ready && count(p) ? (tone as "danger" | "warn") : ""} sub={count(p) === 1 ? "1 alert" : `${count(p)} alerts`} />)}
+        {PRIORITIES.map(([p, label, tone]) => <Kpi key={p} label={`${p} · ${label}`} value={ready ? String(count(p)) : "-"} na={!ready} tone={ready && count(p) ? (tone as "danger" | "warn") : ""} sub={count(p) === 1 ? "1 alert" : `${count(p)} alerts`} />)}
       </div>
       <div className="an-seg" role="group" aria-label="Priority filter" style={{ justifySelf: "start" }}>
         {(["all", "P0", "P1", "P2", "P3"] as const).map((k) => <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k === "all" ? "All" : k}</button>)}

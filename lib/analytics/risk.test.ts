@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { classify, derivedFigures, inBand, liquidationPrices, matchesFilter, protocolsOf, searchRows, sortRows, summarize } from "./risk";
 import type { AccountRow } from "./types";
 
-/** Test fixtures only — never shipped to the UI. */
+/** Test fixtures only - never shipped to the UI. */
 function row(over: Partial<AccountRow> & { owner: string; collateralUsd?: number | null; debtUsd?: number | null }): AccountRow {
   const valued = over.valued ?? true;
   const c = over.collateralUsd ?? 0, d = over.debtUsd ?? 0;

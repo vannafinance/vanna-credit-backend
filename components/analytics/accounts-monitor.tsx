@@ -24,8 +24,8 @@ const COLS = 10;
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 const hfClass = (r: AccountView) => (r.healthFactor === null ? "an-na" : `an-${statusTone(r.status) === "ok" ? "ok" : statusTone(r.status)}`);
-const hfCell = (r: AccountView) => (!r.valued ? <span className="an-hf an-na">—</span> : r.healthFactor === null ? <span className="an-hf an-na">{r.status === "empty" ? "—" : "No debt"}</span> : <span className={`an-hf ${hfClass(r)}`}>{hfText(r.healthFactor)}</span>);
-const protocolCell = (r: AccountView) => { const p = protocolsOf(r); return p.length ? p.join(" · ") : <span className="an-muted">—</span>; };
+const hfCell = (r: AccountView) => (!r.valued ? <span className="an-hf an-na">-</span> : r.healthFactor === null ? <span className="an-hf an-na">{r.status === "empty" ? "-" : "No debt"}</span> : <span className={`an-hf ${hfClass(r)}`}>{hfText(r.healthFactor)}</span>);
+const protocolCell = (r: AccountView) => { const p = protocolsOf(r); return p.length ? p.join(" · ") : <span className="an-muted">-</span>; };
 
 export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFilter }: { band: string | null; onClearBand: () => void; title?: string; fixedFilter?: AccountFilter }) {
   const wallet = useWallet();
@@ -132,7 +132,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
                     onClick={() => setOpen((s) => { const n = new Set(s); if (n.has(r.owner)) n.delete(r.owner); else n.add(r.owner); return n; })}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (e.currentTarget as HTMLElement).click(); } }}>
                     <td className="an-c" style={{ width: 26 }}><Icon name="chevron" className="an-chev" /></td>
-                    <td className={isYou ? "an-you-rank" : "an-muted"} style={{ width: 30 }}>{rank ?? "—"}</td>
+                    <td className={isYou ? "an-you-rank" : "an-muted"} style={{ width: 30 }}>{rank ?? "-"}</td>
                     <td className="an-nowrap"><span className="an-strong" title={r.owner}>{short(r.owner, 5, 5)}</span>{isYou && <span className="an-you-pill">YOU</span>}</td>
                     {tab === "health" ? (
                       <>
@@ -142,9 +142,9 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
                         <td>{r.valued ? <div style={{ width: 96 }}><StackBar segments={[
                           { label: "Tokens held", value: r.composition.direct, color: SERIES[0], tip: `Tokens held ${usd(r.composition.direct)}` },
                           { label: "Kamino deposits", value: r.composition.receipt, color: SERIES[1], tip: `Kamino deposits ${usd(r.composition.receipt)}` },
-                          { label: "Phoenix perps", value: r.composition.venue, color: SERIES[2], tip: `Phoenix perps ${usd(r.composition.venue)}` }]} /></div> : "—"}</td>
+                          { label: "Phoenix perps", value: r.composition.venue, color: SERIES[2], tip: `Phoenix perps ${usd(r.composition.venue)}` }]} /></div> : "-"}</td>
                         <td>{protocolCell(r)}</td>
-                        <td className="an-r">{r.liquidatable ? <span className="an-strong" style={{ color: "var(--danger)" }}>Below the line</span> : r.bufferPct === null ? <span className="an-muted">—</span> : <><span className="an-strong">{pct1(r.bufferPct)}</span><small>{usdC(r.bufferUsd)}</small></>}</td>
+                        <td className="an-r">{r.liquidatable ? <span className="an-strong" style={{ color: "var(--danger)" }}>Below the line</span> : r.bufferPct === null ? <span className="an-muted">-</span> : <><span className="an-strong">{pct1(r.bufferPct)}</span><small>{usdC(r.bufferUsd)}</small></>}</td>
                       </>
                     ) : (
                       <>
@@ -152,8 +152,8 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
                         <td className="an-r">{usd(r.equityUsd)}</td>
                         <td className="an-r">{usd(r.collateralUsd)}</td>
                         <td className="an-r">{usd(r.debtUsd)}</td>
-                        <td className="an-r">{r.valued && (r.collateralUsd ?? 0) > 0 ? pct1((r.debtUsd ?? 0) / (r.collateralUsd ?? 1)) : "—"}</td>
-                        <td className="an-r">{r.liquidatable ? <span style={{ color: "var(--danger)", fontWeight: 600 }}>Below the line</span> : r.bufferPct === null ? "—" : `−${pct1(r.bufferPct)}`}</td>
+                        <td className="an-r">{r.valued && (r.collateralUsd ?? 0) > 0 ? pct1((r.debtUsd ?? 0) / (r.collateralUsd ?? 1)) : "-"}</td>
+                        <td className="an-r">{r.liquidatable ? <span style={{ color: "var(--danger)", fontWeight: 600 }}>Below the line</span> : r.bufferPct === null ? "-" : `−${pct1(r.bufferPct)}`}</td>
                       </>
                     )}
                     <td><StatusBadge row={r} /></td>
@@ -216,9 +216,9 @@ export function AccountCard({ row, prices }: { row: AccountView; prices: Record<
         {stat(<>Account value <InfoTip k="accountValue" /></>, usd(row.collateralUsd))}
         {stat("Debt", usd(row.debtUsd))}
         {stat("Equity", usd(row.equityUsd), (row.equityUsd ?? 0) < 0 ? "var(--danger)" : undefined)}
-        {stat(<>Health <InfoTip k="health" /></>, row.healthFactor === null ? (row.valued ? "No debt" : "—") : hfText(row.healthFactor))}
+        {stat(<>Health <InfoTip k="health" /></>, row.healthFactor === null ? (row.valued ? "No debt" : "-") : hfText(row.healthFactor))}
         {stat("Leverage", levText(row.leverage))}
-        {stat(<>Room before liquidation <InfoTip k="buffer" /></>, row.liquidatable ? "Already below the line" : row.bufferPct === null ? "—" : pct1(row.bufferPct))}
+        {stat(<>Room before liquidation <InfoTip k="buffer" /></>, row.liquidatable ? "Already below the line" : row.bufferPct === null ? "-" : pct1(row.bufferPct))}
       </div>
       <AccountDetailBody row={row} prices={prices} />
     </div>
@@ -264,8 +264,8 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
           {fact("Margin account", <Addr value={row.address} />)}
           {fact("Equity", usd(row.equityUsd))}
           {fact("Leverage", levText(row.leverage))}
-          {fact(<>Room before liquidation <InfoTip k="buffer" /></>, row.liquidatable ? "Already below the line" : row.bufferPct === null ? "—" : `${pct1(row.bufferPct)} · ${usd(row.bufferUsd)}`)}
-          {fact("First seen in activity", row.firstSeenTime ? <ForkTime t={row.firstSeenTime} /> : "—")}
+          {fact(<>Room before liquidation <InfoTip k="buffer" /></>, row.liquidatable ? "Already below the line" : row.bufferPct === null ? "-" : `${pct1(row.bufferPct)} · ${usd(row.bufferUsd)}`)}
+          {fact("First seen in activity", row.firstSeenTime ? <ForkTime t={row.firstSeenTime} /> : "-")}
         </div>
         {liq.length > 0 && (
           <div>
@@ -289,7 +289,7 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
                       {l.tag && <span className="an-tag" data-tip="The Phoenix perps account, valued as one lump." tabIndex={0}>{l.tag}</span>}
                       </span>
                     </td>
-                    <td className="an-r">{l.kind === "venue" ? "—" : num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct1(l.usd / depositedUsd)}</td>
+                    <td className="an-r">{l.kind === "venue" ? "-" : num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct1(l.usd / depositedUsd)}</td>
                   </tr>
                 ))}</tbody></table>
             ) : <p className="an-muted an-dcard-empty">{row.valued ? "No active collateral." : "Not valued right now."}</p>}

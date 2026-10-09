@@ -54,11 +54,11 @@ function Inspector({ row, data }: { row: PoolRow; data: ProtocolOverview }) {
         </dl>
         <details className="an-more"><summary>More details</summary>
           <dl className="an-kv">
-            {fact("Pool address", p.reserve ? <Addr value={p.reserve} head={6} tail={6} /> : "—")}
+            {fact("Pool address", p.reserve ? <Addr value={p.reserve} head={6} tail={6} /> : "-")}
             {fact("Token mint", <Addr value={p.mint} head={6} tail={6} />)}
-            {fact("Share mint", detail?.shareMint ? <Addr value={detail.shareMint} head={6} tail={6} /> : "—")}
-            {fact("Liquidity vault", detail?.liquidityVault ? <Addr value={detail.liquidityVault} head={6} tail={6} /> : "—")}
-            {fact("Asset configuration", p.assetConfig ? <Addr value={p.assetConfig} head={6} tail={6} /> : "—")}
+            {fact("Share mint", detail?.shareMint ? <Addr value={detail.shareMint} head={6} tail={6} /> : "-")}
+            {fact("Liquidity vault", detail?.liquidityVault ? <Addr value={detail.liquidityVault} head={6} tail={6} /> : "-")}
+            {fact("Asset configuration", p.assetConfig ? <Addr value={p.assetConfig} head={6} tail={6} /> : "-")}
             {fact("Decimals", String(p.decimals))}
           </dl>
         </details>
@@ -95,11 +95,11 @@ export function PoolsView() {
     <>
       <ViewHead title="Lending Pools" blurb="What lenders have supplied, what is borrowed and what is left to withdraw." />
       <div className="an-kpi-grid an-cols-5">
-        <Kpi label="Supplied by lenders" tip="supplied" value={t ? usdC(t.supplied) : "—"} na={!t} badge={partial} sub={sub(`${rows.length} pools · USD`)} />
-        <Kpi label="Borrowed" tip="borrowed" value={t ? usdC(t.borrowed) : "—"} na={!t} badge={partial} sub={sub("What borrowers owe")} />
-        <Kpi label="Available to withdraw" tip="cash" value={t ? usdC(t.cash) : "—"} na={!t} badge={partial} sub={sub("Withdrawable cash")} />
-        <Kpi label="Borrowed share" tip="ratio" value={t?.ratio != null ? pct(t.ratio) : "—"} na={t?.ratio == null} badge={partial} sub={t ? `${t.partial ? "Counted pools only · " : ""}Busiest: ${t.maxUtilizationSymbol} ${pct(t.maxUtilization)}` : why} />
-        <Kpi label="Average borrow rate" tip="borrowApr" value={t?.borrowApr != null ? pct(t.borrowApr) : "—"} na={t?.borrowApr == null} sub={t ? `Supply APR ${pct(t.supplyApr)}` : why} />
+        <Kpi label="Supplied by lenders" tip="supplied" value={t ? usdC(t.supplied) : "-"} na={!t} badge={partial} sub={sub(`${rows.length} pools · USD`)} />
+        <Kpi label="Borrowed" tip="borrowed" value={t ? usdC(t.borrowed) : "-"} na={!t} badge={partial} sub={sub("What borrowers owe")} />
+        <Kpi label="Available to withdraw" tip="cash" value={t ? usdC(t.cash) : "-"} na={!t} badge={partial} sub={sub("Withdrawable cash")} />
+        <Kpi label="Borrowed share" tip="ratio" value={t?.ratio != null ? pct(t.ratio) : "-"} na={t?.ratio == null} badge={partial} sub={t ? `${t.partial ? "Counted pools only · " : ""}Busiest: ${t.maxUtilizationSymbol} ${pct(t.maxUtilization)}` : why} />
+        <Kpi label="Average borrow rate" tip="borrowApr" value={t?.borrowApr != null ? pct(t.borrowApr) : "-"} na={t?.borrowApr == null} sub={t ? `Supply APR ${pct(t.supplyApr)}` : why} />
       </div>
       {!rows.length ? <Empty title={data ? "No active lending pools" : "Loading pools…"} text={data ? "No Vanna lending pool is initialised on this network." : undefined} icon="pools" /> : (
         <>

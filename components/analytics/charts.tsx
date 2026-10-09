@@ -2,7 +2,7 @@
 
 /**
  * Dependency-free SVG/HTML charts. Every chart receives measured values or explicitly labelled
- * calculated values — never placeholders. Hover/focus details come from `data-tip` (TooltipHost).
+ * calculated values - never placeholders. Hover/focus details come from `data-tip` (TooltipHost).
  */
 import type { ReactNode } from "react";
 
@@ -132,7 +132,7 @@ export function Gauge({ value, label, color = "var(--c1)" }: { value: number | n
     <svg className="an-chart" style={{ maxWidth: 200 }} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label}>
       <path d={arc(0, Math.PI)} fill="none" stroke="var(--track)" strokeWidth={14} strokeLinecap="round" />
       {v > 0 && <path d={arc(0, Math.max(0.02, v * Math.PI))} fill="none" stroke={color} strokeWidth={14} strokeLinecap="round" />}
-      <text x={cx} y={cy - 14} textAnchor="middle" style={{ fill: "var(--ink)", fontSize: 24, fontWeight: 700 }}>{value === null ? "—" : `${(value * 100).toFixed(value < 0.1 ? 2 : 1)}%`}</text>
+      <text x={cx} y={cy - 14} textAnchor="middle" style={{ fill: "var(--ink)", fontSize: 24, fontWeight: 700 }}>{value === null ? "-" : `${(value * 100).toFixed(value < 0.1 ? 2 : 1)}%`}</text>
       <text x={cx} y={cy + 6} textAnchor="middle" style={{ fontSize: 11.5 }}>{label}</text>
       <text x={cx - r} y={cy + 18} textAnchor="middle" style={{ fontSize: 10.5 }}>0%</text>
       <text x={cx + r} y={cy + 18} textAnchor="middle" style={{ fontSize: 10.5 }}>100%</text>
@@ -180,9 +180,9 @@ export function Meter({ fraction, tone = "" }: { fraction: number | null; tone?:
 /** Small trend line. Draws nothing unless there are at least 3 real readings that actually differ. */
 export function Sparkline({ values, color = "var(--c1)", w = 92, h = 30, label }: { values: number[]; color?: string; w?: number; h?: number; label: string }) {
   const v = values.filter((x) => Number.isFinite(x));
-  if (v.length < 3) return <span className="an-muted" data-tip="Not enough readings yet. The server records one reading per refresh.">—</span>;
+  if (v.length < 3) return <span className="an-muted" data-tip="Not enough readings yet. The server records one reading per refresh.">-</span>;
   const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
-  if ((hi - lo) / Math.max(Math.abs(hi), 1e-9) < 1e-4) return <span className="an-muted" data-tip="No change across the readings recorded so far.">—</span>;
+  if ((hi - lo) / Math.max(Math.abs(hi), 1e-9) < 1e-4) return <span className="an-muted" data-tip="No change across the readings recorded so far.">-</span>;
   const pts = v.map((x, i): [number, number] => [(i / (v.length - 1)) * (w - 6) + 3, h - 4 - ((x - lo) / span) * (h - 8)]);
   const last = pts[pts.length - 1];
   return (

@@ -23,7 +23,7 @@ function Lookup({ prices }: { prices: Record<string, number | null> }) {
     catch (e) { setRow(null); setState({ loading: false, error: e instanceof Error ? e.message : "Lookup failed" }); }
   }
   return (
-    <Panel title="Look up a wallet" sub="Paste a wallet address to see its margin account — read-only, nothing is sent to the chain"
+    <Panel title="Look up a wallet" sub="Paste a wallet address to see its margin account - read-only, nothing is sent to the chain"
       actions={<><label className="an-input-wrap"><Icon name="search" /><input className="an-input" style={{ width: 340 }} placeholder="Wallet address" aria-label="Wallet address" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && valid) void run(); }} /></label>
         <button className="an-btn an-primary" disabled={!valid || state.loading} onClick={run}>{state.loading ? "Looking…" : "Look up"}</button></>}>
       {state.error && <Notice tone="warn">{state.error}</Notice>}

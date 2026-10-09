@@ -1,5 +1,5 @@
 /**
- * Pure risk logic: classify accounts and aggregate them. No network, no DOM, no invented inputs —
+ * Pure risk logic: classify accounts and aggregate them. No network, no DOM, no invented inputs -
  * everything is derived from the `AccountRow`s the server read. Shared by the server (summary over
  * ALL accounts) and the browser (what-if, filtering already-fetched rows).
  */

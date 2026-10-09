@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/analytics/events?names=Liquidated,Borrowed&limit=50 — program events decoded from the
+ * GET /api/analytics/events?names=Liquidated,Borrowed&limit=50 - program events decoded from the
  * transactions the account scan has inspected (newest first), with that scan's coverage. No extra RPC.
  */
 export async function GET(request: NextRequest) {

@@ -72,21 +72,21 @@ export function OverviewView() {
         <Notice tone="warn"><strong>Waiting for fresh prices on this test network.</strong> Until the prices update, accounts that hold something can&apos;t be given a dollar value. Accounts with no balance are still shown. Nothing is estimated or filled in.</Notice>
       )}
       <div className="an-kpi-grid">
-        <Kpi label="Bad debt (estimated)" tip="shortfall" value={ok ? usd(s!.badDebtUsd) : "—"} na={!ok} tone={ok && s!.badDebtUsd > 0 ? "danger" : ""}
+        <Kpi label="Bad debt (estimated)" tip="shortfall" value={ok ? usd(s!.badDebtUsd) : "-"} na={!ok} tone={ok && s!.badDebtUsd > 0 ? "danger" : ""}
           sub={ok ? (s!.badDebtUsd > 0 ? `${s!.underwaterCount} account${s!.underwaterCount === 1 ? " owes" : "s owe"} more than ${s!.underwaterCount === 1 ? "it holds" : "they hold"}` : "No account owes more than it holds") : WAIT} />
-        <Kpi label="Can be liquidated" tip="liquidatable" value={ok ? String(s!.liquidatableCount) : "—"} na={!ok} tone={ok && s!.liquidatableCount ? "danger" : ""}
+        <Kpi label="Can be liquidated" tip="liquidatable" value={ok ? String(s!.liquidatableCount) : "-"} na={!ok} tone={ok && s!.liquidatableCount ? "danger" : ""}
           sub={ok ? `${usd(s!.liquidatableDebtUsd)} of debt` : WAIT} />
-        <Kpi label="Liquidatable debt" tip="eligibleDebt" value={ok ? usd(s!.liquidatableDebtUsd) : "—"} na={!ok}
+        <Kpi label="Liquidatable debt" tip="eligibleDebt" value={ok ? usd(s!.liquidatableDebtUsd) : "-"} na={!ok}
           sub={ok ? `Backed by ${usdC(s!.liquidatableCollateralUsd)} of collateral` : WAIT} />
-        <Kpi label="Accounts at risk / active" tip="accountsAtRisk" value={ok ? `${s!.atRiskCount} / ${active}` : "—"} na={!ok} tone={ok && s!.atRiskCount ? "warn" : ""}
+        <Kpi label="Accounts at risk / active" tip="accountsAtRisk" value={ok ? `${s!.atRiskCount} / ${active}` : "-"} na={!ok} tone={ok && s!.atRiskCount ? "warn" : ""}
           sub={ok && active > 0 ? `${pct(s!.atRiskCount / active, 1)} of active accounts · ${s!.statusCounts.empty} empty accounts not counted` : ok ? "No active accounts" : WAIT} />
-        <Kpi label="Average health" tip="averageHealth" value={ok ? hfText(s!.averageHealth) : "—"} na={!ok || s!.averageHealth === null}
+        <Kpi label="Average health" tip="averageHealth" value={ok ? hfText(s!.averageHealth) : "-"} na={!ok || s!.averageHealth === null}
           sub={ok && s!.averageHealth !== null ? `Higher is safer · ${s!.borrowers} account${s!.borrowers === 1 ? "" : "s"} with debt` : ok ? "No account has debt" : WAIT} />
-        <Kpi label="Collateral at risk" tip="collateralAtRisk" value={ok ? usdC(s!.atRiskCollateralUsd) : "—"} na={!ok}
+        <Kpi label="Collateral at risk" tip="collateralAtRisk" value={ok ? usdC(s!.atRiskCollateralUsd) : "-"} na={!ok}
           sub={ok ? `${pct(s!.collateralUsd > 0 ? s!.atRiskCollateralUsd / s!.collateralUsd : null, 1)} of valued collateral · health under 1.50` : WAIT} />
-        <Kpi label="Average leverage" tip="averageLeverage" value={ok && s!.averageLeverage !== null ? levText(s!.averageLeverage) : "—"} na={!ok || s!.averageLeverage === null}
+        <Kpi label="Average leverage" tip="averageLeverage" value={ok && s!.averageLeverage !== null ? levText(s!.averageLeverage) : "-"} na={!ok || s!.averageLeverage === null}
           sub={ok ? `Across ${s!.borrowers} account${s!.borrowers === 1 ? "" : "s"} with debt` : WAIT} />
-        <Kpi label="Total debt" tip="totalDebt" value={ok ? usdC(s!.debtUsd) : "—"} na={!ok}
+        <Kpi label="Total debt" tip="totalDebt" value={ok ? usdC(s!.debtUsd) : "-"} na={!ok}
           sub={ok ? `Against ${usdC(s!.collateralUsd)} of collateral · ${s!.valued} valued account${s!.valued === 1 ? "" : "s"}` : WAIT} />
       </div>
       <AccountsMonitor band={band} onClearBand={() => setBand(null)} />
@@ -95,10 +95,10 @@ export function OverviewView() {
         <CompositionPanel s={s} />
       </div>
       <div className="an-kpi-grid">
-        <Kpi label="Supplied by lenders" tip="supplied" value={t ? usdC(t.supplied) : "—"} na={!t} badge={partial} sub={tSub(`Across ${rows.length} lending pools`)} />
-        <Kpi label="Borrowed" tip="borrowed" value={t ? usdC(t.borrowed) : "—"} na={!t} badge={partial} sub={tSub("Owed by borrowers")} />
-        <Kpi label="Available to withdraw" tip="cash" value={t ? usdC(t.cash) : "—"} na={!t} badge={partial} sub={tSub("Cash left in the pools")} />
-        <Kpi label="Borrowed share" tip="ratio" value={t?.ratio != null ? pct(t.ratio) : "—"} na={t?.ratio == null} badge={partial}
+        <Kpi label="Supplied by lenders" tip="supplied" value={t ? usdC(t.supplied) : "-"} na={!t} badge={partial} sub={tSub(`Across ${rows.length} lending pools`)} />
+        <Kpi label="Borrowed" tip="borrowed" value={t ? usdC(t.borrowed) : "-"} na={!t} badge={partial} sub={tSub("Owed by borrowers")} />
+        <Kpi label="Available to withdraw" tip="cash" value={t ? usdC(t.cash) : "-"} na={!t} badge={partial} sub={tSub("Cash left in the pools")} />
+        <Kpi label="Borrowed share" tip="ratio" value={t?.ratio != null ? pct(t.ratio) : "-"} na={t?.ratio == null} badge={partial}
           sub={t && t.maxUtilizationSymbol ? `Busiest pool: ${t.maxUtilizationSymbol} at ${pct(t.maxUtilization)}` : why} />
       </div>
       <Panel title="Test a price drop" sub="See which accounts would be affected if prices fall. Nothing is sent to the chain."

@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/analytics/summary — protocol-wide account aggregates (KPIs, distributions, concentration,
+ * GET /api/analytics/summary - protocol-wide account aggregates (KPIs, distributions, concentration,
  * collateral/debt by asset) over EVERY account found, with the scan coverage and snapshot age.
  * Served from the server's last snapshot; a request never starts a scan.
  */

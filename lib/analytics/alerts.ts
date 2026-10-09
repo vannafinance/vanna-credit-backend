@@ -1,5 +1,5 @@
 /**
- * Alerts derived live from data the dashboard already has — nothing stored, nothing simulated, and no
+ * Alerts derived live from data the dashboard already has - nothing stored, nothing simulated, and no
  * notification channels (there is no delivery integration, so none is claimed).
  *
  * Priorities: P0 act now · P1 critical · P2 warning · P3 for information.
@@ -30,7 +30,7 @@ export function deriveAlerts(input: {
   if (you) {
     if (!you.valued) out.push({ id: "you-unvalued", priority: "P2", yours: true, title: "Your account can't be valued right now", detail: "A price it depends on hasn't been updated recently.", metric: "Your account", link: "/analytics" });
     else if (you.liquidatable) out.push({ id: "you-liq", priority: "P0", yours: true, title: "Your account can be liquidated now", detail: `Health ${you.healthFactor?.toFixed(2)} is at or below the liquidation line (${LIQUIDATION_LINE.toFixed(2)}).`, metric: "Health", link: "/analytics" });
-    else if (you.healthFactor !== null && you.healthFactor < 1.2) out.push({ id: "you-crit", priority: "P1", yours: true, title: "Your account is close to liquidation", detail: `Health ${you.healthFactor.toFixed(2)} — the liquidation line is ${LIQUIDATION_LINE.toFixed(2)}.`, metric: "Health", link: "/analytics" });
+    else if (you.healthFactor !== null && you.healthFactor < 1.2) out.push({ id: "you-crit", priority: "P1", yours: true, title: "Your account is close to liquidation", detail: `Health ${you.healthFactor.toFixed(2)} - the liquidation line is ${LIQUIDATION_LINE.toFixed(2)}.`, metric: "Health", link: "/analytics" });
     else if (you.healthFactor !== null && you.healthFactor < DISPLAY_BANDS.warning) out.push({ id: "you-warn", priority: "P2", yours: true, title: "Your account health is getting low", detail: `Health ${you.healthFactor.toFixed(2)} (below ${DISPLAY_BANDS.warning.toFixed(2)}).`, metric: "Health", link: "/analytics" });
   }
 
@@ -50,7 +50,7 @@ export function deriveAlerts(input: {
     const rest = old.filter(([sym]) => !lending.includes(sym));
     if (rest.length) out.push({ id: "prices-other", priority: "P2", title: `Prices not updated: ${rest.map(([k]) => k).join(", ")}`, detail: "Accounts holding these can't be valued until they update.", metric: "Prices", link: "/analytics/prices" });
     for (const pool of Object.values(p.pools).filter((x) => x.initialised)) {
-      if (pool.utilization >= UTILIZATION_CRITICAL) out.push({ id: `util-${pool.symbol}`, priority: "P1", title: `${pool.symbol} pool is almost fully borrowed`, detail: `${(pool.utilization * 100).toFixed(1)}% utilization — little cash is left to withdraw.`, metric: "Utilization", link: "/analytics/pools" });
+      if (pool.utilization >= UTILIZATION_CRITICAL) out.push({ id: `util-${pool.symbol}`, priority: "P1", title: `${pool.symbol} pool is almost fully borrowed`, detail: `${(pool.utilization * 100).toFixed(1)}% utilization - little cash is left to withdraw.`, metric: "Utilization", link: "/analytics/pools" });
       else if (pool.utilization >= UTILIZATION_WARN) out.push({ id: `util-${pool.symbol}`, priority: "P2", title: `${pool.symbol} pool utilization is high`, detail: `${(pool.utilization * 100).toFixed(1)}% of the pool is borrowed.`, metric: "Utilization", link: "/analytics/pools" });
     }
   }

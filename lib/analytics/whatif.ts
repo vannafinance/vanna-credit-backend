@@ -30,7 +30,7 @@ export interface Side {
   equity: number;
   health: number | null;
   noDebt: boolean;
-  /** Liquidation eligibility (health at or below the line) — NOT the same as loss. */
+  /** Liquidation eligibility (health at or below the line) - NOT the same as loss. */
   eligible: boolean;
   /** Debt not covered by collateral. */
   shortfall: number;

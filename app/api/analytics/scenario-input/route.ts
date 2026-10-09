@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/analytics/scenario-input — the verified baseline the What-if Calculator runs on: the
+ * GET /api/analytics/scenario-input - the verified baseline the What-if Calculator runs on: the
  * collateral and debt lines of every account that could be valued, plus the ones left out and why.
  * Fetched only when the calculator opens. The calculator itself runs in the browser and writes nothing.
  */

@@ -12,7 +12,7 @@ import { ViewHead } from "../shell";
 
 const WAIT = "Waiting for accounts";
 
-/** "5.0% for 15 assets, 7.0% for NVDAx, TSLAx" — assets grouped by their on-chain liquidator bonus. */
+/** "5.0% for 15 assets, 7.0% for NVDAx, TSLAx" - assets grouped by their on-chain liquidator bonus. */
 const bonusGroups = (assets: Array<{ symbol: string; liquidationBonusBps: number }>) => {
   const by = new Map<number, string[]>();
   for (const a of assets) by.set(a.liquidationBonusBps, [...(by.get(a.liquidationBonusBps) ?? []), a.symbol]);
@@ -54,10 +54,10 @@ export function LiquidationsView() {
     <>
       <ViewHead title="Liquidations" blurb="Who can be liquidated now, how close others are, and what has been liquidated." />
       <div className="an-kpi-grid">
-        <Kpi label="Can be liquidated now" tip="liquidatable" value={ok ? String(s!.liquidatableCount) : "—"} na={!ok} tone={ok && s!.liquidatableCount ? "danger" : ""} sub={ok ? `Out of ${s!.valued} accounts` : WAIT} />
-        <Kpi label="Liquidatable debt" tip="eligibleDebt" value={ok ? usd(s!.liquidatableDebtUsd) : "—"} na={!ok} sub={ok ? `Backed by ${usd(s!.liquidatableCollateralUsd)} of collateral` : WAIT} />
-        <Kpi label="Bad debt (estimated)" tip="shortfall" value={ok ? usd(s!.badDebtUsd) : "—"} na={!ok} tone={ok && s!.badDebtUsd > 0 ? "danger" : ""} sub={ok ? `${s!.underwaterCount} account${s!.underwaterCount === 1 ? " owes" : "s owe"} more than ${s!.underwaterCount === 1 ? "it holds" : "they hold"}` : WAIT} />
-        <Kpi label="Liquidations recorded" tip="coverage" value={ev ? String(ev.counts.Liquidated ?? 0) : "—"} na={!ev}
+        <Kpi label="Can be liquidated now" tip="liquidatable" value={ok ? String(s!.liquidatableCount) : "-"} na={!ok} tone={ok && s!.liquidatableCount ? "danger" : ""} sub={ok ? `Out of ${s!.valued} accounts` : WAIT} />
+        <Kpi label="Liquidatable debt" tip="eligibleDebt" value={ok ? usd(s!.liquidatableDebtUsd) : "-"} na={!ok} sub={ok ? `Backed by ${usd(s!.liquidatableCollateralUsd)} of collateral` : WAIT} />
+        <Kpi label="Bad debt (estimated)" tip="shortfall" value={ok ? usd(s!.badDebtUsd) : "-"} na={!ok} tone={ok && s!.badDebtUsd > 0 ? "danger" : ""} sub={ok ? `${s!.underwaterCount} account${s!.underwaterCount === 1 ? " owes" : "s owe"} more than ${s!.underwaterCount === 1 ? "it holds" : "they hold"}` : WAIT} />
+        <Kpi label="Liquidations recorded" tip="coverage" value={ev ? String(ev.counts.Liquidated ?? 0) : "-"} na={!ev}
           sub={ev?.coverage ? `In the last ${ev.coverage.transactionsScanned} program transactions` : "In recent activity"} />
       </div>
 
@@ -82,7 +82,7 @@ export function LiquidationsView() {
               <tr key={e.id}>
                 <td className="an-nowrap"><ForkTime t={e.time} /></td>
                 <td title={e.marginAccount ?? ""}>{short(e.marginAccount, 5, 5)}</td>
-                <td>{e.actor ? <Addr value={e.actor} /> : "—"}</td>
+                <td>{e.actor ? <Addr value={e.actor} /> : "-"}</td>
                 <td className="an-r">{usd(e.debtValueUsd)}</td><td className="an-r">{usd(e.collateralValueUsd)}</td><td className="an-r">{hfText(e.healthFactor)}</td>
                 <td><Addr value={e.signature} /></td>
               </tr>

@@ -45,9 +45,9 @@ export function TopAccountsView() {
     <>
       <ViewHead title="Top accounts" blurb="How concentrated the debt is, who owes the most, and what has been happening." />
       <div className="an-kpi-grid an-cols-3">
-        <Kpi label="Largest borrower" value={ok && c?.top1 != null ? pct1(c.top1) : "—"} na={!ok} sub={ok ? "Share of all debt owed by one account" : WAIT} />
-        <Kpi label="Top 3 borrowers" value={ok && c?.top3 != null ? pct1(c.top3) : "—"} na={!ok} sub={ok ? `${s!.borrowers} account${s!.borrowers === 1 ? "" : "s"} with debt in total` : WAIT} />
-        <Kpi label="Concentration index" tip="hhi" value={ok && c?.hhi != null ? Math.round(c.hhi).toLocaleString("en-US") : "—"} na={!ok} sub={ok ? "0 = spread out · 10,000 = one borrower" : WAIT} />
+        <Kpi label="Largest borrower" value={ok && c?.top1 != null ? pct1(c.top1) : "-"} na={!ok} sub={ok ? "Share of all debt owed by one account" : WAIT} />
+        <Kpi label="Top 3 borrowers" value={ok && c?.top3 != null ? pct1(c.top3) : "-"} na={!ok} sub={ok ? `${s!.borrowers} account${s!.borrowers === 1 ? "" : "s"} with debt in total` : WAIT} />
+        <Kpi label="Concentration index" tip="hhi" value={ok && c?.hhi != null ? Math.round(c.hhi).toLocaleString("en-US") : "-"} na={!ok} sub={ok ? "0 = spread out · 10,000 = one borrower" : WAIT} />
       </div>
 
       <section className="an-panel an-flush">
@@ -60,7 +60,7 @@ export function TopAccountsView() {
                 <td className="an-muted">{(data!.page - 1) * data!.per + i + 1}</td>
                 <td><Addr value={r.owner} /></td>
                 <td className="an-r">{usd(r.debtUsd)}</td>
-                <td className="an-r">{s && s.debtUsd > 0 ? pct1((r.debtUsd ?? 0) / s.debtUsd) : "—"}</td>
+                <td className="an-r">{s && s.debtUsd > 0 ? pct1((r.debtUsd ?? 0) / s.debtUsd) : "-"}</td>
                 <td className="an-r">{hfText(r.healthFactor)}</td>
                 <td className="an-r">{levText(r.leverage)}</td>
                 <td><StatusBadge row={r} /></td>

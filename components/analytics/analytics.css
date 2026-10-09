@@ -1,6 +1,6 @@
 /*
  * Risk Analytics screens. Built on the site's V3 design system: this file only maps the V3 tokens
- * (app/v3.css — light, and `html.dark` for dark, switched by the header's theme control) to the
+ * (app/v3.css - light, and `html.dark` for dark, switched by the header's theme control) to the
  * names the analytics components use, and adds analytics-only components. Classes are `an-*`
  * so nothing here can collide with another page's V3 styles.
  */

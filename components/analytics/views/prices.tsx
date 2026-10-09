@@ -29,9 +29,9 @@ export function PricesView() {
     <>
       <ViewHead title="Prices" blurb="The on-chain prices the protocol uses, and how recently each was updated." />
       <div className="an-kpi-grid an-cols-3">
-        <Kpi label="Prices up to date" tip="oracleFresh" value={data ? `${count("fresh")} / ${all.length}` : "—"} na={!data} tone={data && count("fresh") === all.length ? "ok" : "warn"} sub={data ? "Updated within the time the protocol allows" : isError ? "Couldn't reach the service." : "Loading…"} />
-        <Kpi label="Not updated recently" value={data ? String(count("old")) : "—"} na={!data} tone={count("old") ? "danger" : ""} sub={count("old") ? "Not used to value accounts until they update" : "None"} />
-        <Kpi label="No price" value={data ? String(count("none")) : "—"} na={!data} tone={count("none") ? "warn" : ""} sub="No usable price found on-chain" />
+        <Kpi label="Prices up to date" tip="oracleFresh" value={data ? `${count("fresh")} / ${all.length}` : "-"} na={!data} tone={data && count("fresh") === all.length ? "ok" : "warn"} sub={data ? "Updated within the time the protocol allows" : isError ? "Couldn't reach the service." : "Loading…"} />
+        <Kpi label="Not updated recently" value={data ? String(count("old")) : "-"} na={!data} tone={count("old") ? "danger" : ""} sub={count("old") ? "Not used to value accounts until they update" : "None"} />
+        <Kpi label="No price" value={data ? String(count("none")) : "-"} na={!data} tone={count("none") ? "warn" : ""} sub="No usable price found on-chain" />
       </div>
       <div className="an-row">
         <label className="an-input-wrap"><Icon name="search" /><input className="an-input" placeholder="Search asset" aria-label="Search assets" value={q} onChange={(e) => setQ(e.target.value)} /></label>
@@ -47,13 +47,13 @@ export function PricesView() {
             <article className="an-oracle-card" key={t.symbol}>
               <div className="an-row an-between"><AssetCell symbol={t.symbol} /><Badge tone={st === "fresh" ? "ok" : st === "old" ? "danger" : "warn"}>{st === "fresh" ? "Up to date" : st === "old" ? "Not updated" : "No price"}</Badge></div>
               <div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: st === "fresh" ? undefined : "var(--ink-3)" }}>{p && finite(p.usd) && p.usd > 0 ? usd(p.usd) : "—"}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: st === "fresh" ? undefined : "var(--ink-3)" }}>{p && finite(p.usd) && p.usd > 0 ? usd(p.usd) : "-"}</div>
                 {st === "old" && <div style={{ fontSize: 12, color: "var(--danger)", fontWeight: 600 }}>Last price seen on-chain · not used to value accounts</div>}
                 <div className="an-muted" style={{ fontSize: 12.5 }}>{p?.feed ? priceSourceLabel(p.feed) : "No price source"}</div>
               </div>
               <div className="an-fresh-box">
                 <div className="an-k">Last updated <InfoTip k="oracleFresh" /></div>
-                <div className="an-v">{finite(age) ? age : "—"}<small>{"\u00a0"}seconds ago{finite(limit) ? ` · allowed up to ${limit}s` : ""}</small></div>
+                <div className="an-v">{finite(age) ? age : "-"}<small>{"\u00a0"}seconds ago{finite(limit) ? ` · allowed up to ${limit}s` : ""}</small></div>
                 <Meter fraction={frac} tone={st === "old" || (frac ?? 0) >= 1 ? "danger" : (frac ?? 0) >= 0.75 ? "warn" : ""} />
               </div>
               {p && finite(p.maxTwapDivergenceBps) && (

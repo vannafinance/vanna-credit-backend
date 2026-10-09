@@ -20,7 +20,7 @@
  * chunks (the fork rejects JSON-RPC batching) with a small pause between chunks.
  *
  * Valuation uses the same math and rounding as `margin.ts` (collateral rounds down, debt rounds up)
- * so rows match `fetchMarginSnapshot` — `scripts/analytics-parity.ts` checks that live.
+ * so rows match `fetchMarginSnapshot` - `scripts/analytics-parity.ts` checks that live.
  */
 import { PublicKey, type AccountInfo } from "@solana/web3.js";
 import { forkUnixTimestamp, getConnection, getMultipleAccountsChunked } from "@/lib/solana/connection";

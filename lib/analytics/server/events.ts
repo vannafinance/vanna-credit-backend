@@ -3,7 +3,7 @@
  * Anchor events are emitted in the transaction logs and parsed with the program's own coder.
  *
  * Only a bounded ring is kept (newest first by block time). Coverage is exactly the registry's scan
- * window — the UI says "in the last N program transactions", never "all history".
+ * window - the UI says "in the last N program transactions", never "all history".
  */
 import { PublicKey } from "@solana/web3.js";
 import { getProgram, VANNA_IDL } from "@/lib/solana/program";
@@ -30,7 +30,7 @@ export interface ProgramEvent {
   symbol: string | null;
   /** Token units (UI) for the asset movement, when the event has one. */
   amount: number | null;
-  /** Liquidated only — value of what was repaid / seized, USD (nano-USD from the program ÷ 1e9). */
+  /** Liquidated only - value of what was repaid / seized, USD (nano-USD from the program ÷ 1e9). */
   debtValueUsd: number | null;
   collateralValueUsd: number | null;
   /** Health factor reported by the program in the event (after the action, or at liquidation). */

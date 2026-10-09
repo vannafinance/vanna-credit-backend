@@ -11,7 +11,7 @@ export const definitions = {
   borrowApr: ["Borrow APR", "The yearly rate borrowers pay at the pool's current utilization, from the on-chain rate curve."],
   supplyApr: ["Supply APR", "The yearly rate lenders earn: borrow rate × utilization × (1 − reserve factor)."],
   health: ["Health factor", "Account value ÷ debt. Higher is safer. At or below the liquidation line the account can be liquidated."],
-  status: ["Account status", "Safe — well above the liquidation line\nAt risk — a price drop could make it liquidatable\nLiquidatable — at or below the line\nNo debt — owes nothing\nNot valued — no dollar value yet; hover its badge for why"],
+  status: ["Account status", "Safe - well above the liquidation line\nAt risk - a price drop could make it liquidatable\nLiquidatable - at or below the line\nNo debt - owes nothing\nNot valued - no dollar value yet; hover its badge for why"],
   liquidatable: ["Can be liquidated", "Health is at or below the liquidation line, so a liquidator may close the account. It has not necessarily been liquidated."],
   countedCollateral: ["Held in accounts", "Tokens sitting in margin-account vaults. Every allowed token an account holds counts as collateral."],
   allowedCollateral: ["Allowed as collateral", "Whether the protocol accepts this asset. Any allowed token an account holds counts as collateral."],

@@ -90,7 +90,7 @@ function StatusBar() {
   const warming = !data || state?.status === "warming";
   const scanning = !!cov && !cov.complete;
   const text = isError ? "Couldn't reach the analytics service."
-    : warming ? "Starting up — looking for accounts…"
+    : warming ? "Starting up - looking for accounts…"
     : scanning ? `Scanning recent activity · ${cov!.accountsFound} accounts found so far`
     : cov ? `${cov.accountsFound} accounts found · ${cov.olderActivityExists === false ? "all program activity" : `last ${cov.transactionsScanned.toLocaleString("en-US")} transactions`}${cov.oldestScannedTime ? ` since ${new Date(cov.oldestScannedTime * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}${cov.olderActivityExists ? " · older activity not covered" : ""}` : "";
   const dot = isError || state?.status === "error" ? "an-bad" : warming || scanning ? "an-warn an-pulse" : "";
