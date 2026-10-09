@@ -1,0 +1,42 @@
+/**
+ * Plain-language definitions shown in hover/focus tooltips. Static explanatory copy only: no
+ * figures, thresholds or product values live here (those come from the API).
+ */
+export const definitions = {
+  supplied: ["Supplied by lenders", "Assets lenders have put into the pool, including what is currently lent out, valued at the oracle price."],
+  borrowed: ["Borrowed", "What borrowers owe the pool, with interest accrued up to now."],
+  cash: ["Available to withdraw", "Cash sitting in the pool that lenders can withdraw right now. It is smaller than supply whenever assets are lent out."],
+  utilization: ["Utilization", "Borrowed ÷ (cash + borrowed) for one pool. The higher it is, the less cash is left to withdraw."],
+  ratio: ["Borrowed share", "Total borrowed ÷ total supplied across all pools, in dollars."],
+  borrowApr: ["Borrow APR", "The yearly rate borrowers pay at the pool's current utilization, from the on-chain rate curve."],
+  supplyApr: ["Supply APR", "The yearly rate lenders earn: borrow rate × utilization × (1 − reserve factor)."],
+  health: ["Health factor", "Collateral value ÷ debt. Higher is safer. At or below the liquidation line an account can be liquidated. An account with no debt has no health factor."],
+  status: ["Account status", "Safe: comfortably above the liquidation line. At risk: a price drop could make it liquidatable. Liquidatable: at or below the line. No debt: owes nothing. Price not updated: a price it depends on hasn't been updated recently. Can't read: it uses an asset or venue this dashboard doesn't recognise yet. Either way it has no dollar value and is left out of the totals — hover the badge for the reason."],
+  liquidatable: ["Can be liquidated", "Accounts whose health factor is at or below the liquidation line. A liquidator is allowed to close them. It does not mean they have been liquidated."],
+  countedCollateral: ["Held in accounts", "How much of this token sits in margin-account vaults. The program counts every allowed token an account holds as collateral — there is no per-account registration."],
+  allowedCollateral: ["Allowed as collateral", "Whether the protocol's allowed-token list includes this asset. Any account holding an allowed token has it counted as collateral."],
+  accountValue: ["Account value", "Everything in the margin account before subtracting debt: deposited collateral, borrowed funds still idle in the account, and the Phoenix perps account. Health = account value ÷ debt."],
+  eligibleDebt: ["Debt that can be liquidated", "Total debt of the accounts a liquidator can act on right now. It is exposure, not realised proceeds or loss."],
+  collateralAtRisk: ["Collateral at risk", "Collateral value of accounts whose health is below the display line, including the ones that can already be liquidated."],
+  averageLeverage: ["Average leverage", "Debt-weighted collateral ÷ equity across accounts that owe money and have positive equity."],
+  totalDebt: ["Total debt", "What all accounts that could be valued owe, accrued to now."],
+  accountsAtRisk: ["Accounts at risk / active", "Left number: accounts with health under 1.50 (this includes the ones already below the liquidation line). Right number: active accounts — those that hold collateral or owe money. Empty accounts (nothing deposited, nothing owed) and accounts waiting for a fresh price are not counted."],
+  averageHealth: ["Average health", "Total collateral ÷ total debt across accounts that owe money (the debt-weighted average of their health factors)."],
+  shortfall: ["Bad debt (estimated)", "For each account that could be valued, the part of its debt that its collateral no longer covers, added together. It is an estimate, not a realised loss."],
+  coverage: ["Account coverage", "Accounts are found from the most recent Vanna program transactions and each is verified on-chain. Accounts with no recent activity can be missing, so every account figure describes the accounts found."],
+  composition: ["What collateral is made of", "Collateral split by how it is held: tokens in the account, Kamino deposits (receipts), and the Phoenix perps account. Each is counted once."],
+  buffer: ["Room before liquidation", "The share of collateral value that could disappear, with debt unchanged, before the account reaches the liquidation line."],
+  hfDistribution: ["Accounts by health", "How much debt sits at each health level. Bars left of the red line can be liquidated. Click a bar to filter the table."],
+  leverageDistribution: ["Debt by leverage", "Debt grouped by how leveraged each account is (collateral ÷ equity). The groups are display ranges, not protocol limits."],
+  oracleFresh: ["Price freshness", "How old the on-chain price is, measured on the fork's own clock, against the maximum age the protocol allows for that asset."],
+  ltv: ["Loan-to-value", "Per-asset value stored in the asset's on-chain configuration. Shown as configured data."],
+  liqBonus: ["Liquidation bonus", "The extra a liquidator receives, stored per asset on-chain."],
+  maxCollateral: ["Max collateral per account", "Per-asset deposit limit for one margin account. 0 means no limit is set."],
+  reserveFactor: ["Reserve factor", "The share of borrower interest kept by the protocol. Different from the borrower APR and the lender APR."],
+  caps: ["Pool limits", "Supply and borrow limits stored on the pool. No limit is shown when none is set."],
+  hhi: ["Concentration index", "How concentrated the debt is, from 0 (spread across many borrowers) to 10,000 (one borrower owes everything). Higher means debt sits with fewer accounts."],
+  forkClock: ["Fork clock", "Timestamps on the test network come from its own clock, which can differ from this device's clock. Ages are measured against it."],
+  simulation: ["What-if calculation", "A saved baseline is repriced with your assumptions, on demand. Results are simulated estimates, never transactions."],
+  eligibility: ["Liquidatable vs loss", "Liquidatable means a liquidator may close the account. Bad debt means the collateral no longer covers what is owed. They are different states."],
+} as const;
+export type DefinitionKey = keyof typeof definitions;
