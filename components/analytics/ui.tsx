@@ -75,7 +75,7 @@ export const statusTone = (s: AccountStatus): Tone => TONE[s];
 
 /** Status badge with a hover explanation; accounts that cannot be valued say why. */
 export function StatusBadge({ row }: { row: AccountRow }) {
-  const tip = row.status === "incomplete" ? `${onlyPriceReasons(row) ? "A price it depends on has not been updated recently, so it has no dollar value yet. It is left out of the totals until the price updates." : DESC.incomplete}\n${row.reasons.map(reasonText).join("\n") || "Reason unavailable."}` : DESC[row.status];
+  const tip = row.status === "incomplete" ? `${onlyPriceReasons(row) ? "A price it depends on has not updated recently, so it has no dollar value and is left out of the totals." : DESC.incomplete}\n${row.reasons.map(reasonText).join("\n") || "Reason unavailable."}` : DESC[row.status];
   return (
     <span data-tip={tip} tabIndex={0}>
       <Badge tone={TONE[row.status]}>{statusLabelOf(row)}</Badge>
@@ -192,7 +192,7 @@ export function Addr({ value, head = 5, tail = 5 }: { value: string; head?: numb
 /** A chain timestamp. It comes from the test network's own clock, which runs ahead of this device's, so say so. */
 export function ForkTime({ t }: { t: number | null | undefined }) {
   return (
-    <span data-tip="Time on the test network's own clock. It runs ahead of your device's clock, so it can differ from your local time." tabIndex={0}>
+    <span data-tip="The test network's own clock, which runs ahead of your device's." tabIndex={0}>
       {forkTime(t)} <span className="an-muted" style={{ fontSize: "0.85em" }}>· test clock</span>
     </span>
   );

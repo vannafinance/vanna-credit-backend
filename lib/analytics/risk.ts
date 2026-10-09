@@ -183,20 +183,30 @@ export function matchesFilter(row: AccountRow, filter: AccountFilter): boolean {
   }
 }
 
-const SORT_VALUE: Record<AccountSortKey, (r: AccountRow) => number> = {
-  // Riskiest first by default: unknown health sorts after every known health, no-debt after debtors.
-  health: (r) => r.healthFactor ?? (r.status === "incomplete" ? Number.MAX_SAFE_INTEGER : 1e12),
-  debt: (r) => r.debtUsd ?? -1,
-  collateral: (r) => r.collateralUsd ?? -1,
-  equity: (r) => r.equityUsd ?? -Infinity,
-  leverage: (r) => r.leverage ?? -1,
-  buffer: (r) => r.bufferPct ?? Number.MAX_SAFE_INTEGER,
+/** The number an account is sorted on, or null when it has none (no debt, or not valued). */
+const SORT_VALUE: Record<AccountSortKey, (r: AccountRow) => number | null> = {
+  health: (r) => r.healthFactor,
+  debt: (r) => r.debtUsd,
+  collateral: (r) => r.collateralUsd,
+  equity: (r) => r.equityUsd,
+  leverage: (r) => r.leverage,
+  buffer: (r) => r.bufferPct,
   status: (r) => STATUS_RANK[r.status],
 };
 
+/**
+ * Accounts with a value come first in the chosen direction. Accounts without one always come after them in
+ * either direction: valued ones with nothing to show (no debt) first, then accounts that could not be valued.
+ */
 export function sortRows(rows: AccountRow[], key: AccountSortKey, dir: 1 | -1): AccountRow[] {
   const f = SORT_VALUE[key] ?? SORT_VALUE.health;
-  return [...rows].sort((a, b) => (f(a) - f(b) || a.owner.localeCompare(b.owner)) * dir);
+  const group = (r: AccountRow) => (f(r) !== null ? 0 : r.status === "incomplete" ? 2 : 1);
+  return [...rows].sort((a, b) => {
+    const g = group(a) - group(b);
+    if (g) return g;
+    const d = group(a) === 0 ? ((f(a) as number) - (f(b) as number)) * dir : 0;
+    return d || a.owner.localeCompare(b.owner);
+  });
 }
 
 export function searchRows(rows: AccountRow[], query: string): AccountRow[] {

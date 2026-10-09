@@ -92,6 +92,10 @@ describe("filter, sort and search", () => {
   it("sorts riskiest first and puts accounts with no health last", () => {
     expect(sortRows(rows, "health", 1).map((r) => r.owner)).toEqual(["bbb", "aaa", "ddd", "ccc"]);
   });
+  it("keeps accounts without a value last when sorting either way", () => {
+    expect(sortRows(rows, "health", -1).map((r) => r.owner)).toEqual(["aaa", "bbb", "ddd", "ccc"]);
+    expect(sortRows(rows, "buffer", -1).map((r) => r.owner).slice(-2)).toEqual(["ddd", "ccc"]);
+  });
   it("filters by status", () => {
     expect(rows.filter((r) => matchesFilter(r, "incomplete")).map((r) => r.owner)).toEqual(["ccc"]);
     expect(rows.filter((r) => matchesFilter(r, "nodebt")).map((r) => r.owner)).toEqual(["ddd"]);

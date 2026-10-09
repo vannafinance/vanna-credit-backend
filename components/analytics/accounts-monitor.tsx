@@ -286,7 +286,7 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
                     <td className="an-nowrap">
                       <span className="an-assetrow">
                       <AssetCell symbol={l.symbol} sub={l.kind === "receipt" ? kind(l.kind) : ""} size="sm" />
-                      {l.tag && <span className="an-tag" data-tip="The account's Phoenix perps account, valued as one lump (collateral plus position equity)." tabIndex={0}>{l.tag}</span>}
+                      {l.tag && <span className="an-tag" data-tip="The Phoenix perps account, valued as one lump." tabIndex={0}>{l.tag}</span>}
                       </span>
                     </td>
                     <td className="an-r">{l.kind === "venue" ? "—" : num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct1(l.usd / depositedUsd)}</td>
@@ -299,7 +299,7 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
               <table className="an-t"><thead><tr><th>Asset</th><th className="an-r">Debt</th><th className="an-r">Value</th><th className="an-r">APR</th></tr></thead>
                 <tbody>{row.debts.map((l) => (
                   <tr key={l.symbol}><td className="an-nowrap"><span className="an-assetrow"><AssetCell symbol={l.symbol} sub="" size="sm" />
-                    {idleOf(l.symbol) * (l.amount > 0 ? l.usd / l.amount : 0) > DUST_USD && <span className="an-tag" data-tip="Borrowed funds still sitting in the account. They are not collateral you deposited, but they count toward its health until they are used or repaid." tabIndex={0}>{num(idleOf(l.symbol))} idle</span>}</span></td><td className="an-r">{num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct(l.borrowApr)}</td></tr>
+                    {idleOf(l.symbol) * (l.amount > 0 ? l.usd / l.amount : 0) > DUST_USD && <span className="an-tag" data-tip="Borrowed funds still in the account. They count toward health until used or repaid." tabIndex={0}>{num(idleOf(l.symbol))} idle</span>}</span></td><td className="an-r">{num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct(l.borrowApr)}</td></tr>
                 ))}</tbody></table>
             ) : <p className="an-muted an-dcard-empty">{row.valued ? "No outstanding debt." : "Not valued right now."}</p>}
           </section>

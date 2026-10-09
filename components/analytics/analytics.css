@@ -347,7 +347,7 @@ html.dark .v3 .an-root .an-chip-sm { background: #2c2c36; color: #d4d4d8; }
 .v3 .an-root .an-toolbar .an-seg, .v3 .an-root .an-panel-head .an-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 @media (prefers-reduced-motion: reduce) { .v3 .an-root *, .v3 .an-root *::before, .v3 .an-root *::after { animation: none !important; transition: none !important; } }
 
-.v3 .an-tip { position: fixed; z-index: 2500; max-width: 320px; padding: 10px 12px; background: #111827; color: #f4f4f5; border-radius: 10px; font-size: 12px; line-height: 1.5; box-shadow: 0 12px 32px rgba(17, 24, 39, .22); pointer-events: none; font-weight: 500; white-space: pre-line; }
+.v3 .an-tip { position: fixed; z-index: 2500; width: max-content; max-width: 280px; padding: 9px 12px; background: #111827; color: #f4f4f5; border-radius: 10px; font-size: 12px; line-height: 1.5; box-shadow: 0 12px 32px rgba(17, 24, 39, .22); pointer-events: none; font-weight: 500; white-space: pre-line; }
 html.dark .v3 .an-tip { background: #f4f4f5; color: #1f2937; }
 .v3 .an-root .an-info-btn { cursor: help; }
 .v3 .an-root .an-info-icon { width: 15px; height: 15px; }
