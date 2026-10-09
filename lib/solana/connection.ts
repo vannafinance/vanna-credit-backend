@@ -40,15 +40,19 @@ export const forkFetch: typeof fetch = async (input, init) => {
     let response: Response;
     try {
       response = await fetch(input, { ...init, signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) });
-      if (!retriable || attempt >= RETRY_DELAYS_MS.length) return response;
+      // Read the body inside the timeout/retry boundary. A timed-out clone must never
+      // leak a consumed/aborted Response into web3.js's later response.text().
+      const text = await response.text();
+      const readable = () => new Response(text, {status:response.status,statusText:response.statusText,headers:response.headers});
+      if (!retriable || attempt >= RETRY_DELAYS_MS.length) return readable();
       let transient = response.status === 429 || response.status >= 500;
       if (!transient && response.ok) {
-        const body = await response.clone().json().catch(() => null);
+        let body;
+        try { body = JSON.parse(text); } catch { return readable(); }
         const replies = Array.isArray(body) ? body : [body];
         transient = replies.some((reply) => reply?.error && /Internal error|Too Many Requests/i.test(reply.error.message ?? ""));
       }
-      if (!transient) return response;
-      await response.body?.cancel();
+      if (!transient) return readable();
     } catch (error) {
       if (signal.aborted || !retriable || attempt >= RETRY_DELAYS_MS.length || !TRANSIENT.test(errorText(error))) throw error;
     }

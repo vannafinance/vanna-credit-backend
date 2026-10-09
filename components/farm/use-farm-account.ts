@@ -75,7 +75,7 @@ export function computeFarmAccount(i: FarmAccountInputs): { rows: FarmPositionRo
 
   const rows: FarmPositionRow[] = i.positions.map((p) => {
     const pool = i.pools.find((x) => x.id === p.poolId) ?? null;
-    const farmRows = i.history.filter((r) => (r.type === "farm-deposit" || r.type === "farm-withdraw") && r.symbol === p.symbol);
+    const farmRows = i.history.filter((r) => (r.type === "farm-deposit" || r.type === "farm-withdraw") && r.symbol === p.symbol && !r.vaultId);
     const deposited = farmRows.filter((r) => r.type === "farm-deposit").reduce((s, r) => s + Number(r.amount), 0);
     const withdrawn = farmRows.filter((r) => r.type === "farm-withdraw").reduce((s, r) => s + Number(r.amount), 0);
     const basis = deposited - withdrawn;

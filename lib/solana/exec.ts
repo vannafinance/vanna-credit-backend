@@ -6,14 +6,13 @@ import { fetchWithTimeout } from "../async";
  * the account is health-checked after it (Frontend Integration Guide, "External calls").
  *
  * Accounts: authority, protocol_config, margin_account, integration ["integration", target],
- * target_program, validator, venue_asset (the Phoenix venue's AssetConfig for a Phoenix call, else null).
- * Args: data (the outside instruction's data), call_account_count, new_assets.
+ * target_program, validator, venue_asset (the Phoenix venue's AssetConfig for a Phoenix call, else null), event_authority and program for CPI events.
+ * Args: data (the outside instruction's data), call_account_count.
  * remaining_accounts, in order:
  *   1. the outside instruction's accounts (none a signer: Vanna signs as the margin / venue account);
- *   2. EVERY position group, in slot order;
- *   3. one `[asset_config, margin vault]` group per token received for the first time (new_assets);
- *   4. the oracle segment (price accounts of every holding and every new token);
- *   5. the validator segment, only when it needs accounts: Phoenix `[vanna_validator, market_book, exchange]`.
+ *   2. global allowed-token groups, active venue groups, then active debts;
+ *   3. the oracle segment (price accounts of every holding and received token);
+ *   4. the validator segment, only when it needs accounts: Phoenix `[vanna_validator, market_book, exchange]`.
  * The receiving margin vault is created (idempotent ATA) before the call; Vanna doesn't create it.
  * Vanna sets no minimum output: slippage protection is the outside program's (Jupiter's min out).
  */
@@ -90,10 +89,10 @@ export interface ExecCall {
  * vault's idempotent ATA create is pushed onto `ctx.instructions`.
  */
 export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promise<TransactionInstruction> {
-  const extraGroups: AccountMeta[] = [];
+
   const priced: AssetConfigState[] = [];
   const writable: PublicKey[] = [];
-  let newAssets = 0;
+
   if (call.token) {
     const { spent, received } = call.token;
     if (spent) {
@@ -105,10 +104,7 @@ export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promis
       const receivedVault = marginVault(ctx.margin, received.mint, received.tokenProgram);
       ctx.instructions.push(createAssociatedTokenAccountIdempotentInstruction(ctx.owner, receivedVault, ctx.margin, received.mint, received.tokenProgram));
       priced.push(received);
-      if (!ctx.model.collateral.includes(received.assetIndex)) {
-        extraGroups.push(readonly(received.address), readonly(receivedVault));
-        newAssets = 1;
-      }
+      if (!ctx.model.collateral.includes(received.assetIndex)) throw new Error("The asset to receive is not on the protocol allowed-token list");
     }
   }
   let venueScan;
@@ -120,11 +116,11 @@ export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promis
   } else if (ctx.venue) {
     venueScan = { venue: ctx.venue };
   }
-  const health = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {}, priced, { venue: venueScan, writable, extraGroups });
+  const health = buildHealthRemainingAccounts(ctx.margin, ctx.model, ctx.assetMap, {}, priced, { venue: venueScan, writable });
   const validatorSegment = call.validatorAccounts ? [readonly(VALIDATOR_PROGRAM_ID), ...call.validatorAccounts.map(readonly)] : [];
   const cpi = call.cpiAccounts.map((a) => ({ ...a, isSigner: false }));
   const ix = await getProgram()
-    .methods.marginExecute(call.data, cpi.length, newAssets)
+    .methods.marginExecute(call.data, cpi.length)
     .accountsStrict({
       authority: ctx.owner,
       protocolConfig: protocolConfigPda(),
@@ -133,6 +129,8 @@ export async function marginExecuteIx(ctx: BatchContext, call: ExecCall): Promis
       targetProgram: call.target,
       validator: VALIDATOR_PROGRAM_ID,
       venueAsset: call.venue ? call.venue.asset.address : null,
+      eventAuthority: PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], getProgram().programId)[0],
+      program: getProgram().programId,
     } as any)
     .remainingAccounts([...cpi, ...health, ...validatorSegment])
     .instruction();

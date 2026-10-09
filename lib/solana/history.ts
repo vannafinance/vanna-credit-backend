@@ -1,3 +1,4 @@
+import { VAULTS, vaultByMint, BASIS_PROGRAM, PERENA_PROGRAM } from "./vault-catalogue";
 import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
@@ -11,7 +12,8 @@ import { singleFlight } from "../async";
  * appears in the static keys Surfpool's `getSignaturesForAddress` indexes. (A margin PDA can end
  * up only inside a temporary ALT for large batched transactions.)
  */
-import { EventParser } from "@coral-xyz/anchor";
+import { vaultProgram } from "@vanna/phoenix-vault-client";
+import { EventParser, utils } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { VANNA_PROGRAM_ID } from "./config";
 import { getConnection } from "./connection";
@@ -70,6 +72,8 @@ export type MarginEventType =
   | "perp-settle";
 
 export interface MarginHistoryRow {
+  vaultId?: string;
+  receiptAmount?: string;
   type: MarginEventType;
   symbol: string;
   amount: string;
@@ -102,6 +106,8 @@ interface RawTx {
   signature: string;
   blockTime: number | null;
   logs: string[];
+  cpiEvents?: {name:string;data:any}[];
+  walletVaultDeposit?: {owner:string;vaultId:string;shares:bigint;usdc:bigint};
 }
 
 /** Max signatures scanned per history call (one getTransaction each). */
@@ -135,8 +141,30 @@ async function readRecentVannaTransactions(address: PublicKey, limit: number) {
         // not report a complete cost basis while any transaction is unavailable.
         if (!tx) { complete = false; return null; }
         const logs = tx.meta?.logMessages ?? [];
-        const result = logs.some((l) => l.includes(VANNA_PROGRAM_ID.toBase58()))
-          ? { signature: s.signature, blockTime: s.blockTime ?? tx.blockTime ?? null, logs } as RawTx
+        const accountKeys = tx.meta?.innerInstructions?.length ? tx.transaction.message.getAccountKeys({accountKeysFromLookups:tx.meta?.loadedAddresses}) : null;
+        const cpiEvents: {name:string;data:any}[]=[];
+        for(const group of tx.meta?.innerInstructions??[]) for(const ix of group.instructions) {
+          if(!accountKeys?.get(ix.programIdIndex)?.equals(VANNA_PROGRAM_ID)) continue;
+          try {
+            const data=Buffer.from(utils.bytes.bs58.decode(ix.data));
+            if(data.subarray(0,8).toString("hex")!=="e445a52e51cb9a1d") continue;
+            const event=getProgram().coder.events.decode(data.subarray(8).toString("base64"));
+            if(event) cpiEvents.push({name:event.name,data:event.data});
+          } catch {complete=false;}
+        }
+        let walletVaultDeposit: RawTx["walletVaultDeposit"];
+        if (logs.includes(`Program ${BASIS_PROGRAM} invoke [1]`)) {
+          const owner = address.toBase58();
+          const delta = new Map<string,bigint>();
+          for (const [balances,sign] of [[tx.meta?.preTokenBalances,-1n],[tx.meta?.postTokenBalances,1n]] as const) {
+            for (const b of balances ?? []) if (b.owner === owner) delta.set(b.mint,(delta.get(b.mint) ?? 0n)+sign*BigInt(b.uiTokenAmount.amount));
+          }
+          const receipt = VAULTS.find(v=>v.kind==='basis' && (delta.get(v.mint) ?? 0n)>0n);
+          const usdc = -(delta.get(getToken('USDC').mint.toBase58()) ?? 0n);
+          if (receipt && usdc>0n) walletVaultDeposit={owner,vaultId:receipt.id,shares:delta.get(receipt.mint)!,usdc};
+        }
+        const result = logs.some((l) => l.includes(VANNA_PROGRAM_ID.toBase58()) || l.includes(BASIS_PROGRAM))
+          ? { signature: s.signature, blockTime: s.blockTime ?? tx.blockTime ?? null, logs, cpiEvents, walletVaultDeposit } as RawTx
           : null;
         if (s.confirmationStatus === "finalized") {
           transactionCache.set(s.signature, { at: Date.now(), tx: result });
@@ -151,6 +179,7 @@ async function readRecentVannaTransactions(address: PublicKey, limit: number) {
 }
 
 function* events(tx: RawTx) {
+  for(const e of tx.cpiEvents??[]) yield {name:e.name.charAt(0).toUpperCase()+e.name.slice(1),data:e.data};
   try {
     // The camelCase-converted IDL yields "liquiditySupplied"; normalise to the Rust name.
     for (const e of getParser().parseLogs(tx.logs)) yield { name: e.name.charAt(0).toUpperCase() + e.name.slice(1), data: e.data as any };
@@ -205,7 +234,28 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
     // u128::MAX = no debt.
     return v > 10n ** 30n ? undefined : Number((v * 1000n) / 10n ** 18n) / 1000;
   };
+  const basisParser = new EventParser(new PublicKey(BASIS_PROGRAM), vaultProgram(getConnection()).coder as unknown as ConstructorParameters<typeof EventParser>[1]);
   for (const tx of txs) {
+    // SOL Basis deposits execute from the wallet, before a separate margin deposit.
+    // Match the wallet owner so CPI deposits already represented below are not duplicated.
+    try {
+      for (const e of basisParser.parseLogs(tx.logs)) {
+        const data = e.data as any;
+        if (e.name.toLowerCase() !== "deposited" || key(data.user) !== owner.toBase58()) continue;
+        const def = VAULTS.find(v => v.account === key(field(data,"basis_vault","basisVault")));
+        if (!def) continue;
+        const amountRaw = bigOf(field(data,"usdc_amount","usdcAmount"));
+        rows.push({type:"farm-deposit",symbol:"USDC",amount:fromRaw(amountRaw,6),amountRaw,
+          timestamp:ts(data,tx),signature:tx.signature,vaultId:def.id,receiptAmount:fromRaw(bigOf(data.shares),6)});
+      }
+    } catch { /* A truncated event cannot supply a reliable wallet deposit amount. */ }
+    // Large Jupiter/Phoenix calls can truncate the final Anchor event. Confirmed
+    // token balance changes still record exactly what the wallet paid and received.
+    const flow = tx.walletVaultDeposit;
+    if (flow?.owner === owner.toBase58() && !rows.some(r=>r.signature===tx.signature && r.vaultId===flow.vaultId)) {
+      rows.push({type:'farm-deposit',symbol:'USDC',amount:fromRaw(flow.usdc,6),amountRaw:flow.usdc,
+        receiptAmount:fromRaw(flow.shares,6),vaultId:flow.vaultId,signature:tx.signature,timestamp:(tx.blockTime??0)*1000});
+    }
     for (const e of events(tx)) {
       if (key(field(e.data, "margin_account", "marginAccount")) !== margin) continue;
       const base = { timestamp: ts(e.data, tx), signature: tx.signature };
@@ -269,6 +319,12 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
           const receivedMint = receivedList[0]?.mint ?? "";
           const spent = spentList[0]?.amount ?? 0n;
           const received = receivedList[0]?.amount ?? 0n;
+          if (target===BASIS_PROGRAM || target===PERENA_PROGRAM) {
+            const receivedVault=vaultByMint(receivedMint),spentVault=vaultByMint(spentMint);
+            const vault=receivedVault??spentVault;
+            if(vault) push(receivedVault?"farm-deposit":"farm-withdraw",getToken("USDC"),receivedVault?spent:received,{vaultId:vault.id,receiptAmount:fromRaw(receivedVault?received:spent,6),healthFactor:hf(e.data)});
+            break;
+          }
           const kIn = receiptByMint(receivedMint);
           const kOut = receiptByMint(spentMint);
           if (kIn) {

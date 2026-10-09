@@ -4,15 +4,22 @@ const rpc = vi.hoisted(() => ({ getLatestBlockhash: vi.fn(), simulateTransaction
 vi.mock("./connection", () => ({ getConnection: () => rpc }));
 vi.mock("./fork-heal", () => ({ healStaleDexPools: vi.fn().mockResolvedValue(0) }));
 vi.mock("./broadcast", () => ({ broadcastSignedTransaction: vi.fn().mockResolvedValue("sig") }));
-import { sendInstructions } from "./tx";
+import { sendInstructions, prepareTransactionTables } from "./tx";
 import { broadcastSignedTransaction } from "./broadcast";
 const key = Keypair.generate();
 beforeEach(() => {
   vi.clearAllMocks();
+  rpc.getLatestBlockhash.mockReset();
   rpc.getLatestBlockhash.mockResolvedValueOnce({ blockhash: SystemProgram.programId.toBase58(), lastValidBlockHeight: 100 })
     .mockResolvedValue({ blockhash: key.publicKey.toBase58(), lastValidBlockHeight: 200 });
 });
 describe("transaction lifetime", () => {
+  it("does not request wallet approval or RPC setup for transactions that already fit", async () => {
+    const sign = vi.fn();
+    expect(await prepareTransactionTables([], {signer:{publicKey:key.publicKey,signTransaction:sign,signAllTransactions:sign},label:'Preview'})).toEqual([]);
+    expect(sign).not.toHaveBeenCalled();
+    expect(rpc.getLatestBlockhash).not.toHaveBeenCalled();
+  });
   it("refreshes the blockhash after simulation and confirms against the new lifetime", async () => {
     rpc.simulateTransaction.mockResolvedValue({ value: { err: null } });
     const sign = vi.fn(async (tx: VersionedTransaction) => {

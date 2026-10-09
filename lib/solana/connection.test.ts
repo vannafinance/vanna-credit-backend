@@ -25,6 +25,22 @@ describe("fork RPC transport", () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ result: "Internal error" })); vi.stubGlobal("fetch", fetch);
     await forkFetch("https://rpc.test", request("getAccountInfo")); expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("returns a readable response after inspecting the RPC body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({result:{value:42}})));
+    const response = await forkFetch("https://rpc.test", request("getAccountInfo"));
+    expect(response.bodyUsed).toBe(false);
+    expect(await response.json()).toEqual({result:{value:42}});
+  });
+  it("retries a read when the response body fails after headers arrive", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockResolvedValueOnce({status:200,ok:true,text:()=>Promise.reject(new Error("terminated"))})
+      .mockResolvedValueOnce(Response.json({result:42}));
+    vi.stubGlobal("fetch", fetch);
+    const pending = forkFetch("https://rpc.test", request("getAccountInfo"));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await (await pending).json()).toEqual({result:42});
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it("honors an already aborted caller without making a request", async () => {
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     const controller = new AbortController(); controller.abort();

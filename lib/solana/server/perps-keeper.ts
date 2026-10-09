@@ -228,13 +228,13 @@ const BOOK_REFRESH_MIN_MS = 10_000;
 const lastBookRefresh = new Map<string, number>();
 
 const bookRefreshes = singleFlight<string, number>();
-export function refreshPhoenixBookOnFork(market: string, rpcUrl: string = SOLANA_RPC_URL): Promise<number> {
-  return bookRefreshes(`${rpcUrl}:${market.toUpperCase()}`, () => refreshBook(market.toUpperCase(), rpcUrl));
+export function refreshPhoenixBookOnFork(market: string, rpcUrl: string = SOLANA_RPC_URL, vault = false): Promise<number> {
+  return bookRefreshes(`${rpcUrl}:${market.toUpperCase()}:${vault}`, () => refreshBook(market.toUpperCase(), rpcUrl, vault));
 }
 
-async function refreshBook(key: string, rpcUrl: string): Promise<number> {
+async function refreshBook(key: string, rpcUrl: string, vault = false): Promise<number> {
   const cacheKey = `${rpcUrl}:${key}`;
-  if (Date.now() - (lastBookRefresh.get(cacheKey) ?? 0) < BOOK_REFRESH_MIN_MS) return 0;
+  if (!vault && Date.now() - (lastBookRefresh.get(cacheKey) ?? 0) < BOOK_REFRESH_MIN_MS) return 0;
   const fork = new Connection(rpcUrl, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: forkFetch });
   const bookInfo = await fork.getAccountInfo(phoenixMarketBook());
   if (!bookInfo) return 0;
@@ -242,9 +242,12 @@ async function refreshBook(key: string, rpcUrl: string): Promise<number> {
   const ex = await readPhoenixExchange(fork);
   const m = (await fetchPerpAssetMap(fork, ex.perpAssetMap)).find((x) => x.symbol === key && listed.includes(x.orderbook.toBase58()));
   if (!m) return 0;
-  const resets = await Promise.allSettled([m.orderbook, m.spline].map((k) => callCheatcode("surfnet_resetAccount", [k.toBase58()])));
+  // Basis enforces its price band against the fork mark. Refresh market data
+  // together, as the deployed vault smoke tests do; trader balances are untouched.
+  const refresh = [m.orderbook, m.spline, ...(vault ? [ex.perpAssetMap] : [])];
+  const resets = await Promise.allSettled(refresh.map((k) => callCheatcode("surfnet_resetAccount", [k.toBase58()])));
   const failure = resets.find((r) => r.status === "rejected");
   if (failure?.status === "rejected") throw failure.reason;
   lastBookRefresh.set(cacheKey, Date.now());
-  return 2;
+  return refresh.length;
 }

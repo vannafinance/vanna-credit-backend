@@ -7,27 +7,27 @@
  *
  * Data: Kamino reserve metrics (`useFarmPools`, GET /api/farm/pools), the margin account's Kamino
  * cTokens and their earnings / net APY ({@link useFarmAccount}), farm history decoded from the margin
- * account's on-chain events (`useMarginHistory`). The Delta-Neutral tab is a UI preview: its vaults are
- * sample data (lib/farm/basis-vaults.ts), labelled as such, and never feed the stats strip.
+ * account's on-chain events (`useMarginHistory`). Basis and Perena rows use deployed vault state.
  */
 import "./farm-v3.css";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Banner, Info, Seg, StatStrip } from "@/components/v3/ui";
 import { Icon, IC } from "@/components/v3/icons";
-import { cmp, hfFmt, nf, pct, sUsd, spct, tokFmt, usd, usdC } from "@/components/v3/format";
+import { cmp, hfFmt, nf, pct, sUsd, tokFmt, usd, usdC } from "@/components/v3/format";
 import { hfZone, LIQ_HF } from "@/lib/account-model";
 import { explorerUrl } from "@/lib/solana/config";
 import { isFarmListed } from "@/lib/solana/farm";
-import { BASIS_VAULTS } from "@/lib/farm/basis-vaults";
+import { VAULTS } from "@/lib/solana/vault-catalogue";
+import { useVaultAccount } from "@/lib/farm/use-vaults";
+import { LiveVaultTable } from "./live-vault-table";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
-import { Cell, CheckDropdown, PreviewBadge, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
+import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
-const VENUE_DN = "Jupiter · Phoenix";
 const DN_SLIDES: [string, string][] = [
   ["Delta-neutral Vaults", "Deposit from your margin account. Each vault buys spot on Jupiter and holds an equal 1x short on Phoenix, and earns the funding."],
   ["Earn Funding, Not Direction", "Long spot and short perp cancel out the price move; the vault keeps the funding shorts are paid."],
-  ["Coming Soon", "Vault figures shown are a preview with sample data. Deposits open when the vault program ships."],
+  ["Vault receipts", "Shares stay in your margin account and are valued by Vanna. SOL Basis deposits start from your wallet."],
 ];
 
 type Tab = "vaults" | "positions";
@@ -45,6 +45,9 @@ const timeLbl = (ms: number) =>
 
 export function FarmList() {
   const farm = useFarmAccount();
+  const vaultAccount = useVaultAccount();
+  const vaultHoldings = vaultAccount.margin?.collateral.filter(c => VAULTS.some(v => v.mint === c.mint)) ?? [];
+  const vaultTvl = vaultHoldings.reduce((sum, c) => sum + c.usd, 0);
   const [tab, setTab] = useState<Tab>("vaults");
   const [cat, setCat] = useState<Cat>("lend");
   const [posTab, setPosTab] = useState<PosTab>("current");
@@ -81,13 +84,13 @@ export function FarmList() {
 
   const assets =
     tab === "positions"
-      ? [...new Set((posTab === "history" ? farmHistory.map((r) => r.symbol) : farm.rows.map((r) => r.symbol)).filter(Boolean))]
+      ? [...new Set((posTab === "history" ? farmHistory.map((r) => r.symbol) : [...farm.rows.map((r) => r.symbol), ...VAULTS.filter(v => vaultHoldings.some(c => c.mint === v.mint)).map(v => v.asset)]).filter(Boolean))]
       : dn
-        ? BASIS_VAULTS.map((v) => v.asset)
+        ? VAULTS.filter(v => v.kind === "basis").map((v) => v.asset)
         : listed.map((p) => p.symbol);
   const poolsLbl = poolSel.length ? (poolSel.length > 2 ? `${poolSel.length} Pools` : poolSel.join(", ")) : "All Pools";
 
-  // ---- Stats strip (connected): real Kamino positions only; never the delta-neutral sample. ----
+  // ---- Stats strip (connected): live margin holdings across Kamino, Basis and Perena. ----
   const t = farm.totals;
   const hf = farm.hf;
   const netTip =
@@ -97,7 +100,7 @@ export function FarmList() {
       <StatStrip
         n={5}
         items={[
-          { icon: IC.wallet, label: "Your Deposit TVL", value: usd(t.tvl) },
+          { icon: IC.wallet, label: "Your Deposit TVL", value: usd(t.tvl + vaultTvl) },
           {
             icon: IC.coins,
             label: (
@@ -106,7 +109,7 @@ export function FarmList() {
                 <Info text="Underlying you can redeem now minus what you supplied (net of withdrawals), from your margin account's on-chain history, at today's price. Shows — when that history is incomplete." />
               </>
             ),
-            value: t.earned === null ? "—" : usd(t.earned),
+            value: vaultHoldings.length > 0 || t.earned === null ? "—" : usd(t.earned),
             valueClass: t.earned !== null && t.earned > 0 ? "pos" : "",
           },
           {
@@ -116,9 +119,9 @@ export function FarmList() {
                 Net Farm APY <Info text={netTip} />
               </>
             ),
-            value: t.netApy === null ? "—" : pct(t.netApy * 100),
+            value: vaultHoldings.length > 0 || t.netApy === null ? "—" : pct(t.netApy * 100),
             valueClass: t.netApy !== null && t.netApy < 0 ? "neg" : "",
-            sub: t.grossApy === null ? (farm.rows.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
+            sub: t.grossApy === null ? (farm.rows.length || vaultHoldings.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
           },
           {
             icon: IC.spark,
@@ -199,53 +202,10 @@ export function FarmList() {
     );
   };
 
-  const dnTable = () => {
-    const query = q.trim().toLowerCase();
-    const items = BASIS_VAULTS.filter((v) => (!query || `${v.name}${v.asset}basis`.toLowerCase().includes(query)) && keepAsset(v.asset) && keepThr(v.apy7)).map((v) => ({
-      v: { asset: v.name, prot: VENUE_DN, tvl: v.tvl, apy: v.apy7, fund: v.fundingNow, earn: 0, hold: 0 },
-      el: (
-        <Link key={v.id} href={`/farm/basis/${v.id}`} className="fm-tr fm-row k7" aria-label={`Open ${v.name}`}>
-          <Cell
-            v={
-              <span className="fm-tk">
-                <Icon sym={v.asset} className="fm-ico16" />
-                {v.name}
-              </span>
-            }
-            mini={["Basis", "1x hedge"]}
-          />
-          <Cell v={<Venue name={VENUE_DN} />} />
-          <Cell v={usdC(v.tvl)} mini={v.tvl / v.cap > 0.9 ? "Almost full" : `${nf((v.tvl / v.cap) * 100, 0)}% of ${usdC(v.cap)}`} />
-          <Cell v={pct(v.apy7, 1)} mini={`30D ${pct(v.apy30, 1)}`} />
-          <Cell v={spct(v.fundingNow, 1)} mini={v.perp} cls={v.fundingNow < 0 ? "neg" : ""} />
-          <Cell v="—" />
-          <Cell v={`0 ${v.share}`} mini="$0.00" />
-        </Link>
-      ),
-    }));
-    const rows = sortRows(items, sort).map((x) => x.el);
-    return (
-      <div className="fm-tbl">
-        <SortHead
-          cls="k7"
-          sort={sort}
-          onSort={setSort}
-          cols={[
-            ["Vault", "asset"],
-            ["Protocol", "prot"],
-            ["TVL / Cap", "tvl"],
-            ["Vault APY", "apy", "Average yearly yield over the last 7 days, after all fees (sample data)."],
-            ["Funding Now", "fund", "Annualised funding rate on Phoenix; when positive, shorts get paid (sample data)."],
-            ["Earnings", "earn"],
-            ["Holding", "hold"],
-          ]}
-        />
-        {rows.length ? rows : <div className="fm-none">No vaults match these filters</div>}
-      </div>
-    );
-  };
+  const dnTable = () => <LiveVaultTable kind="basis" query={q} keepAsset={keepAsset}/>;
 
   const posTable = () => {
+    if (!farm.rows.length && vaultHoldings.length) return null;
     if (!farm.connected || !farm.rows.length) return <div className="fm-empty">{farm.positionsLoading ? "Loading positions…" : "No farm positions yet"}</div>;
     const items = farm.rows
       .filter((r) => keepAsset(r.symbol))
@@ -311,7 +271,7 @@ export function FarmList() {
               }
               mini={r.type === "farm-deposit" ? "Supply" : "Withdraw"}
             />
-            <Cell v={<Venue name="Kamino" />} mini={timeLbl(r.timestamp)} />
+            <Cell v={<Venue name={r.vaultId?.startsWith("basis-") ? "Jupiter · Phoenix" : r.vaultId ? "Perena" : "Kamino"} />} mini={timeLbl(r.timestamp)} />
             <Cell v={tokFmt(Number(r.amount), r.symbol)} />
             <Cell
               v={
@@ -343,7 +303,7 @@ export function FarmList() {
   };
 
   const pos = tab === "positions";
-  const body = pos ? (posTab === "history" ? histTable() : posTable()) : dn ? dnTable() : lendTable();
+  const body = pos ? (posTab === "history" ? histTable() : <>{posTable()}<LiveVaultTable positions query={q}/></>) : dn ? dnTable() : <>{lendTable()}<LiveVaultTable kind="perena" query={q} keepAsset={keepAsset}/></>;
 
   return (
     <div className="v3">
@@ -410,7 +370,7 @@ export function FarmList() {
                 <input placeholder="Search for Pools" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search for pools" />
               </label>
             )}
-            {dn && <PreviewBadge />}
+
           </div>
           {!pos && (
             <div className="fm-fr">
@@ -428,7 +388,7 @@ export function FarmList() {
                   </button>
                 )}
               />
-              <span className="fm-ddw" ref={thrRef}>
+              {!dn && <span className="fm-ddw" ref={thrRef}>
                 <button type="button" className="fm-chip" aria-haspopup="dialog" aria-expanded={thrOpen} onClick={() => setThrOpen((o) => !o)}>
                   {dn ? "Vault APY" : "Total Borrow"} <span>{thrLbl}</span>
                 </button>
@@ -466,7 +426,7 @@ export function FarmList() {
                     />
                   </div>
                 )}
-              </span>
+              </span>}
             </div>
           )}
         </div>

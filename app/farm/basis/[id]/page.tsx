@@ -1,13 +1,10 @@
 "use client";
 
-/**
- * /farm/basis/:id — delta-neutral (basis) vault page. UI preview with sample vault data; no
- * transactions. See components/farm/basis/basis-vault.tsx.
- */
+/** Live delta-neutral vault state and margin-account transactions. */
 import { useParams } from "next/navigation";
-import { BasisVaultPage } from "@/components/farm/basis/basis-vault";
+import { LiveVaultPage } from "@/components/farm/live-vault-page";
 
 export default function BasisVaultRoute() {
   const params = useParams();
-  return <BasisVaultPage id={(params?.id as string) ?? ""} />;
+  return <LiveVaultPage id={`basis-${(params?.id as string) ?? ""}`} />;
 }

@@ -1,3 +1,4 @@
+import { alignPerenaNavClock } from "./perena-fork";
 // Server-side only, FORK ONLY (the guide's "fork-only helpers" — never port to production): the
 // fork price keeper. Ported from vanna-credit-layer/scripts/src/oracle.ts
 // (refreshOraclesOnFork: Scope copied from mainnet, restamped) and devnet-pyth.ts
@@ -269,6 +270,7 @@ export async function refreshForkPrices(rpcUrl: string = SOLANA_RPC_URL): Promis
     failure ??= batch.find((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failure) throw failure.reason;
   }
+  await alignPerenaNavClock(connection);
   return results;
 }
 

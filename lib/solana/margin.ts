@@ -1,3 +1,5 @@
+import { vaultByMint } from "./vault-catalogue";
+import { basisOraclePrice } from "./vault-oracles";
 import { singleFlight } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
@@ -95,6 +97,8 @@ export interface MarginAccountRaw {
   authority: PublicKey;
   status: number;
   collateralCount: number;
+  /** Global allowed tokens, followed by active venues in collateralAssetIndexes. */
+  allowedTokenIndexes?: number[];
   debtCount: number;
   collateralAssetIndexes: number[];
   debtAssetIndexes: number[];
@@ -103,15 +107,17 @@ export interface MarginAccountRaw {
 
 export async function fetchMarginAccount(owner: PublicKey): Promise<MarginAccountRaw | null> {
   const address = marginPda(owner);
-  const raw = await accounts().marginAccount.fetchNullable(address);
+  const [raw, protocol] = await Promise.all([accounts().marginAccount.fetchNullable(address), accounts().protocolConfig.fetch(protocolConfigPda())]);
+  const allowed = (protocol.allowedTokens as number[]).filter((i) => i !== EMPTY_ASSET_INDEX);
   if (!raw) return null;
   return {
     address,
     authority: raw.authority,
     status: Number(raw.status),
-    collateralCount: Number(raw.collateralCount),
+    collateralCount: allowed.length + Number(raw.venueCount),
+    allowedTokenIndexes: allowed,
     debtCount: Number(raw.debtCount),
-    collateralAssetIndexes: (raw.collateralAssetIndexes as number[]).map(Number),
+    collateralAssetIndexes: [...allowed, ...(raw.venueAssetIndexes as number[]).map(Number)],
     debtAssetIndexes: (raw.debtAssetIndexes as number[]).map(Number),
     eventSequence: big(raw.eventSequence),
   };
@@ -174,7 +180,7 @@ export interface MarginSnapshot {
 }
 
 function valueOf(amount: bigint, price: OnchainPrice | null, decimals: number, roundUp: boolean): bigint {
-  if (!price || price.price <= 0n) return 0n;
+  if (!price || price.price <= 0n || (!roundUp && "fresh" in price && !price.fresh)) return 0n;
   return normalizeTokenValue(amount, price.price, price.exponent, decimals, roundUp);
 }
 
@@ -241,13 +247,19 @@ async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
   for (const a of assetList) {
     keys.push(marginVault(margin, a.mint, a.tokenProgram), debtPositionPda(margin, reservePda(a.mint)), reservePda(a.mint));
   }
-  const oracleKeys = [...new Map(assetList.flatMap((a) => a.oracleAccounts).map((k) => [k.toBase58(), k])).values()];
+  const oracleKeys = [...new Map(assetList.filter(a => vaultByMint(a.mint.toBase58())?.kind !== "basis").flatMap((a) => a.oracleAccounts).map((k) => [k.toBase58(), k])).values()];
   const [infos, oracleInfos] = await Promise.all([
     raw ? getMultipleAccountsChunked(connection, keys) : Promise.resolve([] as (AccountInfo<Buffer> | null)[]),
     getMultipleAccountsChunked(connection, oracleKeys),
   ]);
   const oracleMap = new Map(oracleKeys.map((k, i) => [k.toBase58(), oracleInfos[i] as AccountInfo<Buffer> | null]));
-  const priceOf = (a: AssetConfigState) => priceFromAccounts(a.oracle, oracleMap, now);
+  const basisPrices = new Map<number, Awaited<ReturnType<typeof basisOraclePrice>>>();
+  await Promise.all(assetList.map(async (a,i) => {
+    const def = vaultByMint(a.mint.toBase58());
+    if (def?.kind !== "basis" || !raw || tokenAccountAmount(infos[i*3],a.tokenProgram) === 0n) return;
+    try { basisPrices.set(a.assetIndex, await basisOraclePrice(def, connection)); } catch { /* Unavailable collateral stays unvalued. */ }
+  }));
+  const priceOf = (a: AssetConfigState) => basisPrices.get(a.assetIndex) ?? priceFromAccounts(a.oracle, oracleMap, now);
   if (!raw) {
     empty.prices = Object.fromEntries(assetList.map((a) => [tokenByMint(a.mint)?.symbol ?? a.mint.toBase58(), priceOf(a)]));
     return empty;
@@ -278,17 +290,18 @@ async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
 
   assetList.forEach((asset, i) => {
     const token = tokenByMint(asset.mint) ?? null;
-    const symbol = token?.symbol ?? receiptByMint(asset.mint)?.symbol ?? asset.mint.toBase58().slice(0, 6);
+    const symbol = token?.symbol ?? receiptByMint(asset.mint)?.symbol ?? vaultByMint(asset.mint.toBase58())?.symbol ?? asset.mint.toBase58().slice(0, 6);
     const vaultInfo = infos[i * 3] as AccountInfo<Buffer> | null;
     const debtInfo = infos[i * 3 + 1] as AccountInfo<Buffer> | null;
     const reserveInfo = infos[i * 3 + 2] as AccountInfo<Buffer> | null;
     const price = priceOf(asset);
     prices[symbol] = price;
-    if (!price || !price.fresh) stalePrices.push(symbol);
+
 
     const vaultAmount = tokenAccountAmount(vaultInfo, asset.tokenProgram);
     const isActiveCol = activeCol.includes(asset.assetIndex);
-    if (vaultAmount > 0n || isActiveCol) {
+    if (vaultAmount > 0n && (!price || !price.fresh)) stalePrices.push(symbol);
+    if (vaultAmount > 0n) {
       // Kamino receipts: underlying = receipts × total_liquidity / collateral_supply, valued with the
       // underlying's decimals — exactly `oracle/valuation.rs::collateral_value`. An unreadable reserve
       // leaves the receipt at 0 USD rather than guessing.
@@ -410,9 +423,12 @@ export class MarginIndexModel {
   vault = new Map<number, bigint>();
   /** Simulated debt shares > 0 per asset index. */
   hasDebt = new Set<number>();
+  readonly allowedTokens: Set<number> | undefined;
 
-  constructor(raw: MarginAccountRaw | null, snapshot?: MarginSnapshot) {
-    this.collateral = raw ? [...raw.collateralAssetIndexes] : new Array(24).fill(EMPTY_ASSET_INDEX);
+  constructor(raw: MarginAccountRaw | null, snapshot?: MarginSnapshot, allowedTokenIndexes?: number[]) {
+    const allowed = raw?.allowedTokenIndexes ?? allowedTokenIndexes;
+    this.allowedTokens = allowed ? new Set(allowed) : undefined;
+    this.collateral = raw ? [...raw.collateralAssetIndexes] : [...(allowed ?? []), ...new Array(24).fill(EMPTY_ASSET_INDEX)];
     this.debt = raw ? [...raw.debtAssetIndexes] : new Array(24).fill(EMPTY_ASSET_INDEX);
     for (const c of snapshot?.collateral ?? []) this.vault.set(c.assetIndex, c.amountRaw);
     for (const d of snapshot?.debts ?? []) if (d.borrowShares > 0n) this.hasDebt.add(d.assetIndex);
@@ -426,7 +442,17 @@ export class MarginIndexModel {
     list[slot] = index;
   }
 
+  /**
+   * Token collateral: the program scans the protocol's allowed-token list, never a per-margin token
+   * slot, so a token outside that list must not take a slot (the trailing slots are venues).
+   */
+  private addToken(index: number) {
+    if (this.allowedTokens && !this.allowedTokens.has(index)) return;
+    this.add(this.collateral, index);
+  }
+
   private remove(list: number[], index: number) {
+    if (list === this.collateral && this.allowedTokens?.has(index)) return;
     const slot = list.indexOf(index);
     if (slot !== -1) list[slot] = EMPTY_ASSET_INDEX;
   }
@@ -434,7 +460,7 @@ export class MarginIndexModel {
   /** `user_deposit_collateral`: activates the collateral when the vault was empty. */
   deposit(index: number, amount: bigint) {
     const before = this.vault.get(index) ?? 0n;
-    if (before === 0n) this.add(this.collateral, index);
+    if (before === 0n) this.addToken(index);
     this.vault.set(index, before + amount);
   }
 
@@ -444,7 +470,7 @@ export class MarginIndexModel {
     this.hasDebt.add(index);
     this.add(this.debt, index);
     this.vault.set(index, before + amount);
-    if (before === 0n && collateralEnabled && !this.collateral.includes(index)) this.add(this.collateral, index);
+    if (before === 0n && collateralEnabled && !this.collateral.includes(index)) this.addToken(index);
   }
 
   /** `user_withdraw_collateral`: deactivates the collateral when the vault reaches zero. */
@@ -464,7 +490,7 @@ export class MarginIndexModel {
     if (spentAfter <= 0n) this.remove(this.collateral, spentIndex);
     const receivedBefore = this.vault.get(receivedIndex) ?? 0n;
     this.vault.set(receivedIndex, receivedBefore + received);
-    if (received > 0n) this.add(this.collateral, receivedIndex);
+    if (received > 0n) this.addToken(receivedIndex);
   }
 
   /**
@@ -507,7 +533,8 @@ export interface VenueScan {
  *   1. collateral groups in the margin's SLOT order (skip 65535), minus `exclude`:
  *      `[asset_config, margin vault]`, or `[asset_config, margin]` for the Phoenix venue;
  *   2. debt groups `[asset_config, reserve, debt_position]`, minus `exclude.debt`;
- *   3. `extraGroups` (margin_execute's `new_assets` groups);
+ *   3. `extraGroups` (caller-supplied extra groups; margin_execute no longer takes `new_assets`, so
+ *      current callers pass none);
  *   4. the oracle segment `[vanna_oracle, price_book, ...]`: the price accounts of EVERY active
  *      position (excluded ones too) and of `priced`, each once; with Phoenix also the market book,
  *      exchange, perp asset map, the trader, USDC price accounts and each open (+ extra) market's
@@ -515,7 +542,7 @@ export interface VenueScan {
  */
 export function buildHealthRemainingAccounts(
   margin: PublicKey,
-  model: { collateral: number[]; debt: number[] },
+  model: { collateral: number[]; debt: number[]; vault?: Map<number, bigint> },
   assetMap: Map<number, AssetConfigState>,
   exclude: { collateral?: number[]; debt?: number } = {},
   priced: AssetConfigState[] = [],
@@ -536,7 +563,10 @@ export function buildHealthRemainingAccounts(
       if (!skipCol.has(index)) metas.push(meta(asset.address), meta(margin));
       continue;
     }
-    oracles.push(...asset.oracleAccounts);
+    // The core skips pricing zero balances. Keep every required token group, but
+    // do not load large venue/oracle accounts for tokens this account does not hold.
+    // Newly received assets are explicitly included in `priced` by the caller.
+    if (!model.vault || (model.vault.get(index) ?? 0n) > 0n) oracles.push(...asset.oracleAccounts);
     if (skipCol.has(index)) continue;
     metas.push(meta(asset.address), meta(marginVault(margin, asset.mint, asset.tokenProgram)));
   }
@@ -778,13 +808,17 @@ export function venueScan(ctx: BatchContext): VenueScan | undefined {
 
 export async function loadContext(owner: PublicKey): Promise<BatchContext> {
   const [snapshot, assetMap, pools] = await Promise.all([fetchMarginSnapshot(owner), fetchAllAssetConfigs(), fetchPoolStates()]);
+  // A create + deposit + borrow batch must scan the global token list even
+  // before the new margin account exists on-chain.
+  const allowed = snapshot.raw ? undefined :
+    ((await accounts().protocolConfig.fetch(protocolConfigPda())).allowedTokens as number[]).filter(i => i !== EMPTY_ASSET_INDEX);
   return {
     owner,
     margin: marginPda(owner),
     snapshot,
     assetMap,
     pools,
-    model: new MarginIndexModel(snapshot.raw, snapshot),
+    model: new MarginIndexModel(snapshot.raw, snapshot, allowed),
     venue: snapshot.venue,
     instructions: [],
     suffix: [],

@@ -9,6 +9,8 @@ import { assetConfigPda, priceBookPda, reservePda, shareMintPda } from "./pdas";
 import { decodePriceBook, emptyOracleConfig, isReceiptOracle, oracleAccounts, type OracleConfigState, type PriceSource } from "./oracle";
 import { TOKENS, type TokenInfo } from "./tokens";
 import { KAMINO_RECEIPTS } from "./kamino";
+import { VAULTS, BASIS_PROGRAM } from "./vault-catalogue";
+import { basisOracleAccounts } from "./vault-oracles";
 import { PHOENIX_EXCHANGE, PHUSD_MINT } from "./phoenix";
 
 /** Venues this app trades through (their AssetConfig is keyed by the venue, not a mint). */
@@ -184,7 +186,7 @@ export function fetchAllAssetConfigs(connection: Connection = getConnection()): 
 
 async function readAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
   // phUSD (Phoenix collateral in transit through the margin) is registered too, outside the registry.
-  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), PHUSD_MINT, ...VENUE_KEYS];
+  const mints = [...TOKENS.map((t) => t.mint), ...KAMINO_RECEIPTS.map((r) => r.collateralMint), PHUSD_MINT, ...VAULTS.map(v => new PublicKey(v.mint)), ...VENUE_KEYS];
   const addresses = mints.map((m) => assetConfigPda(m));
   const [book, ...infos] = await getMultipleAccountsChunked(connection, [priceBookPda(), ...addresses]);
   const sources = priceSourcesFrom(book as AccountInfo<Buffer> | null);
@@ -193,6 +195,14 @@ async function readAllAssetConfigs(connection: Connection = getConnection()): Pr
     const asset = decodeAssetConfig(addresses[i], info as AccountInfo<Buffer> | null, sources);
     if (asset) map.set(asset.assetIndex, asset);
   });
+  // Settled per vault: one Basis vault's lookup failing (RPC blip, missing Phoenix book) must not
+  // take down the whole asset map; that vault keeps its registered oracle accounts instead.
+  await Promise.allSettled([...map.values()].filter(a => a.oracle.klendProgram.toBase58() === BASIS_PROGRAM).map(async a => {
+    const def = VAULTS.find(v => v.mint === a.mint.toBase58());
+    if (!def) return;
+    try { a.oracleAccounts = (await basisOracleAccounts(def, connection)).accounts; }
+    catch (error) { console.warn(`basis oracle accounts unavailable for ${def.id}:`, error); }
+  }));
   return map;
 }
 
@@ -216,8 +226,8 @@ function buildPoolState(token: TokenInfo, asset: AssetConfigState | null, reserv
     supplyApr: projected ? annualSupplyRate(projected.rateCurve, util, projected.reserveFactorBps) : 0,
     exchangeRate: shareSupply > 0n ? Number((lenderTotal * 1_000_000_000n) / shareSupply) / 1e9 : 1,
     reserveFactor: projected ? Number(projected.reserveFactorBps) / 10_000 : 0,
-    supplyCapUi: reserve && reserve.supplyCap > 0n ? rawToNumber(reserve.supplyCap, d) : null,
-    borrowCapUi: reserve && reserve.borrowCap > 0n ? rawToNumber(reserve.borrowCap, d) : null,
+    supplyCapUi: reserve && reserve.supplyCap < 18_446_744_073_709_551_615n ? rawToNumber(reserve.supplyCap, d) : null,
+    borrowCapUi: reserve && reserve.borrowCap < 18_446_744_073_709_551_615n ? rawToNumber(reserve.borrowCap, d) : null,
     statusLabel: reserve ? (STATUS_LABELS[reserve.status] ?? `Status ${reserve.status}`) : "Not initialised",
   };
 }

@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 import { PublicKey, type AccountInfo } from "@solana/web3.js";
+import { VAULTS, PERENA_PROGRAM } from "./vault-catalogue";
 import { decodePriceUpdate, type OnchainPrice } from "./pyth";
 
 /**
@@ -49,8 +50,8 @@ export function normaliseOracle(o: any): OracleConfigState {
     scopeTwapChain: chain("scopeTwapChain", "scope_twap_chain"),
     pythPrice: key("pythPrice", "pyth_price"),
     pythFactor: key("pythFactor", "pyth_factor"),
-    klendReserve: key("klendReserve", "klend_reserve"),
-    klendProgram: key("klendProgram", "klend_program"),
+    klendReserve: new PublicKey(f("receiptAccount", "receipt_account") ?? f("klendReserve", "klend_reserve") ?? PublicKey.default),
+    klendProgram: new PublicKey(f("receiptProgram", "receipt_program") ?? f("klendProgram", "klend_program") ?? PublicKey.default),
     maxAgeSecs: Number(f("maxAgeSecs", "max_age_secs") ?? 0),
     maxTwapDivergenceBps: Number(f("maxTwapDivergenceBps", "max_twap_divergence_bps") ?? 0),
     maxConfidenceBps: Number(f("maxConfidenceBps", "max_confidence_bps") ?? 0),
@@ -59,7 +60,7 @@ export function normaliseOracle(o: any): OracleConfigState {
 
 /** True for a Kamino cToken (priced as its underlying × the klend reserve's exchange rate). */
 export function isReceiptOracle(o: OracleConfigState): boolean {
-  return isSet(o.klendReserve);
+  return isSet(o.klendReserve) && o.klendProgram.toBase58() === "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
 }
 
 /** The price accounts this oracle reads (Scope / Pyth / Pyth factor), without the klend reserve. */
@@ -97,7 +98,7 @@ function readScopeChain(data: Buffer, chain: number[]): { value: bigint; exponen
   return { value, exponent, timestamp: timestamp ?? 0n };
 }
 
-export type OracleSource = "scope" | "pyth";
+export type OracleSource = "scope" | "pyth" | "receipt";
 export type OraclePrice = OnchainPrice & { source: OracleSource; fresh: boolean };
 
 /**
@@ -110,7 +111,15 @@ export function priceFromAccounts(
   accounts: Map<string, AccountInfo<Buffer> | null>,
   now: bigint,
 ): OraclePrice | null {
-  const isFresh = (t: bigint) => now - t <= BigInt(o.maxAgeSecs);
+  const isFresh = (t: bigint) => (now >= t ? now - t : t - now) <= BigInt(o.maxAgeSecs);
+  if (o.klendProgram.toBase58() === PERENA_PROGRAM) {
+    const def = VAULTS.find(v => v.account === o.klendReserve.toBase58());
+    const info = accounts.get(o.klendReserve.toBase58());
+    if (!def || def.priceAt === undefined || !info || info.owner.toBase58() !== PERENA_PROGRAM || info.data.length < def.priceAt + 16) return null;
+    const price = info.data.readBigUInt64LE(def.priceAt);
+    const publishTime = info.data.readBigInt64LE(def.priceAt + 8);
+    return {price, publishTime, exponent:-6, conf:0n, usd:Number(price)/1e6, source:"receipt", fresh:isFresh(publishTime)};
+  }
   let quote: Omit<OraclePrice, "fresh"> | null = null;
 
   if (isSet(o.scopePrices)) {

@@ -26,7 +26,7 @@ const STALE_PRONE_DEX_PROGRAMS = new Set([
  * Returns the number of accounts reset, so callers only retry when something was fixed (and
  * never mask a genuinely different failure as "stale pool").
  */
-export async function healStaleDexPools(connection: Connection, tx: VersionedTransaction): Promise<number> {
+export async function healStaleDexPools(connection: Connection, tx: VersionedTransaction, routeAccounts?: PublicKey[]): Promise<number> {
   try {
     const message = tx.message;
     const staticKeys = message.staticAccountKeys.map((k) => k.toBase58());
@@ -47,7 +47,9 @@ export async function healStaleDexPools(connection: Connection, tx: VersionedTra
         if (addr) lutKeys.push(addr.toBase58());
       }
     }
-    const allKeys = [...staticKeys, ...lutKeys];
+    // Vault transactions include very large Phoenix accounts unrelated to the swap.
+    // Restrict inspection to Jupiter route keys when the caller has them.
+    const allKeys = [...new Set(routeAccounts ? routeAccounts.map(k => k.toBase58()) : [...staticKeys, ...lutKeys])];
     const infos: (import("@solana/web3.js").AccountInfo<Buffer> | null)[] = [];
     for (let i = 0; i < allKeys.length; i += 100) {
       infos.push(...(await connection.getMultipleAccountsInfo(allKeys.slice(i, i + 100).map((k) => new PublicKey(k)))));

@@ -11,7 +11,10 @@ import { TOKENS } from "./tokens";
  */
 export async function readOnchainPrices(connection: Connection): Promise<Record<string, OraclePrice | null>> {
   const [assetMap, now] = await Promise.all([fetchAllAssetConfigs(connection), forkUnixTimestamp(connection)]);
-  const assets = [...assetMap.values()];
+  // This endpoint returns registry-token prices only. Vault/venue oracles may
+  // reference multi-megabyte Phoenix accounts that are neither needed nor decoded here.
+  const registry = new Set(TOKENS.map(t => t.mint.toBase58()));
+  const assets = [...assetMap.values()].filter(a => registry.has(a.mint.toBase58()));
   const keys = [...new Map(assets.flatMap((a) => a.oracleAccounts).map((k) => [k.toBase58(), k])).values()];
   const infos = await getMultipleAccountsChunked(connection, keys);
   const accounts = new Map(keys.map((k, i) => [k.toBase58(), infos[i] as AccountInfo<Buffer> | null]));

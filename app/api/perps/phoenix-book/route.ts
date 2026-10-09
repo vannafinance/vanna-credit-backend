@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * returns mainnet Phoenix's mark price for it (`markUsd`, null when unavailable) to price the order.
  */
 export async function POST(request: NextRequest) {
-  let body: { market?: unknown };
+  let body: { market?: unknown; vault?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   }
   if (typeof body.market !== "string" || !/^[A-Za-z]{2,12}$/.test(body.market)) return jsonResponse({ error: "A market symbol is required" }, { status: 400 });
   try {
-    const [written, markUsd] = await Promise.all([refreshPhoenixBookOnFork(body.market), liveMainnetPhoenixMark(body.market)]);
+    const [written, markUsd] = await Promise.all([refreshPhoenixBookOnFork(body.market, undefined, body.vault === true), liveMainnetPhoenixMark(body.market)]);
     return jsonResponse({ ok: true, written, markUsd });
   } catch (error) {
     return jsonResponse({ error: error instanceof Error ? error.message : "book refresh failed" }, { status: 502 });

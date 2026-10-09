@@ -125,10 +125,32 @@ async function sendV0(
  * wait one slot, then send a v0 transaction that references it. Prep transactions are signed
  * in one `signAllTransactions` approval.
  */
-async function sendWithTemporaryLookupTable(instructions: TransactionInstruction[], opts: SendOptions): Promise<string> {
+export async function prepareTransactionTables(instructions: TransactionInstruction[], opts: SendOptions): Promise<AddressLookupTableAccount[]> {
+  const tables = [...(opts.lookupTables ?? [])];
   const connection = getConnection();
   const payer = opts.signer.publicKey;
-  const seen = new Set<string>();
+  const cacheKey = `vanna:lookup:${connection.rpcEndpoint}:${payer.toBase58()}`;
+  const fits = () => {
+    try {
+      const tx = new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:PublicKey.default.toBase58(),instructions}).compileToV0Message(tables));
+      return tx.serialize().length <= MAX_TX_BYTES;
+    } catch (error) { if (isTooLarge(error)) return false; throw error; }
+  };
+  if (fits()) return tables;
+  // In-memory only: no browser storage (a lost table is simply recreated on the next large transaction).
+  const saved = personalTables.get(cacheKey);
+  if (saved) {
+    const table = (await connection.getAddressLookupTable(new PublicKey(saved))).value;
+    if (table) { tables.push(table); if (fits()) return tables; }
+  }
+  return createPersonalLookupTable(instructions, opts, tables, cacheKey);
+}
+
+const personalTables = new Map<string, string>();
+async function createPersonalLookupTable(instructions: TransactionInstruction[], opts: SendOptions, tables: AddressLookupTableAccount[], cacheKey:string): Promise<AddressLookupTableAccount[]> {
+  const connection = getConnection();
+  const payer = opts.signer.publicKey;
+  const seen = new Set(tables.flatMap(t => t.state.addresses.map(k => k.toBase58())));
   const addresses: PublicKey[] = [];
   for (const ix of instructions) {
     for (const key of [ix.programId, ...ix.keys.map((k) => k.pubkey)]) {
@@ -138,6 +160,7 @@ async function sendWithTemporaryLookupTable(instructions: TransactionInstruction
       addresses.push(key);
     }
   }
+  if (!addresses.length || addresses.length > 256) throw new Error(`${opts.label}: transaction cannot fit in a lookup table`);
   const slot = await connection.getSlot("finalized");
   const [createIx, lutAddress] = AddressLookupTableProgram.createLookupTable({
     authority: payer,
@@ -174,7 +197,8 @@ async function sendWithTemporaryLookupTable(instructions: TransactionInstruction
   if (!activated) throw new Error(`${opts.label}: lookup table activation timed out`);
   const table = (await connection.getAddressLookupTable(lutAddress)).value;
   if (!table) throw new Error(`${opts.label}: lookup table was not activated`);
-  return sendV0(instructions, opts, [...(opts.lookupTables ?? []), table]);
+  personalTables.set(cacheKey, lutAddress.toBase58());
+  return [...tables, table];
 }
 
 /**
@@ -187,6 +211,6 @@ export async function sendInstructions(instructions: TransactionInstruction[], o
     return await sendV0(ixs, opts, opts.lookupTables ?? []);
   } catch (error) {
     if (!isTooLarge(error)) throw error;
-    return sendWithTemporaryLookupTable(ixs, opts);
+    return sendV0(ixs, opts, await prepareTransactionTables(ixs, opts));
   }
 }

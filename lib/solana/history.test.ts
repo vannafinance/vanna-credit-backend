@@ -11,6 +11,22 @@ beforeEach(async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("history RPC work", () => {
+  it("records wallet Basis deposits even when the final program event is truncated", async () => {
+    const { VAULTS, BASIS_PROGRAM } = await import("./vault-catalogue");
+    const { getToken } = await import("./tokens");
+    const { fetchMarginHistory } = await import("./history");
+    const receipt = VAULTS.find(v=>v.id==='basis-sol')!;
+    const usdc = getToken('USDC').mint.toBase58();
+    const balance = (mint:string,amount:string) => ({mint,owner:wallet.toBase58(),uiTokenAmount:{amount,decimals:6}});
+    rpc.getSignaturesForAddress.mockResolvedValue([{signature:'basis-deposit',confirmationStatus:'finalized',err:null}]);
+    rpc.getTransaction.mockResolvedValue({blockTime:100,meta:{
+      logMessages:[`Program ${BASIS_PROGRAM} invoke [1]`,'Log truncated'],
+      preTokenBalances:[balance(usdc,'20000000')],
+      postTokenBalances:[balance(usdc,'10000000'),balance(receipt.mint,'9500000')],
+    }});
+    const result = await fetchMarginHistory(wallet);
+    expect(result.rows).toEqual([expect.objectContaining({type:'farm-deposit',vaultId:'basis-sol',amount:'10',receiptAmount:'9.5',signature:'basis-deposit'})]);
+  });
   it("reads 200 finalized transactions only once across repeated refreshes", async () => {
     rpc.getSignaturesForAddress.mockResolvedValue(Array.from({ length: 200 }, (_, i) => ({ signature: `sig${i}`, confirmationStatus: "finalized", err: null, blockTime: 1 })));
     rpc.getTransaction.mockResolvedValue({ blockTime: 1, meta: { logMessages: [] } });
