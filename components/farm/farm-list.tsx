@@ -12,6 +12,7 @@
  * their own table under the Kamino one (Lending/Single Assets), with Perena's published APY.
  */
 import "./farm-v3.css";
+import { apyText } from "@/lib/farm/yield";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Banner, Info, Seg, StatStrip } from "@/components/v3/ui";
@@ -126,7 +127,7 @@ export function FarmList() {
                 Net Farm APY <Info text={netTip} />
               </>
             ),
-            value: pct(vaultHoldings.length > 0 || t.netApy === null ? 0 : t.netApy * 100),
+            value: vaultHoldings.length > 0 || t.netApy === null ? pct(0) : pct(t.netApy * 100),
             valueClass: t.netApy !== null && t.netApy < 0 ? "neg" : "",
             sub: t.grossApy === null ? (farm.rows.length || vaultHoldings.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
           },
@@ -280,10 +281,11 @@ export function FarmList() {
     // Kamino cTokens and Basis / Perena receipts held in the margin account, one table.
     const vaultItems = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0) && keepAsset(v.asset)).map((v) => {
       const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
-      const apy = liveVaults.data.find((x) => x.id === v.id)?.apy7 ?? 0;
+      const st = liveVaults.data.find((x) => x.id === v.id);
+      const apy = st?.apy7 ?? null;
       const basis = v.kind === "basis";
       return {
-        v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy / 100 },
+        v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy === null ? Number.NEGATIVE_INFINITY : apy / 100 },
         el: (
           <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k5" aria-label={`Open ${v.name}`}>
             <Cell
@@ -302,7 +304,7 @@ export function FarmList() {
             ) : (
               <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={pct(apy)} mini="7D vault APY" />
+            <Cell v={apyText(apy)} mini={st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
           </Link>
         ),
       };

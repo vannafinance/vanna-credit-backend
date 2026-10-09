@@ -11,9 +11,10 @@
  * Data ({@link useVaultView}, lib/farm/basis-live.ts): fork vault state (GET /api/farm/vaults),
  * recorded share-price history, Phoenix mainnet funding (history + live WebSocket rate), this wallet's
  * margin-account receipt balance and on-chain vault history. Unknown or not-yet-recorded figures
- * render as 0, never as a placeholder or sample.
+ * keep an explicit unavailable state.
  */
 import "../farm-v3.css";
+import { apyText, grossFundingApr } from "@/lib/farm/yield";
 import { useState } from "react";
 import { Icon } from "@/components/v3/icons";
 import { nf, pct, spct, usd, usdC } from "@/components/v3/format";
@@ -68,7 +69,10 @@ export function BasisVaultPage({ id }: { id: string }) {
   const { def, state, funding } = view;
   const fundingNow = funding?.now ?? 0;
   const tvl = state?.navUsd ?? 0;
-  const apy7 = state?.apy7 ?? 0;
+  const apy7 = state?.apy7 ?? null;
+  const apyLabel = apyText(apy7);
+  const eventEstimate = state?.apy7Source === "deposit-event";
+  const fundingEstimate = grossFundingApr(funding?.stats.avg7, state?.shortUsd, state?.navUsd);
 
   const current = position.shares > 0
     ? [
@@ -86,7 +90,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <Cell key="p" v={<Venue name="Jupiter · Phoenix" />} />,
           <Cell key="s" v={usd(position.valueUsd)} mini="USDC value" />,
           <Cell key="r" v={`${nf(position.shares, 6)} ${def.symbol}`} />,
-          <Cell key="y" v={pct(apy7, 2)} />,
+          <Cell key="y" v={apyLabel} mini={eventEstimate ? "Deposit-event estimate" : undefined} />,
         ],
       ]
     : [];
@@ -123,7 +127,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <VTag name="Phoenix" />
         </div>
         <section className="fm-stats num">
-          <Stat label="Vault APY (7D)" value={pct(apy7, 2)} tip="Annualised share-price change over the last 7 days, after Phoenix fees and execution. 0.00% until 7 days of share prices are recorded." />
+          <Stat label={eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)"} value={apyLabel} tip={eventEstimate ? `Approximate annualised share-price return from a deposit event on ${new Date(state!.apy7BaselineAt!).toLocaleDateString()}. Covers the full interval since that event, at least 7 days; mint rounding may affect the baseline.` : "Annualised share-price return over 7 days. It reads 0.00% until a 7-day price baseline exists, which is not a measured zero return."} />
           <Stat
             label="Funding Now"
             value={spct(fundingNow, 1)}
@@ -133,6 +137,12 @@ export function BasisVaultPage({ id }: { id: string }) {
           <Stat label="Net Delta" value={spct(state?.netDeltaPct ?? 0, 2)} tip="Spot leg minus short leg, as a share of the short; near zero means price moves cancel out." />
           <Stat label="Total Value Locked" value={usd(tvl)} tip={`Net asset value in the vault now; it accepts up to ${usdC(state?.capUsd ?? 0)} in total.`} />
         </section>
+        {apy7 === null && (
+          <p className="fm-sub" style={{ marginBlock: 12 }}>
+            Vault APY shows 0.00% until the vault has 7 days of share-price history; it then updates day by day.
+            {fundingEstimate !== null && ` Estimated gross funding APR: ${pct(fundingEstimate, 2)}. Based on available Phoenix mainnet funding observations and current short exposure; before fees, execution and borrowing costs. This is not realized vault APY.`}
+          </p>
+        )}
         <div className="fm-cols">
           <div className="fm-main">
             <TabsBox
@@ -170,7 +180,7 @@ export function BasisVaultPage({ id }: { id: string }) {
             <Tiles
               items={[
                 ["Total Value Locked", usdC(tvl)],
-                ["Vault APY (7D)", pct(apy7, 2)],
+                [eventEstimate ? "APY · event estimate" : "Vault APY (7D)", apyLabel],
               ]}
             />
             <YieldList

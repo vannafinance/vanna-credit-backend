@@ -4,12 +4,12 @@
  * Deposit / withdraw state machine for the Basis and Perena vault pages (extracted from the former
  * live-vault-page.tsx, behaviour unchanged):
  *
- * - "Prepare & preview" runs `prepareVaultAction` — it may first ask the wallet to prepare the
- *   account (no funds move), then simulates the real transaction and returns shares / USDC change,
- *   minimum out (Basis) and the health factor after.
- * - "Confirm transaction" submits exactly that prepared transaction (`submitVaultAction`). A preview is
- *   only usable for the same wallet, vault and direction; editing the amount discards it, and a newer
- *   preview request supersedes an older in-flight one.
+ * - One click ({@link VaultAction.run}, the page's Deposit / Withdraw button): `prepareVaultAction`
+ *   (it may first ask the wallet to prepare the account — no funds move — then simulates the real
+ *   transaction, which sets the minimum out for Basis) and, if the simulation passes, submits exactly
+ *   that transaction (`submitVaultAction`) straight away. A failed simulation stops before any wallet
+ *   approval; a newer request supersedes an older in-flight one.
+ * - `quote` / `confirm` (the earlier two-step preview flow) are kept for callers that want a preview.
  * - SOL Basis deposits are wallet-funded: step 1 deposits wallet USDC into the vault, step 2 moves the
  *   received vbSOL into the margin account. Shares stranded in the wallet (step 2 not done) can be
  *   moved with {@link VaultAction.move} (the recovery button).
@@ -57,6 +57,8 @@ export interface VaultAction {
   signature: string;
   quote: () => Promise<void>;
   confirm: () => Promise<void>;
+  /** Simulate and send in one go (one click). */
+  run: () => Promise<void>;
   move: () => Promise<void>;
 }
 
@@ -139,6 +141,29 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
       refresh();
     }
   };
+  const run = async () => {
+    const current = ++request.current;
+    setBusy(true);
+    setError("");
+    setPreview(null);
+    showTxStep(walletDeposit ? "Step 1/2: Deposit wallet USDC into SOL Basis" : call === "deposit" ? "Deposit into the vault" : "Withdraw from the vault");
+    try {
+      // Simulates first: a failing simulation throws here, before the wallet is asked to sign.
+      const prepared = await prepareVaultAction(id, call, amount);
+      if (current !== request.current) return;
+      const sig = await submitVaultAction(prepared, undefined, onTxStatus);
+      setSignature(sig);
+      setAmountState("");
+      showTxSuccess(call === "deposit" ? "Deposit confirmed" : "Withdrawal confirmed");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Transaction failed";
+      if (current === request.current) setError(msg);
+      showTxError(msg);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
   const move = async () => {
     if (!def) return;
     setBusy(true);
@@ -182,6 +207,7 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
     signature,
     quote,
     confirm,
+    run,
     move,
   };
 }

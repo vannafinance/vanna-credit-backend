@@ -2,7 +2,7 @@
 
 **Initial review: 9 October 2026. PDF/UI audit updated: 10 October 2026 (IST). Language: Hinglish.**
 
-**Latest screenshot ke liye [section 15](#15-10-october-audit-screenshot-values-ka-source-aur-pdf-comparison) padhein.** Current UI missing APY ko `0.00%` render karti hai; ye measured zero return nahi. PDF ke saare analytics/fallbacks abhi implement nahi hue hain. Neeche contract explanation aur latest UI audit ko alag rakha gaya hai.
+**Screenshot audit ke liye [section 15](#15-10-october-audit-screenshot-values-ka-source-aur-pdf-comparison), aur uske baad implement hue APY fixes ke liye section 16 padhein.** Audit ke waqt missing APY `0.00%` tha; updated local code missing history, deposit-event estimates aur gross funding APR ko distinguish karta hai. Deployment owner karega.
 
 Ye guide current local integration aur contracts ko explain karti hai: paisa kahan jata hai, kaunse instructions execute hote hain, shares kaise calculate hote hain, aur withdrawal mein kya hota hai. Examples educational calculations hain; future transaction quotes ya returns nahi.
 
@@ -457,7 +457,7 @@ APY% = ((current_price / historical_price)^(365 / elapsed_days) − 1) × 100
 
 Example: 7 days mein price 1 → 1.002, annualized APY approximately **10.98%**, actual 7-day gain sirf **0.2%**. Future return guaranteed nahi.
 
-7/30-day observation missing ho to calculation `null` return karti hai. **10 October ke current UI mein ye `0.00%` dikhta hai**; pehle guide mein described `—` behavior ab current nahi hai. Hourly samples access/API polling par save hote hain; matching historical point target time ke at/before aur 2 hours ke within chahiye. Fork ke static/restamped Perena NAV se real mainnet yield infer nahi karni. Source: [NAV history](../lib/farm/nav-history.ts), [current APY rendering](../components/farm/basis/basis-vault.tsx).
+7/30-day observation missing ho to calculation `null` return karti hai. **10 October screenshot audit ke waqt ye `0.00%` dikhta tha. Section 16 ke local fix ke baad missing history “Collecting history” aur failed reads “Unavailable” dikhate hain.** Hourly samples access/API polling par save hote hain; matching historical point target time ke at/before aur 2 hours ke within chahiye. Fork ke static/restamped Perena NAV se real mainnet yield infer nahi karni. Source: [NAV history](../lib/farm/nav-history.ts), [current APY rendering](../components/farm/basis/basis-vault.tsx).
 
 ## 12. Vanna borrowing aur vault ke internal short alag hain
 
@@ -729,3 +729,19 @@ This is a debt-allocation heuristic, not tracing which dollars funded this depos
 6. **Freshness and rates:** expire stale funding observations; distinguish mainnet indicative funding from fork performance, APR from APY, and known rates from unavailable rates.
 
 Ye documented findings hain, applied application fixes nahi. Public API reads aur arithmetic checks hue; funds move, GCP deploy, fork reset ya transaction execution nahi hua.
+
+## 16. APY correction implemented after the audit — 10 October 2026
+
+Section 15 records the earlier behavior. The local implementation now keeps unavailable rates separate from actual zero returns:
+
+- **Recorded history first:** 7D/30D compounded share-price return remains the primary source. A measured zero still displays `0.00%`; losses remain negative.
+- **Deposit-event fallback:** when recorded history is insufficient, the API looks for successful Basis `Deposited` events at least 7/30 days old. The baseline is `value_usd / shares` (net value added, not nominal USDC deposited). Integer mint rounding makes this approximate; the UI labels it **deposit-event estimate** and annualizes over the actual interval since that event, which can exceed 7/30 days. Sub-share deposits are excluded to limit rounding error.
+- **Bounded reads:** at most 100 recent vault-address signatures and 12 candidate transactions, two transaction reads concurrently, cached/single-flight for 10 minutes. An RPC with incomplete address indexing or older history outside the scan can leave the fallback unavailable. No historical values are invented.
+- **No qualifying baseline:** `Collecting history` replaces fake zero APY in the Basis header, list, position rows and statistics. State/storage failures can display `Unavailable`. Unknown rates are excluded from numeric APY threshold filters.
+- **Funding estimate stays separate:** the Basis page shows **Estimated gross funding APR**, when available, from average observed Phoenix mainnet funding APR × current short notional / NAV. Exposure is not capped at 1. This is an indicative gross rate, before execution, venue and borrowing costs—not the PDF's fully cost-adjusted net-yield fallback. The app does not claim unavailable rebalance-cost accounting is zero.
+- **Net estimates:** missing vault APY, or a missing borrow rate on a debt-funded input, makes net return and estimated earnings unavailable. Own-funds estimates do not require a borrow rate. The USDC rate label now says APR.
+- **Yield attribution:** the residual between realized return and indicative funding is labelled as a residual, not an itemized Phoenix fee measurement.
+
+The fallback does not create old samples or backfill a chart. New vaults still need time for genuine historical performance. Borrow allocation remains an account-debt heuristic, and other section-15 findings (capacity, exact supply, detailed launch/monthly analytics) are outside this APY correction.
+
+Sources: [yield math](../lib/farm/yield.ts), [cached event reader](../lib/solana/server/basis-apy.ts), [vault API](../app/api/farm/vaults/route.ts), [Basis UI](../components/farm/basis/basis-vault.tsx), [action panel](../components/farm/vault-action-panel.tsx). No GCP deployment was performed.

@@ -1,14 +1,16 @@
 "use client";
+import { netYield } from "@/lib/farm/yield";
 
 /**
  * Deposit / Withdraw column of the Basis and Perena vault pages — the design's `dnAside` look,
  * driving the REAL vault flow ({@link useVaultAction}, lib/farm/use-vault-action.ts):
  *
  * - deposits are USDC only (from the margin account; SOL Basis from the wallet, two approvals);
- * - "Prepare & preview" simulates the exact transaction: shares / USDC out, minimum received
- *   (Basis), the health factor after, and the Junior 1% instant-exit fee;
- * - "Confirm transaction" sends that prepared transaction; SOL Basis shares stranded in the wallet
- *   can be moved into the margin account with the recovery button.
+ * - one Deposit / Withdraw click simulates the exact transaction (minimum received for Basis, the
+ *   Junior 1% instant-exit fee included) and, if it passes, sends it — no separate preview step; a
+ *   failed simulation stops before the wallet is asked to sign;
+ * - SOL Basis shares stranded in the wallet can be moved into the margin account with the recovery
+ *   button.
  *
  * Net APY uses the vault's recorded 7-day APY (0 until enough history exists) minus the Vanna USDC
  * borrow APY on the part of the deposit covered by the margin account's USDC debt.
@@ -22,8 +24,7 @@ import { fromRaw } from "@/lib/solana/math";
 import { explorerUrl } from "@/lib/solana/config";
 import { Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
-import { hfFmt, nf, pct, usd } from "@/components/v3/format";
-import { hfZone } from "@/lib/account-model";
+import { nf, pct, usd } from "@/components/v3/format";
 import { TabsBox } from "./fm-ui";
 
 export interface VaultAccountInputs {
@@ -55,7 +56,7 @@ export function VaultActionPanel({
   state,
   account,
   apy7: apyOverride,
-  apySource = "The vault's recorded 7-day APY (0.00% until 7 days of share-price history exist)",
+  apySource = "The vault's share-price return; deposit-event fallbacks are approximate and missing history has no APY estimate",
   initial,
 }: {
   id: string;
@@ -76,17 +77,16 @@ export function VaultActionPanel({
   const units = Number(a.amount) || 0;
   const unit = deposit ? "USDC" : def.symbol;
   const usdIn = deposit ? units * account.usdcPrice : units * (state?.sharePriceUsd ?? 0);
-  const apy7 = (apyOverride !== undefined ? apyOverride : state?.apy7) ?? 0;
+  const apy7 = (apyOverride !== undefined ? apyOverride : state?.apy7) ?? null;
   const borrow = account.usdcBorrowApy;
   const borrowedShare = !units || a.walletDeposit ? 0 : Math.min(units, account.usdcDebt) / units;
-  const netApy = apy7 - (borrow ?? 0) * borrowedShare;
-  const perYear = (usdIn * netApy) / 100;
-  const formula = !units
+  const netApy = netYield(apy7, borrow, borrowedShare);
+  const perYear = netApy === null ? null : (usdIn * netApy) / 100;
+  const formula = netApy === null ? "0.00% until the vault has enough share-price history" : !units
     ? ""
     : borrowedShare > 0 && borrow !== null
-      ? `${pct(apy7, 1)} vault − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
-      : `${pct(apy7, 1)} vault · own USDC, no borrow cost`;
-  const p = a.preview;
+      ? `${pct(apy7!, 1)} vault − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
+      : `${pct(apy7!, 1)} vault · own USDC, no borrow cost`;
   const overMax = deposit && def.kind === "basis" && state?.maxDepositUsd != null && units > state.maxDepositUsd;
   const closed = deposit && def.kind === "basis" && state?.available && (state.paused || !state.depositsOpen);
 
@@ -160,20 +160,20 @@ export function VaultActionPanel({
           <div className="fm-net num">
             <div>
               <div className="lbl">
-                Net APY <Info text={`${apySource}, minus the Vanna USDC borrow APY on the part of this deposit covered by your USDC debt.`} />
+                {state?.apy7Source === "deposit-event" && apyOverride === undefined ? "Net APY (event estimate)" : "Net APY"} <Info text={`${apySource}, minus the Vanna USDC borrow APR on the part of this deposit covered by your USDC debt.`} />
               </div>
-              <div className={`big ${units && netApy < 0 ? "n" : ""}`}>{pct(units ? netApy : 0, 1)}</div>
+              <div className={`big ${units && netApy !== null && netApy < 0 ? "n" : ""}`}>{pct(netApy ?? 0, 1)}</div>
               <div className="f">{formula}</div>
             </div>
             <div className="r">
               <div className="lbl">Est. earnings</div>
-              <div className="big">{usd(units ? perYear / 12 : 0)}</div>
-              <div className="f">{units ? `per month · ${usd(perYear, 0)} a year` : ""}</div>
+              <div className="big">{usd((perYear ?? 0) / 12)}</div>
+              <div className="f">{units && perYear !== null ? `per month · ${usd(perYear, 0)} a year` : ""}</div>
             </div>
           </div>
           <div className="fm-kvs num">
             <div className="kv">
-              <span>USDC borrow APY</span>
+              <span>USDC borrow APR</span>
               <span>{pct(borrow ?? 0, 2)}</span>
             </div>
             {def.kind === "basis" && (
@@ -186,56 +186,19 @@ export function VaultActionPanel({
         </div>
       )}
 
-      <p className="fm-note">First use may require a wallet approval to prepare your account before previewing. This setup does not deposit or withdraw funds.</p>
+      <p className="fm-note">First use may ask for one extra wallet approval to prepare your account; that setup step does not move funds.</p>
       {a.walletDeposit && (
         <p className="fm-note">SOL Basis uses wallet USDC. After the vault deposit, a second approval moves the received shares into your margin account.</p>
       )}
       {def.id === "perena-junior" && !deposit && (
         <p className="fm-note">Vanna uses Perena&apos;s instant withdrawal, which includes a 1% exit fee (the 7-day cooldown path is not used).</p>
       )}
-      {state?.stale && <p className="fm-warnn">Perena NAV is stale on the fork. Preview refreshes the fork timestamp before simulation.</p>}
+      {state?.stale && <p className="fm-warnn">Perena NAV is stale on the fork. The deposit refreshes the fork timestamp before it simulates.</p>}
       {!state?.registered && <p className="fm-note">Vault registration is being checked.</p>}
       {closed && <p className="fm-warnn">Vault deposits are paused.</p>}
       {overMax && <p className="fm-warnn">Maximum deposit is {nf(state!.maxDepositUsd!, 0)} USDC.</p>}
       {state?.error && <p className="fm-warnn dg">{state.error}</p>}
 
-      {p && (
-        <div className="fm-pv num">
-          <div className="kv">
-            <span>You receive (simulated)</span>
-            <span>{deposit ? `${fromRaw(p.shareChange, 6)} ${def.symbol}` : `${fromRaw(p.usdcChange, 6)} USDC`}</span>
-          </div>
-          {!deposit && (
-            <div className="kv">
-              <span>Shares burned</span>
-              <span>{fromRaw(-p.shareChange, 6)}</span>
-            </div>
-          )}
-          <div className="kv">
-            <span>
-              Health factor after <Info text="From simulating the exact transaction against your margin account." />
-            </span>
-            <span className={a.walletDeposit || p.healthFactor === null ? "" : hfZone(p.healthFactor)}>
-              {a.walletDeposit ? "After shares move to margin" : hfFmt(p.healthFactor)}
-            </span>
-          </div>
-          {def.kind === "basis" && (
-            <div className="kv">
-              <span>Minimum received</span>
-              <span>
-                {fromRaw(p.minimumOut, 6)} {deposit ? def.symbol : "USDC"}
-              </span>
-            </div>
-          )}
-          {def.id === "perena-junior" && !deposit && (
-            <div className="kv">
-              <span>Exit fee</span>
-              <span>1% included above</span>
-            </div>
-          )}
-        </div>
-      )}
-      {def.kind === "perena" && p && <p className="fm-note">Perena has no minimum-output parameter. The amount above is the simulated result.</p>}
       {a.error && (
         <p className="fm-warnn dg" role="alert">
           {a.error}
@@ -244,16 +207,11 @@ export function VaultActionPanel({
       <button
         type="button"
         className="fm-cta"
-        disabled={a.busy || !a.address || !state?.registered || !a.amount || Number(a.amount) <= 0}
-        onClick={p ? a.confirm : a.quote}
+        disabled={a.busy || !a.address || !state?.registered || !a.amount || Number(a.amount) <= 0 || overMax || Boolean(closed)}
+        onClick={a.run}
       >
-        {a.busy ? "Preparing transaction…" : !a.address ? "Connect wallet" : p ? "Confirm transaction" : "Prepare & preview"}
+        {a.busy ? (deposit ? "Depositing…" : "Withdrawing…") : !a.address ? "Connect wallet" : overMax ? `Max ${nf(state!.maxDepositUsd!, 0)} USDC` : deposit ? "Deposit" : "Withdraw"}
       </button>
-      {p && (
-        <button type="button" className="fm-cta2" disabled={a.busy} onClick={a.quote}>
-          Refresh preview
-        </button>
-      )}
       {id === "basis-sol" && a.walletShares > 0n && (
         <button type="button" className="fm-cta2" disabled={a.busy} onClick={a.move}>
           Move {fromRaw(a.walletShares, 6)} vbSOL to margin

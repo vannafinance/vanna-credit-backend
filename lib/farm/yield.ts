@@ -1,0 +1,37 @@
+/** Keep unavailable yield distinct from a measured zero, and APR distinct from APY. */
+import { DAY, type NavPoint } from './nav-math';
+
+export function eventApy(points: NavPoint[], current: NavPoint, days: number) {
+  const prior = points.filter(p => Number.isFinite(p.price) && p.price > 0 && p.at <= current.at - days * DAY)
+    .sort((a, b) => b.at - a.at)[0];
+  if (!prior || !Number.isFinite(current.price) || current.price <= 0) return null;
+  const value = (Math.pow(current.price / prior.price, 365 * DAY / (current.at - prior.at)) - 1) * 100;
+  return Number.isFinite(value) ? { value, baselineAt: prior.at } : null;
+}
+
+/** Deposit receipt exchange rate; integer mint rounding makes this an approximation. */
+export function depositPrice(valueRaw: bigint, sharesRaw: bigint): number | null {
+  // Sub-share deposits can magnify mint rounding; don't use these as an APY baseline.
+  if (valueRaw <= 0n || sharesRaw < 1_000_000n) return null;
+  const price = Number(valueRaw) / Number(sharesRaw);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+export function netYield(apy: number | null | undefined, borrowApr: number | null, borrowedShare: number): number | null {
+  if (apy == null || !Number.isFinite(apy) || (borrowedShare > 0 && (borrowApr === null || !Number.isFinite(borrowApr)))) return null;
+  return apy - (borrowApr ?? 0) * borrowedShare;
+}
+
+export function grossFundingApr(avgApr: number | null | undefined, shortUsd: number | null | undefined, navUsd: number | null | undefined): number | null {
+  if (avgApr == null || shortUsd == null || navUsd == null || !Number.isFinite(avgApr) || !Number.isFinite(shortUsd) || !Number.isFinite(navUsd) || navUsd <= 0 || shortUsd < 0) return null;
+  return avgApr * shortUsd / navUsd;
+}
+
+/**
+ * A yield figure as text. Not-yet-computable (too little share-price history) shows the zero form,
+ * never "Unavailable" — the product rule is that the UI shows 0.00% until the day-by-day history
+ * yields a real number; the calculation itself still keeps "no data" (null) apart from a measured 0.
+ */
+export function apyText(value: number | null | undefined, digits = 2): string {
+  return `${(value == null || !Number.isFinite(value) ? 0 : value).toFixed(digits)}%`;
+}

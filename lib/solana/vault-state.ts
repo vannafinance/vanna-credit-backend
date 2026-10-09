@@ -41,6 +41,11 @@ export interface LiveVault {
   phoenixEffectiveUsd: number | null;
   phoenixMaintenanceUsd: number | null;
   exitFeeBps: number;
+  apy7Source?: "history" | "deposit-event" | null;
+  apy30Source?: "history" | "deposit-event" | null;
+  apy7BaselineAt?: number;
+  apy30BaselineAt?: number;
+  apyHistoryStatus?: "collecting" | "available" | "unavailable";
   apy7: number | null;
   apy30: number | null;
 }

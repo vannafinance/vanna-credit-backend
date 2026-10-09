@@ -7,9 +7,10 @@
  *
  * Data: fork vault state (`useVaults`, GET /api/farm/vaults), recorded APYs, Phoenix funding now
  * (public WebSocket, falling back to the latest published hourly rate), and the connected wallet's
- * margin-account receipt balance. Unknown figures render as the zero form.
+ * margin-account receipt balance. Unknown APYs stay unavailable rather than becoming zero.
  */
 import Link from "next/link";
+import { apyText } from "@/lib/farm/yield";
 import { useQueries } from "@tanstack/react-query";
 import { fetchWithTimeout } from "@/lib/async";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
@@ -17,7 +18,7 @@ import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
 import { fundingNowApr, usePhoenixFundingNow, vaultHref } from "@/lib/farm/basis-live";
 import type { FundingResponse } from "@/lib/farm/nav-math";
 import { Icon } from "@/components/v3/icons";
-import { cmp, nf, pct, spct, usd, usdC } from "@/components/v3/format";
+import { cmp, nf, spct, usd, usdC } from "@/components/v3/format";
 import { Cell, SortHead, Venue, sortRows, type SortState } from "./fm-ui";
 
 const BASIS_SYMBOLS = VAULTS.filter((v) => v.kind === "basis").map((v) => v.asset);
@@ -53,7 +54,7 @@ export function VaultTable({
   query?: string;
   keepAsset?: (s: string) => boolean;
   /** The list's threshold filter (Vault APY, %). */
-  keepApy?: (apy: number) => boolean;
+  keepApy?: (apy: number | null) => boolean;
   sort: SortState;
   onSort: (s: SortState) => void;
 }) {
@@ -65,7 +66,7 @@ export function VaultTable({
     (v) => v.kind === "basis" && (!q || `${v.name} ${v.asset} ${v.symbol} basis jupiter phoenix`.toLowerCase().includes(q)) && keepAsset(v.asset),
   )
     .map((v) => ({ v, s: live.data.find((x) => x.id === v.id) }))
-    .filter(({ s }) => keepApy(s?.apy7 ?? 0))
+    .filter(({ s }) => keepApy(s?.apy7 ?? null))
     .map(({ v, s }) => {
       const holding = margin?.collateral.find((c) => c.mint === v.mint);
       const tvl = s?.navUsd ?? 0;
@@ -76,7 +77,7 @@ export function VaultTable({
       const delta = s?.netDeltaPct ?? 0;
       const status = s?.error ? "Data unavailable" : !s?.registered ? "Registration pending" : s.stale ? "NAV stale" : "1x hedge";
       return {
-        v: { asset: v.name, prot: "Jupiter · Phoenix", dep: tvl, cap, apy: s?.apy7 ?? 0, fund: f, delta: Math.abs(delta), hold: holding?.usd ?? 0 },
+        v: { asset: v.name, prot: "Jupiter · Phoenix", dep: tvl, cap, apy: s?.apy7 ?? Number.NEGATIVE_INFINITY, fund: f, delta: Math.abs(delta), hold: holding?.usd ?? 0 },
         el: (
           <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k8" aria-label={`Open ${v.name}`}>
             <Cell
@@ -92,7 +93,7 @@ export function VaultTable({
             <Cell v={<Venue name="Jupiter · Phoenix" />} />
             <Cell v={`${cmp(shares)} ${v.symbol}`} mini={usd(tvl)} />
             <Cell v={usdC(cap)} mini={cap > 0 ? (tvl / cap > 0.9 ? "Almost full" : `${nf((tvl / cap) * 100, 2)}% used`) : "No cap"} />
-            <Cell v={pct(s?.apy7 ?? 0, 2)} />
+            <Cell v={apyText(s?.apy7)} mini={s?.apy7Source === "deposit-event" ? "Deposit-event estimate" : undefined} />
             <Cell v={spct(f, 1)} cls={f < 0 ? "neg" : ""} />
             <Cell v={spct(delta, 2)} />
             <Cell v={`${nf(holding?.amount ?? 0, 4)} ${v.symbol}`} mini={usd(holding?.usd ?? 0)} />
@@ -112,7 +113,7 @@ export function VaultTable({
           ["Protocol", "prot"],
           ["Total Deposits", "dep", "Vault shares outstanding, and their value (the vault's net asset value) on chain."],
           ["Capacity", "cap", "The most total exposure the vault accepts, and how much of it is used."],
-          ["Vault APY", "apy", "Annualised share-price change over the last 7 days. 0.00% until enough share prices are recorded."],
+          ["Vault APY", "apy", "Annualised share-price return. A deposit-event fallback is labelled as an estimate; missing history is never a zero return."],
           ["Funding Now", "fund", "Phoenix's current hourly funding, annualised; when positive, shorts get paid."],
           ["Net Delta", "delta", "Spot leg minus short leg, as a share of the short; near zero means price moves cancel out."],
           ["Holding", "hold"],
