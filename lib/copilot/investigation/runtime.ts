@@ -29,7 +29,14 @@ export function investigationLimits(): InvestigationLimits {
 }
 
 /** Test seam. */
-export const investigationDeps = { now: () => Date.now(), executeRead, prefetch: true };
+/**
+ * `prefetchWaitMs`: how long the first model call waits for the prefetched account health. When it is back by then it
+ * goes into the first turn's evidence, so a question about the account is answered in one model turn instead of two;
+ * when it isn't, the first turn starts without it, as before.
+ */
+export const investigationDeps = { now: () => Date.now(), executeRead, prefetch: true, prefetchWaitMs: 1_500 };
+/** A read that failed is asked for at most this many times in one investigation (a timeout tends to repeat). */
+const MAX_READ_ATTEMPTS = 2;
 
 const verbose = () => !copilotConfig.isProduction;
 
@@ -73,12 +80,26 @@ export async function investigate(args: {
     let p = inflight.get(key);
     if (!p) {
       p = withTimeout(investigationDeps.executeRead(tool, a, args.ctx), SLOW_READS[tool] ?? limits.maxReadDurationMs);
-      p.catch(() => undefined); // a prefetch nobody asks for must not surface as an unhandled rejection
       inflight.set(key, p);
+      // A failed read is forgotten, so asking again really reads again (instead of returning the same failure). The
+      // handler also keeps a prefetch nobody asks for from surfacing as an unhandled rejection.
+      p.then((o) => { if (!o.ok) inflight.delete(key); }, () => inflight.delete(key));
     }
     return p;
   };
-  if (investigationDeps.prefetch) startRead("get_account_health", {});
+  if (investigationDeps.prefetch) {
+    const t0 = investigationDeps.now();
+    const health = startRead("get_account_health", {});
+    const early = await Promise.race([
+      health.then((o) => o, () => null),
+      new Promise<null>((r) => setTimeout(() => r(null), investigationDeps.prefetchWaitMs)),
+    ]);
+    if (early?.ok) {
+      const ms = investigationDeps.now() - t0;
+      evidence.push({ tool: "get_account_health", args: {}, ok: true, result: compact(early.result, limits.maxObservationChars), ms });
+      trace.reads.push({ tool: "get_account_health", args: {}, ok: true, ms });
+    }
+  }
   let rejectedLastTurn = false;
   const done = (outcome: InvestigationResult["outcome"]): InvestigationResult => {
     trace.ms = investigationDeps.now() - started;
@@ -145,8 +166,12 @@ export async function investigate(args: {
       trace.reads.push({ tool: CALCULATE_TOOL.name, args: a, ok: out.ok, ms: 0 });
     }
 
-    // A read that failed (timed out, MCP hiccup) may be asked for again; one that succeeded may not.
-    const seen = new Set(evidence.filter((o) => o.ok).map((o) => `${o.tool}:${JSON.stringify(o.args)}`));
+    // A read that failed (timed out, MCP hiccup) may be asked for again, once; one that succeeded may not.
+    const keyOf = (o: { tool: string; args: unknown }) => `${o.tool}:${JSON.stringify(o.args)}`;
+    const failures = new Map<string, number>();
+    for (const o of evidence) if (!o.ok) failures.set(keyOf(o), (failures.get(keyOf(o)) ?? 0) + 1);
+    const seen = new Set(evidence.filter((o) => o.ok).map(keyOf));
+    for (const [k, n] of failures) if (n >= MAX_READ_ATTEMPTS) seen.add(k);
     const reads = calls
       .filter((c) => READ_TOOL_NAMES.has(c.name))
       .filter((c) => {
@@ -157,7 +182,7 @@ export async function investigate(args: {
       })
       .slice(0, Math.max(0, readsLeft));
     if (!reads.length) {
-      if (!calcs.length) rejections.push({ tool: calls[0].name, reason: "that read is already in the evidence or is not a known tool; decide, or read something new" });
+      if (!calcs.length) rejections.push({ tool: calls[0].name, reason: "that read is already in the evidence, has already failed twice, or is not a known tool; decide with what you have (say what couldn't be read), or read something new" });
       continue;
     }
     const observed = await Promise.all(

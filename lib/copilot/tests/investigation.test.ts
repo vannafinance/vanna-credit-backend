@@ -3,6 +3,8 @@
  * read catalogue, decision parsing, sizing and plan store run. The model's tool calls are scripted turn by turn, the way
  * Gemini answers with function calls.
  */
+import { investigationDeps } from "../investigation/runtime";
+import { onlyDeclineWording } from "../testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
@@ -121,6 +123,36 @@ describe("investigate, then decide", () => {
     expect(llm.requests[1].user).toContain("5000"); // the evidence the model now reasons over
   });
 
+  it("gives the first model turn the account health when it is back in time, so an account question takes one turn", async () => {
+    const llm = scripted([[{ name: "answer", args: { headline: "You have no debt, so there is no health factor." } }]]);
+    setLlmClient(llm);
+    const res = await chat("how is my account doing?");
+    expect(res.kind).toBe("answer");
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0].user).toMatch(/EVIDENCE[\s\S]*get_account_health/);
+  });
+
+  it("stops retrying a read after it has failed twice, and tells the model to decide with what it has", async () => {
+    const original = investigationDeps.executeRead;
+    let vaultReads = 0;
+    investigationDeps.executeRead = async (tool, a, ctx) => {
+      if (tool === "get_vaults") {
+        vaultReads++;
+        throw new Error("timed out");
+      }
+      return original(tool, a, ctx);
+    };
+    try {
+      const llm = scripted((Array.from({ length: 5 }, () => [{ name: "get_vaults", args: {} }]) as Call[][]).concat([[{ name: "answer", args: { headline: "The vault list couldn't be read just now." } }]]));
+      setLlmClient(llm);
+      await chat("show me the vaults");
+      expect(vaultReads).toBe(2);
+      expect(JSON.stringify(llm.requests.map((r) => r.user))).toMatch(/has already failed twice/);
+    } finally {
+      investigationDeps.executeRead = original;
+    }
+  });
+
   it("binds every read to the signed-in wallet, whatever the model passes", async () => {
     setLlmClient(scripted([[{ name: "get_account_health", args: { authority: WALLET_B } }], [{ name: "answer", args: { headline: "You have no debt, so there is no health factor." } }]]));
     const res = await chat("how am i doing");
@@ -137,6 +169,51 @@ describe("investigate, then decide", () => {
     expect(res.kind).toBe("plan_preview");
     // (3 - 1) x $100 = $200 of SOL at $120 = 1.666666666 SOL
     expect(res.plan?.steps.map((s) => [s.op, s.asset, s.amount])).toEqual([["deposit", "USDC", "100"], ["borrow", "SOL", "1.666666666"]]);
+  });
+
+  it("sizes a percentage on a later step when no earlier step touches that balance", async () => {
+    const row = (symbol: string, units: string, usd: string, price: string) =>
+      ({ symbol, raw_balance: 0, ui_balance: units, usd_value: usd, price: { usd: price, fresh: true } });
+    vi.spyOn(mcp, "accountHealth").mockImplementation(async () => ({
+      ...HEALTH,
+      collateral: [row("SOL", "5", "600.00", "120"), row("JupSOL", "2", "260.00", "130"), row("JupUSD", "40", "40.00", "1"), row("GOOGLx", "3", "540.00", "180")],
+      total_collateral_usd: "1440.00",
+    }));
+    vi.spyOn(mcp, "canWithdraw").mockImplementation(async () => ({ allowed: true, projected_health_factor: null, current_health_factor: null }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "withdraw", asset: "JupSOL", sizing: { kind: "all" }, source_quote: "withdraw all my jup sol" },
+      { op: "withdraw", asset: "JupUSD", sizing: { kind: "all" }, source_quote: "all jup usd" },
+      { op: "withdraw", asset: "GOOGLx", sizing: { kind: "fraction", percent: 50 }, source_quote: "50% of googlex" },
+    ], requested_count: 3 } }]]));
+    const res = await chat("withdraw all my jup sol, all jup usd, 50% of googlex");
+    expect(res.message).not.toMatch(/only be used on the first step/);
+    expect(res.kind).toBe("plan_preview");
+    expect(res.plan?.steps.map((s) => [s.asset, s.amount])).toEqual([["JupSOL", "all"], ["JupUSD", "all"], ["GOOGLx", "1.5"]]);
+  });
+
+  it("asks for an exact amount only when an earlier step changes the balance a percentage is of", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "2" }, source_quote: "deposit 2 SOL" },
+      { op: "withdraw", asset: "SOL", sizing: { kind: "fraction", percent: 50 }, source_quote: "then withdraw half my SOL" },
+    ], requested_count: 2 } }]]));
+    const res = await chat("deposit 2 SOL then withdraw half my SOL");
+    expect(res.message).toMatch(/50% of your SOL depends on "Deposit 2 SOL/);
+  });
+
+  it("sizes 'half my USDC into USD*' from the margin and wallet USDC the plan can use", async () => {
+    vi.spyOn(mcp, "accountHealth").mockImplementation(async () => ({
+      ...HEALTH,
+      collateral: [...HEALTH.collateral, { symbol: "USDC", raw_balance: 0, ui_balance: "200", usd_value: "200.00", price: { usd: "1", fresh: true } }],
+    }));
+    const llm = scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "vault_deposit", vault: "perena-usdstar", sizing: { kind: "fraction", percent: 50 }, source_quote: "put half my usdc in usd*" },
+    ], requested_count: 1 } }]]);
+    setLlmClient(llm);
+    const res = await chat("put half my usdc in usd*");
+    // The decision guard accepted a fraction for a vault deposit (no correction turn was needed).
+    expect(llm.requests.filter((r) => r.user.includes("put half my usdc")).length).toBeGreaterThan(0);
+    expect(JSON.stringify(res)).not.toMatch(/sizing must be one of/);
+    expect(JSON.stringify(res)).toMatch(/2600(\.0+)? USDC/); // (200 in margin + 5000 in the wallet) / 2
   });
 
   it("carries the previous step's amount into the next one", async () => {
@@ -190,7 +267,7 @@ describe("the boundary between the model and the money", () => {
     setLlmClient(llm);
     const res = await chat("liquidate that account");
     expect(res.kind).toBe("blocked");
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 
   it("lets the model decide what is on-topic when there is no product word, and shows its refusal", async () => {
@@ -256,7 +333,7 @@ describe("attacks and policy stay deterministic", () => {
     const res = await chat(message);
     expect(res.kind).toBe("blocked");
     expect(res.message).toContain(expected);
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 
   it("cross-checks a conditional order: proposing it as an action now goes back to the model, which declines it", async () => {

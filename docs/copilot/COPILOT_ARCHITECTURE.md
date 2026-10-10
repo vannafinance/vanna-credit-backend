@@ -76,7 +76,9 @@ flowchart LR
 1. `app/api/copilot/route.ts` receives `{ message, conversation_id, history, clarify }`. The body never carries a
    wallet, an amount to execute or a transaction.
 2. `lib/copilot/auth.ts` (`getUser`) reads the signed session cookie created at Sign-In-With-Solana
-   (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user.
+   (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user. Signing out (`/api/copilot/auth/logout`)
+   also records a per-wallet cut-off in the store, so every earlier session for that wallet stops working, not just
+   this browser's cookie.
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
    (last 12 turns).
 4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
@@ -86,6 +88,13 @@ flowchart LR
    (perpetuals / options / shorts, Kamino multi-asset liquidity) is read by the model in stage 2 (see "Timing and
    parts that are not done"). Only when the model is unavailable are conditional orders and those products refused
    whole here, in the product's words (`router.ts` `conditionalRefusal`, `domain-firewall.ts` `productRefusal`).
+
+   The rule decides a refusal; Gemini only words it. `decline.ts` (`composeDecline`) gets the rule, the rule's own
+   wording and the product's facts, and writes a short reply for this message in the user's tone and language: what
+   isn't possible, why, and the closest thing that is. It has no tools. Its reply is shown only if it passes the checks
+   (no number that isn't in the facts, no address, link, code or claim that something was done); otherwise, or when
+   the model is off or fails, the rule's own wording is shown. Router and guard refusals and "I'm not sure what you
+   mean" go through the same path.
 
 ### 3.2 Stage 2: investigate (Gemini)
 

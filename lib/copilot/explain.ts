@@ -5,6 +5,7 @@
 
 import { MCPError } from "./mcp-client";
 import { LEND_BORROW_ASSETS, PRODUCT_ASSETS } from "./intent";
+import { LIQUIDATION_HF_TEXT } from "./protocol-constants";
 
 export function fmtUsd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -90,9 +91,9 @@ export function humanizeMcpError(err: unknown): { code: string; message: string;
 
 export const CONCEPTS: Record<string, string> = {
   health_factor:
-    "Your health factor (HF) is your margin collateral's USD value divided by your debt's USD value. Above 1.10 the protocol leaves you alone; at or below 1.10 your account can be liquidated. The Copilot keeps every action at 1.15 or above, and with no debt there is no health factor.",
+    `Your health factor (HF) is your margin collateral's USD value divided by your debt's USD value. Above ${LIQUIDATION_HF_TEXT} the protocol leaves you alone; at or below ${LIQUIDATION_HF_TEXT} your account can be liquidated. The Copilot keeps every action at 1.15 or above, and with no debt there is no health factor.`,
   liquidation:
-    "Liquidation is whole-account: when HF falls to 1.10 or below, a liquidator can repay all your debt and take all your collateral. I can tell you whether you are close, but I never execute a liquidation. Repaying debt or adding collateral raises your HF.",
+    `Liquidation is whole-account: when HF falls to ${LIQUIDATION_HF_TEXT} or below, a liquidator can repay all your debt and take all your collateral. I can tell you whether you are close, but I never execute a liquidation. Repaying debt or adding collateral raises your HF.`,
   leverage:
     "Leverage here means borrowing a stable asset (USDC or USDT) against your collateral, swapping it into the asset you want more of, and keeping that as collateral. \"2x\" means exposure of twice your equity. The Copilot sizes it so your health factor stays at or above 1.15 even if the swap fills at its worst allowed price.",
   collateral:

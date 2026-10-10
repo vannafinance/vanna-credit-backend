@@ -9,8 +9,10 @@ import {
   createSession,
   getUser,
   issueNonce,
+  revokeSessions,
   sessionCookieHeader,
   setNonceStoreForTests,
+  setRevocationStoreForTests,
   verifyLogin,
 } from "./auth";
 import { setLimitStoreForTests } from "./limits";
@@ -26,12 +28,14 @@ beforeEach(() => {
   vi.stubEnv("COPILOT_AUTH_DOMAIN", "app.vanna.test");
   vi.stubEnv("COPILOT_PUBLIC_ORIGIN", "https://app.vanna.test");
   setNonceStoreForTests(new MemoryRecordStore());
+  setRevocationStoreForTests(new MemoryRecordStore());
   setLimitStoreForTests(new MemoryRecordStore());
   authClock.now = () => Date.now();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   setNonceStoreForTests(null);
+  setRevocationStoreForTests(null);
   setLimitStoreForTests(null);
   authClock.now = () => Date.now();
 });
@@ -135,6 +139,21 @@ describe("session cookie", () => {
     authClock.now = () => Date.now();
     vi.stubEnv("COPILOT_SESSION_SECRET", "y".repeat(40));
     expect(await getUser(reqWith(`${SESSION_COOKIE}=${s.value}`))).toBeNull();
+  });
+
+  it("sign-out voids every earlier session for the wallet, and a new sign-in works", async () => {
+    let t = 1_000_000;
+    authClock.now = () => t;
+    const phone = createSession(wallet);
+    t += 10;
+    const laptop = createSession(wallet);
+    t += 10;
+    await revokeSessions(wallet);
+    expect(await getUser(reqWith(`${SESSION_COOKIE}=${phone.value}`))).toBeNull();
+    expect(await getUser(reqWith(`${SESSION_COOKIE}=${laptop.value}`))).toBeNull();
+    t += 10;
+    const fresh = createSession(wallet);
+    expect((await getUser(reqWith(`${SESSION_COOKIE}=${fresh.value}`)))?.wallet).toBe(wallet);
   });
 
   it("refuses to seal with a short secret", () => {

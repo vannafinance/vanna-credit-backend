@@ -17,6 +17,7 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { copilotConfig } from "./config";
 import type { StructuredAnswer } from "./answer-schema";
 import { DOMAIN_FIREWALL_SYSTEM } from "./domain-firewall";
+import { LIQUIDATION_HF } from "./protocol-constants";
 import {
   PRODUCT_ASSETS,
   LEND_BORROW_ASSETS,
@@ -27,7 +28,11 @@ import {
   validateRead,
   validateWrite,
   PERP_MARKETS,
+  VAULT_IDS,
+  WRITE_OPS,
   perpMarketOf,
+  vaultOf,
+  productWordsGuide,
   type AmountSpec,
   type Intent,
   type ReadIntent,
@@ -154,12 +159,12 @@ export async function vertexPing(): Promise<{ ok: boolean; model: string; error?
 // ── Routing by function calling ─────────────────────────────────────────────
 
 const ASSET_ENUM = [...PRODUCT_ASSETS];
-const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw"];
-const READ_KINDS = ["health", "positions", "debt", "collateral", "wallet", "price", "pool", "earn_position", "farm_markets", "farm_positions", "capacity", "liquidation_risk", "history", "protocol", "quote", "perps_markets", "perps_positions", "perps_preview", "concept", "help"];
+const READ_KINDS = ["health", "positions", "debt", "collateral", "wallet", "price", "pool", "earn_position", "farm_markets", "farm_positions", "capacity", "liquidation_risk", "history", "protocol", "quote", "perps_markets", "perps_positions", "perps_preview", "vaults_list", "vaults_positions", "vault_preview", "yield_options", "concept", "help"];
 
 const stepProps = {
-  op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino. perp_open/perp_close/perp_withdraw = Phoenix perps (not a Vanna loan)." },
-  market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"], description: "perp_open / perp_close: the Phoenix perps market." },
+  op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino. perp_open/perp_close/perp_withdraw = Phoenix perps (not a Vanna loan). vault_deposit (USDC) / vault_withdraw (shares) = Basis or Perena vault." },
+  vault: { type: "STRING", enum: [...VAULT_IDS], description: "vault_deposit / vault_withdraw: which vault." },
+  market: { type: "STRING", enum: [...PERP_MARKETS], description: "perp_open / perp_close: the Phoenix perps market." },
   side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
   asset: { type: "STRING", enum: ASSET_ENUM, description: "The asset acted on (for swap: the asset sold; for farm_redeem: the underlying, not the receipt)." },
   to_asset: { type: "STRING", enum: ASSET_ENUM, description: "swap only: the asset bought." },
@@ -187,6 +192,8 @@ export const ROUTER_TOOLS: LlmFunctionDecl[] = [
         side: { type: "STRING", enum: ["long", "short"], description: "perps_preview only." },
         collateral_usdc: { type: "STRING", description: "perps_preview only: USDC from the margin account backing the order; \"0\" = the Phoenix balance already there." },
         leverage: { type: "NUMBER", description: "perps_preview only: 1 up to the market's max." },
+        vault: { type: "STRING", enum: [...VAULT_IDS], description: "vault_preview only." },
+        call: { type: "STRING", enum: ["deposit", "withdraw"], description: "vault_preview only." },
       },
       required: ["kind"],
     },
@@ -240,7 +247,7 @@ export const ROUTER_TOOLS: LlmFunctionDecl[] = [
 export const ROUTER_SYSTEM = `You route messages for the Vanna Finance Copilot on Solana by calling exactly one function. You never answer in text.
 ${DOMAIN_FIREWALL_SYSTEM}
 
-Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borrow, repay), swaps through Jupiter or Titan, Kamino farm, health factor, and Phoenix perps (SOL, ETH, BTC, TSLA, META: markets, positions, previews, opening and closing positions; perps never borrow from Vanna).
+Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borrow, repay), swaps through Jupiter or Titan, Kamino farm, health factor, and Phoenix perps (SOL, ETH, BTC, TSLA, META: markets, positions, previews, opening and closing positions; perps never borrow from Vanna), and vaults (Basis delta-neutral SOL/ETH/BTC/TSLA/META and Perena USD* / USD* Junior: USDC in, shares held as margin collateral, USDC out).
 - "supply", "lend", "put into earn" = earn_supply. "redeem", "withdraw from earn" = earn_redeem.
 - "deposit ... as collateral", "add collateral" = deposit. "withdraw collateral" = withdraw.
 - A bare "deposit" or "withdraw" with no venue is ambiguous: call ask_user.
@@ -250,7 +257,9 @@ Product: Vanna Earn pools (SOL, USDC, USDT), a margin account (collateral, borro
 - "Deposit X in margin and borrow Y Nx against it" (a leverage target on a borrow, no borrow amount given) = an action_chain: a deposit step, then a borrow step of Y with leverage N and no amount. If the user instead levers one asset by borrowing a stable ("lever my SOL 3x", "deposit 1 SOL and borrow USDC with 3x") use lever_position.
 - A leverage multiple ("3x") is never an amount; do not copy it into amount.
 - Use the conversation history to resolve "it", "that", "the same", but still take amounts only from numbers the user typed.
-- Only the assets in the enums exist. For any other token call decline.`;
+- Only the assets in the enums exist. For any other token call decline.
+
+${productWordsGuide('read_question with kind "yield_options"')}`;
 
 function amountSpecOf(v: unknown): AmountSpec | null {
   if (typeof v === "number" && Number.isFinite(v)) {
@@ -291,6 +300,9 @@ function writeFromArgs(a: Record<string, unknown>): WriteIntent | null {
   if (typeof op !== "string" || !(WRITE_OPS as string[]).includes(op)) return null;
   const lev = typeof a.leverage === "number" ? a.leverage : typeof a.leverage === "string" ? Number(a.leverage) : null;
   const sizedToLeverage = op === "borrow" && lev !== null && Number.isFinite(lev) && !amountSpecOf(a.amount);
+  if (op === "vault_deposit" || op === "vault_withdraw") {
+    return { op, asset: null, vault: vaultOf(a.vault), amount: amountSpecOf(a.amount) ?? (op === "vault_deposit" ? null : { kind: "all" }) };
+  }
   if (op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
     return {
       op,
@@ -335,6 +347,23 @@ export function intentFromCall(name: string, a: Record<string, unknown>): Intent
           read = { kind: "quote", from, to, amount };
           break;
         }
+        case "vault_preview": {
+          const vault = vaultOf(a.vault);
+          const call = a.call === "deposit" || a.call === "withdraw" ? a.call : null;
+          const amount = typeof a.amount === "string" ? a.amount.trim() : null;
+          if (!vault || !call || !amount) return { lane: "ask", question: "Which vault, a deposit or a withdrawal, and how much?" };
+          read = { kind: "vault_preview", vault, call, amount };
+          break;
+        }
+        case "vaults_list":
+          read = { kind: "vaults_list" };
+          break;
+        case "yield_options":
+          read = { kind: "yield_options", asset: typeof a.asset === "string" ? normalizeAsset(a.asset) : null };
+          break;
+        case "vaults_positions":
+          read = { kind: "vaults_positions" };
+          break;
         case "perps_preview": {
           const market = perpMarketOf(a.market);
           const side = a.side === "long" || a.side === "short" ? a.side : null;
@@ -451,7 +480,7 @@ function numbersOf(text: string): Array<{ v: number; dp: number }> {
 
 /** True when every number in `text` can be traced to `sources` (at the precision it is written). */
 export function numbersGrounded(text: string, sources: string[]): boolean {
-  const allowed: number[] = [1.1, copilotConfig.minHealthFactor];
+  const allowed: number[] = [LIQUIDATION_HF, copilotConfig.minHealthFactor];
   for (const s of sources) for (const n of numbersOf(s)) allowed.push(n.v, n.v * 100, n.v / 100);
   for (const n of numbersOf(text)) {
     if (Number.isInteger(n.v) && n.v >= 0 && n.v <= 24) continue; // counts such as "3 assets"

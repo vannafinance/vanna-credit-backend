@@ -20,7 +20,12 @@ import {
   unofferedMessage,
   validateLever,
   validateWrite,
+  PERP_MARKETS,
   PERP_OPS,
+  VAULT_IDS,
+  VAULT_OPS,
+  WRITE_OPS,
+  vaultOf,
   perpMarketOf,
   type AmountSpec,
   type AskOption,
@@ -38,10 +43,9 @@ import { READ_TOOLS, readArgsProblem } from "./catalog";
 import type { InvestigationOutcome, Observation } from "./types";
 
 const ASSETS = [...PRODUCT_ASSETS] as string[];
-const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw"];
 export const SIZING_KINDS = ["literal", "usd", "fraction", "all", "max_safe", "health_target", "previous_leg", "leverage", "receive"] as const;
 type SizingKind = (typeof SIZING_KINDS)[number];
-const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "none"];
+const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "vaults", "none"];
 
 /** A leg that is not a transaction: something the user asked to see at that point of the plan. */
 const REPORT_OP = "report";
@@ -49,13 +53,14 @@ const REPORT_OP = "report";
 const leg = {
   type: "OBJECT",
   properties: {
-    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. perp_open/perp_close/perp_withdraw = Phoenix perps (market, side, leverage; collateral is USDC from the margin account; NOT a Vanna loan; the server adds any USDC deposit and the first-trade registration itself). report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
+    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. perp_open/perp_close/perp_withdraw = Phoenix perps (market, side, leverage; collateral is USDC from the margin account; NOT a Vanna loan; the server adds any USDC deposit and the first-trade registration itself). vault_deposit/vault_withdraw = Basis or Perena vault (vault; a deposit is USDC from the margin account - SOL Basis from the wallet - and a withdrawal is shares, paying USDC; the server adds any USDC deposit and SOL Basis's share move itself). report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
     asset: { type: "STRING", enum: ASSETS, description: "Asset acted on. swap: the asset sold. farm ops: the underlying (SOL, not kSOL)." },
     to_asset: { type: "STRING", enum: ASSETS, description: "swap only: the asset bought." },
     source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays (default wallet). swap: margin = swap collateral inside the margin account." },
-    market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"], description: "perp_open / perp_close: the Phoenix perps market." },
+    market: { type: "STRING", enum: [...PERP_MARKETS], description: "perp_open / perp_close: the Phoenix perps market." },
     side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
     leverage: { type: "NUMBER", description: "perp_open only: Phoenix leverage the user gave (1 up to the market's cap). Never invent it; ask_user if missing." },
+    vault: { type: "STRING", enum: [...VAULT_IDS], description: "vault_deposit / vault_withdraw: which vault." },
     sizing: {
       type: "OBJECT",
       description: "How much. Never compute a number yourself.",
@@ -243,10 +248,16 @@ function groundingSources(ctx: DecisionContext): string[] {
 function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amount: AmountSpec | null } | { ok: false; reason: string } {
   if (op === "create_account" || op === "close_account" || op === "perp_register") return { ok: true, amount: null };
   if ((op === "perp_close" || op === "perp_withdraw") && (!s || typeof s !== "object")) return { ok: true, amount: { kind: "all" } };
+  if (op === "vault_withdraw" && (!s || typeof s !== "object")) return { ok: true, amount: { kind: "all" } };
+  if (op === "vault_deposit" || op === "vault_withdraw") {
+    const kind = (s as Record<string, unknown> | null)?.kind;
+    const allowed = op === "vault_deposit" ? ["literal", "usd", "all", "fraction"] : ["literal", "all", "fraction"];
+    if (!allowed.includes(String(kind))) return { ok: false, reason: `action ${index + 1} (${op}): sizing must be one of ${allowed.join(", ")} (a vault deposit is USDC: an amount, all or a fraction of the user's USDC; a withdrawal is shares, all or a fraction)` };
+  }
   if (op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
     const kind = (s as Record<string, unknown>).kind;
-    const allowed = op === "perp_open" ? ["literal", "usd"] : op === "perp_close" ? ["all", "fraction"] : ["literal", "usd", "all"];
-    if (!allowed.includes(String(kind))) return { ok: false, reason: `action ${index + 1} (${op}): sizing must be one of ${allowed.join(", ")} (perps collateral and withdrawals are USDC amounts; a close is all or a fraction)` };
+    const allowed = op === "perp_close" ? ["all", "fraction"] : op === "perp_open" ? ["literal", "usd", "all", "fraction"] : ["literal", "usd", "all"];
+    if (!allowed.includes(String(kind))) return { ok: false, reason: `action ${index + 1} (${op}): sizing must be one of ${allowed.join(", ")} (perps collateral is USDC: an amount, all or a fraction; a withdrawal is a USDC amount or all; a close is all or a fraction)` };
   }
   if (!s || typeof s !== "object") return { ok: false, reason: `action ${index + 1} (${op}) has no sizing` };
   const o = s as Record<string, unknown>;
@@ -401,6 +412,7 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
       to_asset: typeof r.to_asset === "string" ? normalizeAsset(r.to_asset) : null,
       amount: sized.amount,
       source: r.source === "margin" ? "margin" : r.source === "wallet" ? "wallet" : null,
+      ...(VAULT_OPS.has(op) ? { asset: null, to_asset: null, vault: vaultOf(r.vault) } : {}),
       ...(PERP_OPS.has(op)
         ? {
             market: perpMarketOf(r.market),

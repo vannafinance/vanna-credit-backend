@@ -173,6 +173,29 @@ each step claims once, re-checks the 1.15 floor, rebuilds fresh, then asks for y
 | L10 | lever SOL 5x keeping my health factor above 2 | Conflict with the user's floor: refuse or reduce | 🤖 | |
 | L11 | lever my SOL 2x (near-liquidation account) | Must not breach the floor | 🤖 | |
 
+### 6.2 Vaults and the one-time lookup-table setup (2026-10-09 program upgrade)
+
+Basis (delta-neutral SOL/ETH/BTC/TSLA/META) and Perena (USD*, USD* Junior) vaults, through the MCP's `vanna_vaults`.
+Since the upgrade a wallet's first margin write may first ask for **one extra signature** (its lookup table); the plan
+then builds the action itself. TSLA/META Basis need the stock market open (Phoenix's session).
+
+| # | Prompt (verbatim) | What should happen | Who | Result |
+|---|---|---|---|---|
+| V1 | show me the vaults | Seven vaults: share price, TVL, deposits open; APY "—" until the app has history | 🤖 | |
+| V2 | what would depositing 20 USDC into ETH basis give me? | Preview: shares out, minimum, HF after (or "one-time setup first") | 🤖 | |
+| V3 | deposit 20 USDC into ETH basis | One plan; a USDC deposit from the wallet first if the margin holds less | 👤 | |
+| V4 | deposit 15 USDC into the SOL basis vault | Wallet-funded deposit, then "move the shares into your margin account" | 👤 | |
+| V5 | put 10 USDC into USD* junior, then withdraw all my USD* junior | Two steps; the withdrawal pays ~1% less (exit fee) | 👤 | |
+| V6 | what vault shares do I have? | Shares per vault, where they are held, collateral value | 🤖 | |
+| V7 | close everything (holding vault shares and a loan) | Vault shares withdrawn to USDC first, then repay, then withdraw | 👤 | |
+| V8 | borrow 5 USDC (a wallet with no lookup table yet) | One-time setup signature, then the borrow | 👤 | |
+| Y1 | where should I put my USDC for the best yield? | Comparison table (Earn APR, Kamino live APY, vaults' history APY or "no history yet"), then a question; nothing built | 🤖 | |
+| Y2 | stake my SOL | No staking product: SOL options (Earn, Kamino), JitoSOL/JupSOL mentioned as swaps; nothing built | 🤖 | |
+| Y3 | deposit 1 SOL into the kamino vault | Kamino farm deposit (not a Basis/Perena vault) | 🤖 | |
+| Y4 | deposit 20 USDC into a vault | Asks which vault | 🤖 | |
+| Y5 | withdraw my SOL from the kamino vault | Kamino redeem (asks the amount if none) | 🤖 | |
+| Y6 | what's the APY of the ETH basis vault? | Vaults list; APY "—" until there is history, never estimated | 🤖 | |
+
 ## 7. Reasoning and what-ifs
 
 Any number must be derivable from your live facts. A figure the Copilot cannot trace to a read is a failure.

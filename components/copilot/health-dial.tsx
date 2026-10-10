@@ -1,5 +1,7 @@
 "use client";
 
+import { LIQUIDATION_HF, LIQUIDATION_HF_TEXT } from "@/lib/copilot/protocol-constants";
+
 /**
  * Health-factor dial — the single most important number on this page, as a gauge.
  *
@@ -31,7 +33,7 @@ export type HealthZone = "danger" | "warn" | "caution" | "healthy" | "unknown";
 /** Boundaries match `lib/margin-health.ts`; liquidation is 1.10 with no threshold haircut. */
 export function zoneOf(hf: number | null | undefined): HealthZone {
   if (hf == null || Number.isNaN(hf)) return "unknown";
-  if (hf <= 1.1) return "danger";
+  if (hf <= LIQUIDATION_HF) return "danger";
   if (hf < 1.3) return "warn";
   if (hf < 1.8) return "caution";
   return "healthy";
@@ -74,8 +76,8 @@ export function healthDialHfSub(opts: {
 }): string {
   if (opts.unknown) return "position read unavailable";
   if (opts.noDebt) return "no debt — nothing to liquidate";
-  if (opts.basis === "posted") return "posted collateral · unsafe at 1.10 or below";
-  return "includes unposted · risk engine uses posted (unsafe at 1.10)";
+  if (opts.basis === "posted") return `posted collateral · unsafe at ${LIQUIDATION_HF_TEXT} or below`;
+  return `includes unposted · risk engine uses posted (unsafe at ${LIQUIDATION_HF_TEXT})`;
 }
 
 const CX = 90;
@@ -97,8 +99,8 @@ function dialArc(v0: number, v1: number, r: number): string {
 }
 
 const SEGMENTS: Array<{ z: Exclude<HealthZone, "unknown">; a: number; b: number }> = [
-  { z: "danger", a: 1.0, b: 1.1 },
-  { z: "warn", a: 1.1, b: 1.3 },
+  { z: "danger", a: 1.0, b: LIQUIDATION_HF },
+  { z: "warn", a: LIQUIDATION_HF, b: 1.3 },
   { z: "caution", a: 1.3, b: 1.8 },
   { z: "healthy", a: 1.8, b: 3.0 },
 ];
@@ -212,8 +214,8 @@ export function HealthDial({
             unknown
               ? "Health factor unavailable"
               : basis === "posted"
-                ? `Posted-collateral health factor ${hfText}, ${ZONE_LABEL[zone]}, risk engine unsafe at 1.10`
-                : `Health factor ${hfText} including unposted, ${ZONE_LABEL[zone]}, risk engine liquidates on posted at 1.10`
+                ? `Posted-collateral health factor ${hfText}, ${ZONE_LABEL[zone]}, risk engine unsafe at ${LIQUIDATION_HF_TEXT}`
+                : `Health factor ${hfText} including unposted, ${ZONE_LABEL[zone]}, risk engine liquidates on posted at ${LIQUIDATION_HF_TEXT}`
           }
           viewBox="0 0 180 108"
           style={{ width: 150, height: "auto", flexShrink: 0 }}
@@ -275,7 +277,7 @@ export function HealthDial({
           ) : null}
 
           <text x={18} y={106} fontFamily={MONO} fontSize={9} fill="var(--z-danger)">
-            1.10
+            {LIQUIDATION_HF_TEXT}
           </text>
           <text x={146} y={106} fontFamily={MONO} fontSize={9} fill="var(--g400)">
             3.0+

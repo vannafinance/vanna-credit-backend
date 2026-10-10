@@ -110,6 +110,78 @@ export async function sizeExactOut(
 }
 
 /** A perps step: read the account's Phoenix state, then the exact `vanna_perps` call (or a skip / refusal). */
+/** The user's shares of one vault, in the margin account or the wallet (from `vanna_vaults positions`). */
+function vaultShares(pos: Record<string, unknown>, vault: string, where: "margin" | "wallet"): number {
+  const rows = Array.isArray(pos.positions) ? (pos.positions as Array<Record<string, unknown>>) : [];
+  return num(rows.find((r) => r.vault === vault && r.held_in === where)?.shares) ?? 0;
+}
+
+/**
+ * A vault step (Basis / Perena): fresh figures from the MCP's simulation, then the exact `vanna_vaults` call (or a skip
+ * / refusal). A deposit counts its USDC toward the spend caps; the program checks health on every margin call.
+ */
+async function preflightVault(step: StoredStep, ctx: ReadCtx, notes: string[]): Promise<PreflightResult> {
+  const wallet = ctx.user.wallet;
+  const vault = String(step.slots.vault ?? "");
+  const allow = { decision: "allow" as const, reasons: [] as string[] };
+  const done = (args: Record<string, unknown>, usd: number, resolvedAmount: string | null): PreflightResult => ({
+    ok: true,
+    prepared: { usd, call: { tool: "vanna_vaults", args: { authority: wallet, vault, ...args } }, risk: allow, simulation: null, resolvedAmount, notes },
+  });
+  const previewNotes = async (call: "deposit" | "withdraw", amount: string): Promise<PreflightResult | null> => {
+    let p: Record<string, unknown>;
+    try {
+      p = await mcp.vaultsPreview({ authority: wallet, vault, call, amount }, ctx);
+    } catch (err) {
+      return fail("invalid", humanizeMcpError(err).message);
+    }
+    if (p.needs_setup === true) {
+      notes.push("Your wallet first signs a one-time setup (a lookup table so margin transactions fit), then this step.");
+      return null;
+    }
+    notes.push(
+      `About ${String(p.expected_out)} ${String(p.out_token)} (minimum ${String(p.minimum_out)}).` +
+        (p.health_factor_after ? ` Health factor after: ${String(p.health_factor_after)}.` : "") +
+        (typeof p.note === "string" ? ` ${p.note}` : ""),
+    );
+    return null;
+  };
+
+  let pos: Record<string, unknown>;
+  try {
+    pos = await mcp.vaultsPositions(wallet, ctx);
+  } catch (err) {
+    return fail("unavailable", humanizeMcpError(err).message);
+  }
+  if (pos.has_margin_account === false) return fail("no_account", "You don't have a margin account yet. Open one first.");
+
+  if (step.op === "vault_move_shares") {
+    const held = vaultShares(pos, vault, "wallet");
+    if (!(held > 0)) return { ok: true, skip: "There are no vault shares in your wallet to move." };
+    const amount = step.amount && step.amount !== "all" ? step.amount : String(held);
+    return done({ action: "move_shares", amount }, 0, amount);
+  }
+  if (step.op === "vault_deposit") {
+    const amount = String(step.amount ?? "");
+    const usd = Number(amount);
+    if (!(usd > 0)) return fail("invalid", "How much USDC should go into the vault?");
+    const spend = await checkSpend(ctx.user, usd);
+    if (!spend.ok) return { ok: false, code: "limit", message: spend.message, limit: spend };
+    const bad = await previewNotes("deposit", amount);
+    if (bad) return bad;
+    return done({ action: "deposit", amount }, usd, amount);
+  }
+  // vault_withdraw: all, an exact share amount, or a fraction of the shares held in the margin account.
+  const held = vaultShares(pos, vault, "margin");
+  if (!(held > 0)) return fail("invalid", "You hold no shares of that vault in your margin account.");
+  const fraction = typeof step.slots.fraction === "number" ? step.slots.fraction : null;
+  const amount = step.amount && step.amount !== "all" ? step.amount : fraction !== null ? floorDecimals(held * fraction, 6) : String(held);
+  if (!(Number(amount) > 0)) return fail("invalid", "That is less than one share unit.");
+  const bad = await previewNotes("withdraw", amount);
+  if (bad) return bad;
+  return done({ action: "withdraw", amount }, 0, amount);
+}
+
 async function preflightPerp(step: StoredStep, ctx: ReadCtx, notes: string[]): Promise<PreflightResult> {
   const wallet = ctx.user.wallet;
   const allow = { decision: "allow" as const, reasons: [] as string[] };
@@ -203,8 +275,15 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
     return preflightPerp(step, ctx, notes);
   }
 
+  // ── Basis / Perena vaults (the MCP simulates each call; the program checks health) ──
+  if (op === "vault_deposit" || op === "vault_withdraw" || op === "vault_move_shares") {
+    return preflightVault(step, ctx, notes);
+  }
+
   if (!asset) return fail("invalid", "This step is missing its asset.");
-  const price = await loadFreshPrice(asset, ctx);
+  const margin = op === "deposit" || op === "withdraw" || op === "borrow" || op === "repay" || op === "farm_deposit" || op === "farm_redeem" || (op === "swap" && step.slots.mode === "margin");
+  // The price (which may wait on a keeper refresh) and the account are independent reads: fetched together.
+  const [price, healthR] = await Promise.all([loadFreshPrice(asset, ctx), margin ? loadHealth(ctx) : Promise.resolve(null)]);
   if (!price) return fail("unavailable", `The ${asset} price is unavailable, so I can't value this action against your limits.`);
   // A price still flagged stale after the keeper refresh does NOT block the build. On the fork the MCP's oracle
   // read stays "stale" until its own write build restamps the feeds it needs, so refusing here made every
@@ -213,8 +292,6 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   // the current value; only its freshness flag lags, which is irrelevant to the cap checks below.
 
   let amount = step.amount;
-  const margin = op === "deposit" || op === "withdraw" || op === "borrow" || op === "repay" || op === "farm_deposit" || op === "farm_redeem" || (op === "swap" && step.slots.mode === "margin");
-  const healthR = margin ? await loadHealth(ctx) : null;
   if (healthR && healthR.kind === "no_account") return fail("no_account", "You don't have a margin account yet. Open one first.");
   if (healthR && healthR.kind !== "ok") return fail("unavailable", "I couldn't read your margin account just now, so I'm not building this.");
   const health = healthR && healthR.kind === "ok" ? healthR.health : null;

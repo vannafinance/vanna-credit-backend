@@ -14,6 +14,8 @@ export interface StoredTx {
   lastValidBlockHeight: number;
   built_at: number;
   summary?: string;
+  /** A one-time setup signed before the step itself (see UnsignedTx.prerequisite); the step is rebuilt after it. */
+  prerequisite?: boolean;
 }
 
 export interface StoredStep extends StepSpec {

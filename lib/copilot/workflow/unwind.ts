@@ -15,7 +15,7 @@
 
 import { copilotConfig } from "../config";
 import { fmtAmount } from "../explain";
-import { LEND_BORROW_ASSETS, RECEIPT_TO_UNDERLYING, type UnwindIntent } from "../intent";
+import { LEND_BORROW_ASSETS, RECEIPT_TO_UNDERLYING, VAULT_IDS, VAULT_NAMES, type UnwindIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadHealth, type ReadCtx } from "../mcp-facts";
 import { labelFor, MAX_PLAN_STEPS, OUT_PREFIX, planWarnings, type StepSpec } from "../plan";
@@ -53,7 +53,9 @@ export async function planUnwind(intent: UnwindIntent, ctx: ReadCtx): Promise<St
   // Projected margin balance per asset as the plan runs (units).
   const margin = new Map<string, number>();
   const isReceipt = (symbol: string) => RECEIPT_TO_UNDERLYING[symbol.toLowerCase()] !== undefined;
-  for (const r of health?.collateral ?? []) if (!isReceipt(r.symbol) && r.units > 0) margin.set(r.symbol, r.units);
+  // Vault shares (Basis / Perena) are left through their vault, never withdrawn as tokens: see step 0b.
+  const vaultOfShare = (symbol: string) => VAULT_IDS.find((id) => VAULT_NAMES[id].symbol === symbol) ?? null;
+  for (const r of health?.collateral ?? []) if (!isReceipt(r.symbol) && !vaultOfShare(r.symbol) && r.units > 0) margin.set(r.symbol, r.units);
 
   // 0. Phoenix perps: close every position, then bring the USDC back into the margin account (it then repays like any
   // other margin USDC).
@@ -70,6 +72,18 @@ export async function planUnwind(intent: UnwindIntent, ctx: ReadCtx): Promise<St
       notes.push("Your Phoenix perps are closed first and their USDC comes back to the margin account.");
     } catch {
       return { ok: false, message: "I couldn't read your Phoenix perps, so I won't draw up an exit plan from partial data. Try again in a moment." };
+    }
+  }
+
+  // 0b. Vaults: every vault position in the margin account is withdrawn to USDC (the app's vault withdraw), which then
+  // repays and is withdrawn like any other margin USDC.
+  if (wantMargin) {
+    for (const r of health?.collateral ?? []) {
+      const vault = vaultOfShare(r.symbol);
+      if (!vault || !(r.units > 0)) continue;
+      steps.push({ kind: "write", op: "vault_withdraw", asset: null, amount: "all", slots: { vault } });
+      margin.set("USDC", (margin.get("USDC") ?? 0) + (r.usd ?? 0));
+      notes.push(`Your ${VAULT_NAMES[vault].name} shares are withdrawn to USDC first.`);
     }
   }
 

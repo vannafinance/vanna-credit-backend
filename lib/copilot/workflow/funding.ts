@@ -21,13 +21,18 @@ function spendsWallet(s: StepSpec): boolean {
   if (s.op === "repay") return String(s.slots?.source ?? "wallet") !== "margin";
   // A swap's balance lives in `mode` (wallet | margin); a margin swap spends margin collateral, not the wallet.
   if (s.op === "swap") return String(s.slots?.mode ?? "wallet") !== "margin";
+  // The SOL Basis vault takes its USDC from the wallet (every other vault from the margin account).
+  if (s.op === "vault_deposit") return s.slots?.vault === "basis-sol";
   return false;
 }
 
+/** The token a wallet-spending step pays with (a vault deposit names a vault, and always pays USDC). */
+const spentAsset = (s: StepSpec): string | null => s.asset ?? (s.op === "vault_deposit" ? "USDC" : null);
+
 /** Ops that may bring funds into the wallet or margin balance; later steps are checked when they run. */
-const CREATES_FUNDS = new Set(["borrow", "withdraw", "earn_redeem", "farm_redeem"]);
+const CREATES_FUNDS = new Set(["borrow", "withdraw", "earn_redeem", "farm_redeem", "vault_withdraw"]);
 /** Ops whose transaction can create accounts (token accounts, the margin account) and so pay rent. */
-const PAYS_RENT = new Set(["create_account", "deposit", "earn_supply", "swap", "farm_deposit"]);
+const PAYS_RENT = new Set(["create_account", "deposit", "earn_supply", "swap", "farm_deposit", "vault_deposit", "vault_withdraw", "vault_move_shares"]);
 
 export async function checkFunding(steps: StepSpec[], ctx: ReadCtx): Promise<string | null> {
   const writes = steps.filter((s) => s.kind === "write");
@@ -53,19 +58,20 @@ export async function checkFunding(steps: StepSpec[], ctx: ReadCtx): Promise<str
   const planned = new Map<string, number>();
   for (const s of steps) {
     if (s.kind === "write" && CREATES_FUNDS.has(s.op)) break;
-    if (!spendsWallet(s) || !s.asset) continue;
-    const have = held(s.asset);
+    const asset = spentAsset(s);
+    if (!spendsWallet(s) || !asset) continue;
+    const have = held(asset);
     if (have === null) continue;
-    const spendable = s.asset === "SOL" ? Math.max(0, have - SOL_FEE_RESERVE) : have;
-    const already = planned.get(s.asset) ?? 0;
+    const spendable = asset === "SOL" ? Math.max(0, have - SOL_FEE_RESERVE) : have;
+    const already = planned.get(asset) ?? 0;
     const need = s.amount === "all" ? (spendable > already ? already + 1e-12 : already + 1) : already + Number(s.amount);
     if (!Number.isFinite(need)) continue;
     if (spendable + 1e-9 < need) {
-      const what = s.asset === "SOL" ? `${fmtAmount(have, "SOL")} (about ${SOL_FEE_RESERVE} SOL stays back for fees and rent)` : `${fmtAmount(have, s.asset)}`;
-      const needText = s.amount === "all" ? `some ${s.asset}` : `${fmtAmount(String(need), s.asset)}`;
+      const what = asset === "SOL" ? `${fmtAmount(have, "SOL")} (about ${SOL_FEE_RESERVE} SOL stays back for fees and rent)` : `${fmtAmount(have, asset)}`;
+      const needText = s.amount === "all" ? `some ${asset}` : `${fmtAmount(String(need), asset)}`;
       return `Your wallet has ${what}, but this needs ${needText}. Add funds or ask for a smaller amount.`;
     }
-    planned.set(s.asset, need);
+    planned.set(asset, need);
   }
   return null;
 }
