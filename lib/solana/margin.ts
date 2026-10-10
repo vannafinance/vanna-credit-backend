@@ -179,8 +179,14 @@ export interface MarginSnapshot {
   stalePrices: string[];
 }
 
+/**
+ * Display valuation at the last on-chain price. A stale price is NOT zeroed: on the fork the keeper
+ * refreshes prices in between, and zeroing made collateral vanish and the health factor jump (2.03 →
+ * 1.04) until the next refresh. Staleness is reported separately (`stalePrices`), and every
+ * transaction refreshes prices before the program values anything.
+ */
 function valueOf(amount: bigint, price: OnchainPrice | null, decimals: number, roundUp: boolean): bigint {
-  if (!price || price.price <= 0n || (!roundUp && "fresh" in price && !price.fresh)) return 0n;
+  if (!price || price.price <= 0n) return 0n;
   return normalizeTokenValue(amount, price.price, price.exponent, decimals, roundUp);
 }
 
@@ -188,6 +194,9 @@ function valueOf(amount: bigint, price: OnchainPrice | null, decimals: number, r
  * Full margin snapshot for `owner`: every collateral vault (registry tokens + any other active
  * on-chain asset), every debt position accrued to fork-now, on-chain prices and the exact HF.
  */
+/** Last good simulated price per Basis receipt mint (process / page memory, never persisted). */
+const lastBasisPrice = new Map<string, NonNullable<Awaited<ReturnType<typeof basisOraclePrice>>>>();
+
 const fetchMarginSnapshotReads = singleFlight<string, MarginSnapshot>();
 export function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
   return fetchMarginSnapshotReads(owner.toBase58(), () => readMarginSnapshot(owner));
@@ -257,7 +266,18 @@ async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
   await Promise.all(assetList.map(async (a,i) => {
     const def = vaultByMint(a.mint.toBase58());
     if (def?.kind !== "basis" || !raw || tokenAccountAmount(infos[i*3],a.tokenProgram) === 0n) return;
-    try { basisPrices.set(a.assetIndex, await basisOraclePrice(def, connection)); } catch { /* Unavailable collateral stays unvalued. */ }
+    const key = a.mint.toBase58();
+    try {
+      const p = await basisOraclePrice(def, connection);
+      basisPrices.set(a.assetIndex, p);
+      if (p && p.price > 0n) lastBasisPrice.set(key, p);
+    } catch {
+      // The receipt is priced by simulating the vault oracle, which can fail on a transient RPC error
+      // (e.g. a 429 from the fork's upstream). Keep showing the last good price, flagged stale,
+      // instead of letting the receipt drop to $0 and the health factor jump. (In memory only.)
+      const last = lastBasisPrice.get(key);
+      if (last) basisPrices.set(a.assetIndex, { ...last, fresh: false });
+    }
   }));
   const priceOf = (a: AssetConfigState) => basisPrices.get(a.assetIndex) ?? priceFromAccounts(a.oracle, oracleMap, now);
   if (!raw) {
