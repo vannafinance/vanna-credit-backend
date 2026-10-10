@@ -1,30 +1,41 @@
 "use client";
 
 /**
- * Predict (BETA) — event list (design predict.js `viewList`): hero with the APY while you wait,
- * the account stats strip, the "bring your positions" prompts, category chips + search +
- * My Positions, and one card per event type. UI only: sample data from lib/predict-sample.ts.
+ * Predict list (design predict.js `viewList`, V4): hero with the live USDC pool rate, the account
+ * stats strip, the linked wallets bar, category chips + search + My positions, and one card per
+ * World event (World groups multi-outcome questions and games into one event, so a game is one
+ * card with its teams and the draw). Real data: events from GET /api/predict/events, the account
+ * from GET /api/predict/positions/:owner, the rate from the USDC pool on chain.
  */
 import "./predict-v3.css";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { IC, Icon } from "@/components/v3/icons";
 import { Info, StatStrip } from "@/components/v3/ui";
 import { pct, sUsd, usd, usdC } from "@/components/v3/format";
-import {
-  RATE, events, impLeft, impx, openOuts, byChance, posIn, pmLink, predictHref, openPredictImport,
-  usePredictSample, type PredictEvent,
-} from "@/lib/predict-sample";
-import { CATS, INFO, PreviewNote, PredictToast, EarnChip, IcFor, VsBadge, Tags, QBtn, partyCol, pc, cf, p2, type CatKey } from "./ui";
-import { ImportSheet } from "./import-sheet";
+import { useWallet } from "@/hooks/use-wallet";
+import { usePredictEvents } from "@/hooks/use-predict";
+import { anyPooled, byChance, canTrade, isDraw, mainOuts, predictHref, type PosRow } from "@/lib/predict/view";
+import type { PredictEvent } from "@/lib/predict/types";
+import { CATS, INFO, EarnChip, EvIc, PIC, QBtn, Tags, TeamLogo, VsBadge, cf, p2, partyCol, pc, type CatKey } from "./ui";
+import { PosTable, importOf, rowsOf, useStartEarning, usePredictAccount } from "./positions";
+import { LinkedSheet, openLinkedSheet, shortAddr } from "./linked-sheet";
 
-function CardFoot({ e, more = 0 }: { e: PredictEvent; more?: number }) {
+/** Value-weighted APY of the account's pooled rows in one event (null when it holds none there). */
+function mineApy(rows: PosRow[], eventId: string): number | null {
+  const xs = rows.filter((r) => r.eventId === eventId && r.kind === "pool");
+  if (!xs.length) return null;
+  const v = xs.reduce((t, r) => t + r.value, 0);
+  return v ? xs.reduce((t, r) => t + r.value * r.p.apy, 0) / v : xs[0].p.apy;
+}
+
+function CardFoot({ e, more = 0, mine, rate }: { e: PredictEvent; more?: number; mine: number | null; rate: number }) {
   return (
     <div className="pd-c-f num">
       <span className="pd-c-l">
-        <span>Last trade {e.last}</span>
-        <EarnChip e={e} />
+        <span>{e.last ? `Last trade ${e.last}` : "No trades yet"}</span>
+        {anyPooled(e) && <EarnChip mine={mine} rate={rate} />}
       </span>
       <span className="pd-c-m">
         {more > 0 && <span>+{more} more</span>}
@@ -36,7 +47,7 @@ function CardFoot({ e, more = 0 }: { e: PredictEvent; more?: number }) {
 }
 
 /** One event card; the whole card opens the event, its buttons open it with a market + side picked. */
-function Card({ e }: { e: PredictEvent }) {
+function Card({ e, mine, rate }: { e: PredictEvent; mine: number | null; rate: number }) {
   const router = useRouter();
   const open = () => router.push(predictHref(e.id));
   const title = (
@@ -44,13 +55,13 @@ function Card({ e }: { e: PredictEvent }) {
       {e.title}
     </Link>
   );
+  const ps = mainOuts(e);
+  const teams = ps.filter((o) => !isDraw(o));
   let body: React.ReactNode;
-  if (e.type === "match") {
-    const ps = e.outs.filter((o) => !o.grp);
-    const tot = ps.reduce((t, o) => t + o.y, 0) || 1;
-    const a = ps[0];
-    const b = ps[ps.length - 1];
-    const dr = ps.find((o) => o.k === "draw");
+  if (e.type === "match" && teams.length === 2) {
+    const tot = ps.reduce((t, o) => t + (o.y ?? 0), 0) || 1;
+    const [a, b] = teams;
+    const dr = ps.find(isDraw);
     body = (
       <>
         <div className="pd-c-top">
@@ -59,12 +70,6 @@ function Card({ e }: { e: PredictEvent }) {
             <Tags e={e} />
             {title}
           </div>
-          {e.live && (
-            <div className="pd-c-p num">
-              <b>{e.score}</b>
-              <small>score</small>
-            </div>
-          )}
         </div>
         <div className="pd-ms num">
           <div className="lb">
@@ -81,51 +86,59 @@ function Card({ e }: { e: PredictEvent }) {
             </span>
           </div>
           <div className="pd-bar3">
-            {ps.map((o) => (
-              <i key={o.k} style={{ width: `${((o.y / tot) * 100).toFixed(1)}%`, ["--c" as string]: partyCol(e, o) }} />
+            {[a, ...(dr ? [dr] : []), b].map((o) => (
+              <i key={o.k} style={{ width: `${(((o.y ?? 0) / tot) * 100).toFixed(1)}%`, ["--c" as string]: partyCol(e, o) }} />
             ))}
           </div>
         </div>
-        <div className="pd-parts num">
-          {ps.map((o) => (
-            <Link key={o.k} className="pd-pt" href={predictHref(e.id, o.k, "yes")} aria-label={`Buy Yes: ${o.name}`} onClick={(ev) => ev.stopPropagation()}>
-              <i style={{ ["--c" as string]: partyCol(e, o) }} />
-              <span>{o.ab === "DRAW" ? "Draw" : o.ab}</span>
-              <b>{cf(o.y)}</b>
-            </Link>
-          ))}
+        <div className={`pd-parts num ${dr ? "three" : ""}`}>
+          {[a, ...(dr ? [dr] : []), b].map((o) =>
+            canTrade(o) ? (
+              <Link key={o.k} className="pd-pt" href={predictHref(e.id, o.k, "yes")} aria-label={`Buy Yes: ${o.name}`} onClick={(ev) => ev.stopPropagation()}>
+                <TeamLogo e={e} o={o} cls="xs" />
+                <span>{isDraw(o) ? "Draw" : o.name}</span>
+                <b>{cf(o.y)}</b>
+              </Link>
+            ) : (
+              <button key={o.k} type="button" className="pd-pt" disabled onClick={(ev) => ev.stopPropagation()}>
+                <TeamLogo e={e} o={o} cls="xs" />
+                <span>{isDraw(o) ? "Draw" : o.name}</span>
+                <b>{cf(null)}</b>
+              </button>
+            ),
+          )}
         </div>
-        <CardFoot e={e} />
+        <CardFoot e={e} mine={mine} rate={rate} />
       </>
     );
-  } else if (e.type === "binary" || e.type === "updown") {
+  } else if (e.outs.length === 1) {
     const o = e.outs[0];
     body = (
       <>
         <div className="pd-c-top">
-          <IcFor e={e} />
+          <EvIc e={e} />
           <div className="pd-c-q">
             <Tags e={e} />
             {title}
           </div>
           <div className="pd-c-p num">
             <b>{pc(o.y)}</b>
-            <small>{e.type === "updown" ? "Up" : "chance"}</small>
+            <small>{o.yl ?? "chance"}</small>
           </div>
         </div>
         <div className="pd-yn num">
           <QBtn e={e} o={o} s="yes" />
           <QBtn e={e} o={o} s="no" />
         </div>
-        <CardFoot e={e} />
+        <CardFoot e={e} mine={mine} rate={rate} />
       </>
     );
   } else {
-    const rows = openOuts(e).slice().sort(byChance);
+    const rows = e.outs.slice().sort(byChance);
     body = (
       <>
         <div className="pd-c-top">
-          <IcFor e={e} />
+          <EvIc e={e} />
           <div className="pd-c-q">
             <Tags e={e} />
             {title}
@@ -141,7 +154,7 @@ function Card({ e }: { e: PredictEvent }) {
             </div>
           ))}
         </div>
-        <CardFoot e={e} more={rows.length - 2} />
+        <CardFoot e={e} more={rows.length - 2} mine={mine} rate={rate} />
       </>
     );
   }
@@ -152,129 +165,188 @@ function Card({ e }: { e: PredictEvent }) {
   );
 }
 
-/** The "positions in your wallet · Earn on them" / "Holding on Polymarket? Link account" prompts. */
-function ImportBar() {
-  const w = impLeft("wallet");
-  const pm = pmLink();
-  const items: React.ReactNode[] = [];
-  if (w.length) {
-    const v = w.reduce((t, x) => t + impx(x).value, 0);
-    items.push(
-      <div key="w" className="pd-ib hot">
-        <span className="pd-ib-ic">
-          <Icon sym="WORLD" className="pd-i24" />
-        </span>
-        <span className="pd-ib-t">
-          <b>
-            {w.length} position{w.length > 1 ? "s" : ""} in your wallet
-          </b>
-          <small className="num">{usd(v)} of World shares · not earning yet</small>
-        </span>
-        <button type="button" className="btn-v" onClick={() => openPredictImport("wallet")}>
-          Earn on them
-        </button>
-      </div>,
-    );
-  }
-  if (!pm)
-    items.push(
-      <div key="pm" className="pd-ib">
-        <span className="pd-ib-ic">
-          <Icon sym="POLY" className="pd-i24" />
-        </span>
-        <span className="pd-ib-t">
-          <b>Holding on Polymarket?</b>
-          <small>Link read-only, see your bets here, move them to earn</small>
-        </span>
-        <button type="button" className="btn-s" onClick={() => openPredictImport("polymarket")}>
-          Link account
-        </button>
-      </div>,
-    );
-  else {
-    const mv = impLeft("polymarket").filter((x) => x.ev);
-    if (mv.length) {
-      const v = mv.reduce((t, x) => t + impx(x).value, 0);
-      items.push(
-        <div key="pm" className="pd-ib">
-          <span className="pd-ib-ic">
-            <Icon sym="POLY" className="pd-i24" />
-          </span>
-          <span className="pd-ib-t">
-            <b>
-              {mv.length} Polymarket position{mv.length > 1 ? "s" : ""} can move here
-            </b>
-            <small className="num">{usd(v)} on Polygon · listed on Vanna</small>
-          </span>
-          <button type="button" className="btn-s" onClick={() => openPredictImport("polymarket")}>
-            Review
+/** Linked wallets bar: the connected wallet, and its World positions that are not earning yet. */
+function LinkedBar({ rows, idle, idleV, address, onStart, busy }: { rows: PosRow[]; idle: number; idleV: number; address: string; onStart: () => void; busy: boolean }) {
+  const n = rows.filter((r) => r.kind === "wallet").length;
+  return (
+    <section className="pd-lb">
+      <div className="pd-lb-l">
+        <span className="pd-lb-k">Linked wallets</span>
+        <div className="pd-wchips">
+          <button type="button" className="pd-wchip" onClick={openLinkedSheet}>
+            <Icon sym="SOL" className="pd-i18" />
+            <span>{shortAddr(address)}</span>
+            <small className="num">{n}</small>
           </button>
-        </div>,
-      );
-    }
-  }
-  return items.length ? <section className="pd-ibar">{items}</section> : null;
+          <button type="button" className="pd-wchip add" disabled title="Coming soon">
+            {PIC.plus}Add wallet <span className="pd-soon">Coming soon</span>
+          </button>
+        </div>
+      </div>
+      {idle > 0 ? (
+        <div className="pd-lb-r">
+          <span className="num">
+            <b>
+              {idle} World position{idle > 1 ? "s" : ""} not earning
+            </b>
+            <small>{usd(idleV)} in your wallet</small>
+          </span>
+          <button type="button" className="btn-v" disabled={busy} onClick={onStart}>
+            Start earning
+          </button>
+        </div>
+      ) : (
+        <div className="pd-lb-r">
+          <span className="pd-lb-ok">
+            {IC.check}
+            {n > 0 ? "Every World position that can earn is earning" : "No World positions waiting to earn"}
+          </span>
+        </div>
+      )}
+    </section>
+  );
 }
 
 /** The Predict list page. */
 export function PredictList() {
-  const api = usePredictSample();
+  const { data: events, isLoading, error } = usePredictEvents();
+  const acct = usePredictAccount();
+  const { connectWallet } = useWallet();
+  const earn = useStartEarning();
   const [cat, setCat] = useState<CatKey>("trending");
   const [q, setQ] = useState("");
   const [mine, setMine] = useState(false);
-  const v = api.vault();
-  const sm = api.summary();
-  const rate = RATE();
-  const EV = events();
+  /** Cards shown (World lists a few hundred events; more load on "Show more"). */
+  const [limit, setLimit] = useState(36);
+  const rate = acct.rate;
+  const EV = useMemo(() => events ?? [], [events]);
+  const rows = useMemo(() => rowsOf(acct.data), [acct.data]);
+  const evMap = useMemo(() => new Map(EV.map((e) => [e.id, e])), [EV]);
+
+  // Hero: USDC lent from every listed pool, and how many markets it comes from (live pool balances).
+  const lent = EV.reduce((t, e) => t + e.outs.reduce((s, o) => s + o.poolDetail.invested, 0), 0);
+  const lentMarkets = EV.reduce((t, e) => t + e.outs.filter((o) => o.poolDetail.invested > 0).length, 0);
+
+  const sm = acct.data?.summary;
+  const idle = acct.data?.importable ?? [];
+  const idleV = idle.reduce((t, x) => t + x.value, 0);
+  const pooledV = rows.filter((r) => r.kind === "pool").reduce((t, r) => t + r.value, 0);
 
   let list = EV.slice();
-  if (mine) list = list.filter((e) => posIn(e).length > 0);
-  else if (cat !== "trending" && cat !== "all") list = list.filter((e) => e.cat === cat);
-  if (cat === "trending" && !mine) list.sort((a, b) => b.v24 - a.v24);
+  if (cat !== "trending" && cat !== "all") list = list.filter((e) => e.cat === cat);
+  if (cat === "trending") list.sort((a, b) => Number(b.outs.some((o) => o.tradable)) - Number(a.outs.some((o) => o.tradable)) || b.v24 - a.v24);
   const qq = q.trim().toLowerCase();
   if (qq) list = list.filter((e) => `${e.title} ${e.tag} ${e.outs.map((o) => o.name).join(" ")}`.toLowerCase().includes(qq));
-  const head = mine ? "My Positions" : (CATS.find((c) => c[0] === cat)?.[1] ?? "");
+  const head = CATS.find((c) => c[0] === cat)?.[1] ?? "";
+
+  let body: React.ReactNode;
+  if (mine) {
+    const tv = rows.reduce((t, r) => t + r.value, 0);
+    body = !acct.connected ? (
+      <>
+        <div className="pd-sec">
+          <h2>My positions</h2>
+        </div>
+        <div className="pd-empty">
+          Connect a wallet to see your positions.
+          <button type="button" className="btn-v" onClick={() => connectWallet()}>
+            Connect wallet
+          </button>
+        </div>
+      </>
+    ) : (
+      <>
+        <div className="pd-sec">
+          <h2>My positions</h2>
+          <span className="num">
+            {rows.length} position{rows.length === 1 ? "" : "s"}, {usd(tv)}
+          </span>
+        </div>
+        <PosTable
+          rows={rows}
+          events={evMap}
+          busy={earn.busy}
+          onEarn={(r) => {
+            const x = importOf(acct.data, r);
+            if (x) earn.start([x]);
+          }}
+          empty={acct.loading ? "Loading your positions…" : "No positions yet. Buy Yes or No on any market."}
+        />
+      </>
+    );
+  } else if (isLoading) {
+    body = <div className="pd-load">Loading World markets… the first load can take up to a minute.</div>;
+  } else if (error && !EV.length) {
+    body = <div className="pd-empty">Markets could not be loaded: {(error as Error).message}</div>;
+  } else {
+    body = (
+      <>
+        <div className="pd-sec">
+          <h2>{head}</h2>
+          <span className="num">
+            {list.length} event{list.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        {list.length ? (
+          <div className="pd-grid">
+            {list.slice(0, limit).map((e) => (
+              <Card key={e.id} e={e} mine={mineApy(rows, e.id)} rate={rate} />
+            ))}
+          </div>
+        ) : (
+          <div className="pd-empty">No events match your search.</div>
+        )}
+        {list.length > limit && (
+          <div className="pd-more">
+            <button type="button" className="btn-o" onClick={() => setLimit(limit + 36)}>
+              Show more ({list.length - limit} left)
+            </button>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="v3 page">
       <div className="pd-wrap">
         <section className="pd-hero">
           <div className="pd-hero-l">
-            <span className="pd-hero-k">
-              Vanna Predict
-            </span>
+            <span className="pd-hero-k">Vanna Predict</span>
             <h1>Trade the world&apos;s outcomes</h1>
-            <p>Every YES or NO you buy earns while you wait: matched pairs lend in Vanna&apos;s USDC Earn pool until the market settles.</p>
+            <p>Buy Yes or No on real events from World. Your shares earn in Vanna&apos;s USDC pool while you wait for the result.</p>
           </div>
           <div className="pd-hero-r num">
-            <b>{pct(rate, 1)}</b>
+            <span className="pd-hero-ic">{IC.coins}</span>
             <span>
               <span className="pd-hl">
-                APY while you wait <Info text={INFO.rate} />
+                Earn up to {pct(rate, 1)} APY while you wait <Info text={INFO.rate} />
               </span>
               <small>
-                up to, by side · sample rate · {usdC(v.deposited)} lent from {v.events} events
+                {usdC(lent)} earning in Vanna&apos;s USDC pool from {lentMarkets} market{lentMarkets === 1 ? "" : "s"}
               </small>
             </span>
           </div>
         </section>
 
-        <PreviewNote />
+        {acct.connected && (
+          <div className="pd-strip">
+            <StatStrip
+              n={5}
+              items={[
+                { icon: IC.target, label: "Predictions value", value: usd(sm?.value ?? 0), sub: <>{sm?.count ?? 0} positions, <span className={(sm?.pnl ?? 0) >= 0 ? "pos" : "neg"}>{sUsd(sm?.pnl ?? 0)}</span></> },
+                { icon: IC.coins, label: <>Earning in USDC pool <Info text={INFO.inPool} /></>, value: usd(sm?.inVault ?? 0), sub: idleV > 0 ? `${usd(idleV)} more could earn` : "paired shares, today’s value" },
+                { icon: IC.pct, label: <>Passive yield <Info text={INFO.apy} /></>, value: `${p2(sm?.apy ?? 0)} APY`, sub: `on your ${usd(pooledV, 0)} in the pool` },
+                { icon: IC.spark, label: <>Earned <Info text={INFO.earned} /></>, value: <span className="pos">{sUsd(sm?.earned ?? 0)}</span>, sub: "paid in extra shares" },
+                { icon: IC.shield, label: <>Pays if right <Info text={INFO.paysMax} /></>, value: usd(sm?.payout ?? 0), sub: "if your picks win" },
+              ]}
+            />
+          </div>
+        )}
 
-        <div className="pd-strip">
-          <StatStrip
-            n={5}
-            items={[
-              { icon: IC.target, label: "Predictions value", value: usd(sm.value), sub: <>{sm.count} positions · <span className={sm.pnl >= 0 ? "pos" : "neg"}>{sUsd(sm.pnl)}</span></> },
-              { icon: IC.coins, label: <>In USDC vault <Info text={INFO.vault} /></>, value: usd(sm.inVault), sub: `matched shares, lent at ${p2(rate)}` },
-              { icon: IC.pct, label: <>Passive yield <Info text={INFO.apy} /></>, value: `${p2(sm.apy)} APY`, sub: `+${usd(sm.perMonth)} / month` },
-              { icon: IC.spark, label: <>Earned <Info text={INFO.earned} /></>, value: <span className="pos">{sUsd(sm.earned)}</span>, sub: "paid in extra shares" },
-              { icon: IC.shield, label: <>Pays if right <Info text={INFO.paysMax} /></>, value: usd(sm.payout), sub: "max, if your picks win" },
-            ]}
-          />
-        </div>
-
-        <ImportBar />
+        {acct.connected && acct.address && (
+          <LinkedBar rows={rows} idle={idle.length} idleV={idleV} address={acct.address} busy={earn.busy} onStart={() => earn.start(idle)} />
+        )}
 
         <div className="pd-filt">
           <div className="pd-chips" role="group" aria-label="Category">
@@ -299,31 +371,14 @@ export function PredictList() {
               <input placeholder="Search markets" value={q} onChange={(ev) => setQ(ev.target.value)} aria-label="Search markets" autoComplete="off" />
             </label>
             <button type="button" className={`pd-chip pd-mine ${mine ? "on" : ""}`} aria-pressed={mine} onClick={() => setMine(!mine)}>
-              {IC.wallet}My Positions
+              {PIC.list}My positions
             </button>
           </div>
         </div>
 
-        <section>
-          <div className="pd-sec">
-            <h2>{head}</h2>
-            <span className="num">
-              {list.length} event{list.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          {list.length ? (
-            <div className="pd-grid">
-              {list.map((e) => (
-                <Card key={e.id} e={e} />
-              ))}
-            </div>
-          ) : (
-            <div className="pd-empty">{mine ? "No positions yet. Buy YES or NO on any market: it starts earning right away." : "No events match your search."}</div>
-          )}
-        </section>
+        <section>{body}</section>
       </div>
-      <ImportSheet />
-      <PredictToast />
+      <LinkedSheet />
     </div>
   );
 }

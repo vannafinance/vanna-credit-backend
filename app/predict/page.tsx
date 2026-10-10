@@ -3,7 +3,7 @@ import { PredictList } from "@/components/predict/predict-list";
 
 export const metadata: Metadata = { title: "Predict" };
 
-/** Predict (BETA) — UI-only preview: sample events, in-memory interactions, no transactions. */
+/** Predict: World.xyz prediction markets on the fork, with shares earning in Vanna's USDC pool. */
 export default function PredictPage() {
   return <PredictList />;
 }

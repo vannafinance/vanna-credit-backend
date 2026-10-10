@@ -3,8 +3,8 @@
 /**
  * Portfolio (V3 design, index.html portfolio.js 7974–8514): title, three header cards (Net worth,
  * Net earnings, Health factor), Lender | Trader tabs with their sub-tabs, and the Flash repay entry
- * beside the Trader sub-tabs. Every number comes from `usePortfolio()` (on-chain reads); the only
- * sample data is the Lender → Predict preview. View state is in-memory only.
+ * beside the Trader sub-tabs. Every number comes from `usePortfolio()` (on-chain reads); Lender →
+ * Predict reads the wallet's World positions from /api/predict. View state is in-memory only.
  */
 import { useState } from "react";
 import "./portfolio-v3.css";
