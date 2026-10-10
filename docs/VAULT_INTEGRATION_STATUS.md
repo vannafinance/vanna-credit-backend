@@ -84,3 +84,53 @@ Each row used a 10 USDC deposit. The successful retests below had an outstanding
 - New integration files pass ESLint; whitespace/diff checks pass.
 
 Migration rollback records are retained under the ignored `vanna-credit-layer/deployments/backups/` directory. The approved legacy-state migration plan is saved in `vanna-credit-layer/deployments/legacy-state-migration.json`.
+
+## October 10: stale Perena snapshot and Basis market sessions
+
+Perena `7009 / StaleOracle` was caused by incomplete fork clock maintenance.
+The existing keeper updated receipt NAV timestamps but left the separate consensus
+oracle and underlying holding-price caches at the old snapshot time. A fresh NAV
+alone does not make those other price caches fresh.
+
+The hosted-fork adapter now validates the known Perena layouts and aligns:
+
+- Receipt NAV timestamps (existing behavior).
+- `VaultOracle.data.settled_nav_ts`: account byte 56.
+- Active priced `Vault.holdings[i].last_update_ts`: byte `2256 + 184*i + 40`.
+
+Offsets were checked against the published `@perena/vault-sdk` 1.0.56 IDL and
+live account sizes/discriminators. Regression tests verify that prices, amounts,
+signer reports and staleness limits do not change. Calls share one in-flight
+refresh. This is exclusively a cloned-snapshot clock adapter for
+`rpc-devnet.solana.vanna.finance`, **not a mainnet oracle update** and not evidence
+that Perena's economic NAV is current. Real mainnet operation requires Perena's
+normal oracle/keeper updates. No fork reset or market restriction changes occur.
+If simulation still returns Perena's stale-oracle error, preview forces one
+refresh/retry and then displays an actionable message without submitting funds.
+
+Basis `6015 / MarketAfterHours` is an intentional deposit restriction. The app
+reads Phoenix's after-hours and reopening flags, respects the vault's
+`afterHoursDeposits` setting, and exposes `marketAfterHours` and
+`depositBlockedReason` in the vault API. Closed deposits are disabled in the UI
+and rejected before transaction-table setup/signing. A simulation-time session
+change also produces a readable message. Withdrawals retain their existing
+contract/liquidity checks; they are not disabled merely because deposits close.
+The live fork confirmed TSLA/META closed while SOL/ETH/BTC were open.
+
+GCP deployment remains the owner's responsibility; these changes were not deployed.
+
+Validation for this fix: 630 tests passed, 18 optional tests skipped; TypeScript,
+ESLint and production build passed. Isolated fork wallet
+`6x7CRFDPzGj31iyDCSpmVVNXwFrEGPd7cUXL5q4WEkSP` completed both round trips:
+
+| Vault | Deposit signature | Withdrawal signature | USDC returned from 10 USDC deposit |
+| --- | --- | --- | ---: |
+| USD* | `61QscFA7kfDSrQpZmMNUGDeGkV89X8HUTLTEg7ssksdEuxctCHzdFBED1LJyDgnK9r2EX5eM8Yvj4v5Aq2EXaRdV` | `5Hg4AFZuJRLVbnK13vfJBVbd1nXmKo9YtyVXRqKNxh5HPMV7Mxd3PY9xFC4sYttzWVeL2DqfPhLudMQW5QFdBtVt` | 9.994999 |
+| Junior | `23UdLyZC4hYKo46n4mRXvtqb4mPFBvUJKbtDNFzUEgKXtjxwPJqqq9pFwDcXMF4d79ugEksvc9Y7QPaQQQ2kRcDG` | `3PmCb31o5wZuArAD1yGZhNdqs54NCmA2ykomMeCWgxY3RRyyJySVP4mPCJ8gF9FPou6CsCuubmZs3KYPbTqZnVGf` | 9.899999 |
+
+An earlier test attempt hit the Surfpool upstream provider's HTTP 429 rate limit;
+the subsequent attempt passed. These changes do not eliminate upstream provider
+availability/rate limits. No existing user funds were used.
+TSLA and META deposit previews were also exercised against the live fork with a
+signer that throws if called: both returned the friendly market-session message
+before any signing callback.

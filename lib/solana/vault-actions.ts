@@ -1,3 +1,4 @@
+import { vaultFailure, MARKET_SESSION_MESSAGE, PERENA_STALE_MESSAGE } from "./vault-errors";
 import { fetchWithTimeout } from "../async";
 import { Buffer } from "buffer";
 import {
@@ -33,7 +34,7 @@ import { marginVault } from "./pdas";
 import { getProgram } from "./program";
 import { toRaw, fromRaw } from "./math";
 import { ensureFreshPrices } from "./price-refresh";
-import { readPhoenixExchange } from "./phoenix";
+import { fetchPerpAssetMap, readPhoenixExchange } from "./phoenix";
 import {
   PERENA,
   PERENA_SHARES,
@@ -128,6 +129,11 @@ export async function prepareVaultAction(
       fetchVault(vaultProgram(c), new PublicKey(def.assetMint!)),
       readPhoenixExchange(c),
     ]);
+    if (call === "deposit" && !vault.afterHoursDeposits) {
+      const market = (await fetchPerpAssetMap(c, ex.perpAssetMap)).find(m => m.assetId === vault.assetId);
+      if (!market) throw new Error("Market session status is unavailable. Please retry shortly.");
+      if (market.afterHours) throw new Error(MARKET_SESSION_MESSAGE);
+    }
     if (call === "deposit" && (vault.paused || !vault.depositsOpen))
       throw new Error("Vault deposits are paused");
     if (
@@ -270,6 +276,15 @@ export async function prepareVaultAction(
       },
     });
   const sim = await simulate();
+  const failure = vaultFailure(sim.value.logs ?? []);
+  if (sim.value.err && failure === "market-closed") throw new Error(MARKET_SESSION_MESSAGE);
+  if (sim.value.err && failure === "perena-stale") {
+    if (attempt === 0) {
+      await ensureFreshPrices(true);
+      return prepareVaultAction(id, call, amount, signer, attempt + 1, noRoute);
+    }
+    throw new Error(PERENA_STALE_MESSAGE);
+  }
   if (sim.value.err && attempt < 2) {
     // 6030 = the basis program's SwapNotNeeded; Vanna's own codes overlap, so require the basis
     // program to be the one that failed before retrying without a route.
