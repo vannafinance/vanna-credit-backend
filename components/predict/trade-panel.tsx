@@ -3,7 +3,7 @@
 /**
  * Predict trade panel (design predict.js `panel` / `prevBuy` / `prevSell` / `slipPanel`, V4):
  * Buy / Sell, "One outcome" / "Bet slip (n)" for events with more than one tradable outcome, the
- * market picker, Yes / No, the amount box with the pay token (CASH or USDC) and % buttons, then
+ * market picker, Yes / No, the amount box with the pay token (CASH, World's dollar) and % buttons, then
  * the buy preview (details, "Earns while you wait", same-bet twin), the sell preview ("How this
  * sell works": wallet shares first, then the pool redeem) or the bet slip (legs, totals, "If this
  * happens / Pays / Profit", Buy all with ONE wallet approval).
@@ -27,7 +27,8 @@ import {
 import type { PositionsResponse, PredictEvent, PredictOutcome as Outcome, PredictPosition, Side } from "@/lib/predict/types";
 import { EvLogo, INFO, Kv, Meter, PIC, SideTag, TeamLogo, cf, cleanAmt, cpair, p2, parseAmt, pc, pp, shf } from "./ui";
 
-export type Pay = "CASH" | "USDC";
+/** Predict pays in CASH only (World's collateral). */
+export type Pay = "CASH";
 export interface SlipLegState {
   k: string;
   s: Side;
@@ -126,51 +127,39 @@ function OutSel({ e, o, add, st, set, choose, addLeg }: { e: PredictEvent; o: Ou
   );
 }
 
-/** Pay-with chip: CASH (World's dollar) or USDC (swapped to CASH in the same batch). */
-function PayChip({ st, set, wallet }: { st: PanelState; set: (p: Partial<PanelState>) => void; wallet: PositionsResponse["wallet"] | null }) {
-  const open = st.pop === "pay";
-  const ref = useRef<HTMLSpanElement>(null);
-  usePopClose(open, () => set({ pop: null }), ref);
+/**
+ * Pay-with chip: CASH only. This is a fork of World, and World's markets settle in CASH (World's
+ * dollar), so buying with USDC is not offered here (the server still accepts `pay: "USDC"`).
+ */
+function PayChip({ st, wallet }: { st: PanelState; wallet: PositionsResponse["wallet"] | null }) {
   return (
-    <span className="pd-tokw" ref={ref}>
-      <button type="button" className="pd-tok" aria-haspopup="menu" aria-expanded={open} onClick={() => set({ pop: open ? null : "pay" })}>
+    <span className="pd-tokw">
+      <span className="pd-tok" title={wallet ? `${nf(wallet.cash, 2)} CASH in your wallet` : undefined}>
         <Icon sym={st.pay} />
         {st.pay}
-        {IC.chev}
-      </button>
-      {open && (
-        <div className="pop" role="menu">
-          {(["CASH", "USDC"] as const).map((t) => (
-            <button key={t} type="button" role="menuitem" className={`mi ${st.pay === t ? "on" : ""}`} onClick={() => set({ pay: t, pop: null })}>
-              <Icon sym={t} />
-              {t}
-              <small className="num">{wallet ? nf(t === "CASH" ? wallet.cash : wallet.usdc, 2) : ""}</small>
-            </button>
-          ))}
-        </div>
-      )}
+      </span>
     </span>
   );
 }
 
-/** Fork-only: a small "Get test CASH" when the wallet has none of the pay token. */
-function Faucet({ address, pay }: { address: string; pay: Pay }) {
+/** Fork-only: a small "Get test CASH" when the wallet has no CASH. */
+function Faucet({ address }: { address: string; pay: Pay }) {
   const faucet = usePredictFaucet();
   return (
     <div className="pd-fct">
-      <span>No {pay} in this wallet yet. This is a test network.</span>
+      <span>No CASH in this wallet yet. This is a test network.</span>
       <button
         type="button"
         className="btn-s"
         disabled={faucet.isPending}
         onClick={() =>
           faucet.mutate(
-            { address, amount: 100, usdc: pay === "USDC" },
-            { onSuccess: () => showTxSuccess(pay === "USDC" ? "Added test CASH and USDC" : "Added 100 test CASH"), onError: (err) => showTxError(err instanceof Error ? err.message : String(err)) },
+            { address, amount: 100 },
+            { onSuccess: () => showTxSuccess("Added 100 test CASH"), onError: (err) => showTxError(err instanceof Error ? err.message : String(err)) },
           )
         }
       >
-        {faucet.isPending ? "Adding…" : `Get test ${pay === "USDC" ? "USDC" : "CASH"}`}
+        {faucet.isPending ? "Adding…" : "Get test CASH"}
       </button>
     </div>
   );
@@ -194,7 +183,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
   const trade = usePredictTrade();
   const connected = Boolean(address);
   const wallet = data?.wallet ?? null;
-  const bal = wallet ? (st.pay === "CASH" ? wallet.cash : wallet.usdc) : 0;
+  const bal = wallet ? wallet.cash : 0;
   const buy = st.mode === "buy";
   const s = st.side;
   const L = lab(o, s);
@@ -249,7 +238,6 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
             <Kv k="Shares" v={shf(q.sh)} />
             <Kv k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(q.sh)} cls="g" />
             <Kv k="Profit if right" v={a && q.sh ? `${sUsd(q.sh - a)} (${pct(((q.sh - a) / a) * 100, 0)})` : `${usd(0)} (${pct(0, 0)})`} cls="g" />
-            {st.pay === "USDC" && <Kv k="Paid with" v="USDC, swapped to CASH in the same approval" />}
           </div>
         </details>
         {inPool ? (
@@ -519,7 +507,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
       {slipOn ? (
         <>
           <div className="pd-slipbar">
-            <PayChip st={st} set={set} wallet={wallet} />
+            <PayChip st={st} wallet={wallet} />
             <span className="pd-bal num">{walletLbl}</span>
           </div>
           {needFaucet && <Faucet address={address!} pay={st.pay} />}
@@ -546,7 +534,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
           <div className="pd-amt">
             <div className="pd-amt-t">
               {buy ? (
-                <PayChip st={st} set={set} wallet={wallet} />
+                <PayChip st={st} wallet={wallet} />
               ) : (
                 <span className="pd-tok sh">
                   <SideTag s={s} L={L} />

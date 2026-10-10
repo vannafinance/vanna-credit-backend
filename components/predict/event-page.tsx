@@ -364,10 +364,8 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
   const start = outOf(e, mk ?? ev) ?? defaultOut(e);
   const [sel, setSel] = useState<string>(start.k);
   const [tab, setTab] = useState<Tab>("earning");
-  const [st, setSt] = useState<PanelState>(() => {
-    const w = acct.data?.wallet;
-    return { side: sd ?? "yes", mode: "buy", amt: DEF_AMT, pay: w && w.cash <= 0 && w.usdc > 0 ? "USDC" : "CASH", slip: null, pop: null };
-  });
+  // Predict pays in CASH only (World's collateral).
+  const [st, setSt] = useState<PanelState>(() => ({ side: sd ?? "yes", mode: "buy", amt: DEF_AMT, pay: "CASH", slip: null, pop: null }));
   const panelRef = useRef<HTMLElement>(null);
   const set = useCallback((p: Partial<PanelState>) => setSt((x) => ({ ...x, ...p })), []);
   const o = outOf(e, sel) ?? start;
