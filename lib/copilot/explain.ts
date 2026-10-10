@@ -55,6 +55,9 @@ const SIM_PATTERNS: Array<[RegExp, string]> = [
   // large because the health check names every asset the margin account holds.
   [/(?:margin swap|swap route|route \(account cap)[\s\S]*(?:too large|exceeds)|(?:too large|exceeds)[\s\S]*(?:margin swap|swap route|route hops)/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
   [/transaction_too_large|size limit|exceeds Solana|too large for one|VersionedTransaction too large|max: 1232/i, "This step's transaction is larger than one Solana transaction allows: the health check names every asset your margin account holds. Nothing was sent. Try again in a moment; withdrawing collateral you no longer use also makes it smaller."],
+  // A Basis vault on a stock market (TSLA, META) refuses deposits outside that market's session (the vault program's
+  // MarketAfterHours); the MCP checks it before building, this catches it if a simulation still reports it.
+  [/MarketAfterHours/i, "Deposits into this vault are closed while its market is outside its trading session or reopening. Try again when the session is open."],
   [/asset_not_offered/i, "That asset is not offered for this action."],
   [/insufficient pool liquidity/i, "The pool does not have enough available liquidity for that."],
   [/borrow_cap|supply_cap|cap exceeded/i, "That would exceed the pool's cap."],
