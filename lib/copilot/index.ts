@@ -619,7 +619,8 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
   }
 
   // Since the 2026-10-09 program upgrade a wallet's first margin transactions may need a one-time lookup-table setup.
-  if (dry.tx.prerequisite) extras = [...extras, "Your wallet first signs a one-time setup (a lookup table so margin transactions fit in one Solana transaction); then the action itself."];
+  if (dry.tx.prerequisite_kind === "phoenix_fund") extras = [...extras, "Your account holds enough assets that this order doesn't fit in one Solana transaction: your wallet first signs a transaction that moves the USDC into Phoenix, then the order itself."];
+  else if (dry.tx.prerequisite) extras = [...extras, "Your wallet first signs a one-time setup (a lookup table so margin transactions fit in one Solana transaction); then the action itself."];
   const resolved = pre.prepared.resolvedAmount;
   const shown: StepSpec = { ...step, amount: resolved ?? step.amount };
   const planSummary = `${labelFor(shown)}.`;

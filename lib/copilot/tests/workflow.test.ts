@@ -453,6 +453,36 @@ describe("confirm", () => {
     expect(h.builds).toBe(2);
   });
 
+  it("a perps open split for compute: once its USDC is in Phoenix, the order is rebuilt as funded", async () => {
+    const realBuild = workflowDeps.build;
+    const realPreflight = workflowDeps.preflight;
+    const seen: Array<boolean | undefined> = [];
+    let first = true;
+    Object.assign(workflowDeps, {
+      preflight: async (...args: Parameters<typeof realPreflight>) => {
+        seen.push(args[0].funded);
+        return realPreflight(...args);
+      },
+      build: async (...args: Parameters<typeof realBuild>) => {
+        const out = await realBuild(...args);
+        if (first && out.ok) {
+          first = false;
+          return { ...out, tx: { ...out.tx, prerequisite: true, prerequisite_kind: "phoenix_fund" } };
+        }
+        return out;
+      },
+    });
+    const { rec } = await submitted();
+    expect(h.spends).toEqual([]);
+    h.sigState = { state: "confirmed" };
+    const c = await confirmWorkflow(rec.id, { step_n: 1 }, USER);
+    expect(c.status).toBe("pending");
+    expect(c.plan.steps[0].note).toMatch(/USDC is in Phoenix/);
+    await advanceWorkflow(rec.id, USER);
+    expect(seen[0]).toBeUndefined();
+    expect(seen.at(-1)).toBe(true);
+  });
+
   it("an on-chain failure fails the step and the plan", async () => {
     const { rec } = await submitted();
     h.sigState = { state: "failed", err: '{"InstructionError":[0,{"Custom":1}]}' };

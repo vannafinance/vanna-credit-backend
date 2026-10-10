@@ -533,6 +533,7 @@ export function parseWriteEnvelope(result: Record<string, unknown>): WriteEnvelo
       simulation_success: true,
       ...(typeof summary.action === "string" ? { summary: summary.action } : {}),
       ...(summary.prerequisite === true ? { prerequisite: true } : {}),
+      ...(summary.prerequisite === true && typeof summary.prerequisite_kind === "string" ? { prerequisite_kind: summary.prerequisite_kind } : {}),
     },
     summary,
     preview,
@@ -596,7 +597,7 @@ export const mcp = {
   vaultsPreview: (args: { authority: string; vault: string; call: "deposit" | "withdraw"; amount: string }, ctx: McpCtx = {}) =>
     mcpCall("vanna_vaults", { action: "preview", ...args }, ctx),
   perpsPreview: (
-    args: { authority: string; market: string; side: "long" | "short"; collateral_usdc: string; leverage: number; slippage_bps?: number },
+    args: { authority: string; market: string; side: "long" | "short"; collateral_usdc: string; leverage: number; slippage_bps?: number; funded?: boolean },
     ctx: McpCtx = {},
   ) => mcpCall("vanna_perps", { action: "preview", ...args }, ctx),
 };

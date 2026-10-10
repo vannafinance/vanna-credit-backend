@@ -490,6 +490,10 @@ environment.
 - **Transaction size.** Margin swaps load protocol-wide accounts from the frozen protocol lookup table named by the
   MCP's `PROTOCOL_LOOKUP_TABLES` and cap Jupiter's route size so they fit Solana's 1232-byte limit. A fork reset deletes
   the table; recreate it with the MCP's `scripts/create_protocol_lookup_table.py`.
+- **Compute budget (perps open).** Each of a perps open's three `margin_execute` calls re-checks health over every
+  asset the account holds; on an account holding many assets they exceed 1.4M compute units. The MCP then returns only
+  the funding transaction (`summary.prerequisite_kind = "phoenix_fund"`). Once it confirms, the step is marked `funded` and
+  rebuilt: the order is sized from the USDC now in Phoenix and moves nothing more (`workflow.ts`, `workflow/steps.ts`).
 - **Slow fork RPC reads** get a 30 s timeout, with a body-read timeout retried once.
 - **First call on a new instance** can fail while VPC egress and NAT come up; the WorkOS token request is retried up
   to 3 times.

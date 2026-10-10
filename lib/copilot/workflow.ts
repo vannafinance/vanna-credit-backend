@@ -431,13 +431,16 @@ export async function advanceWorkflow(id: string, user: CopilotUser, ctx: Omit<R
               transaction: built.tx.transaction, blockhash: built.tx.blockhash, lastValidBlockHeight: built.tx.lastValidBlockHeight, built_at: t,
               ...(built.tx.summary ? { summary: built.tx.summary } : {}),
               ...(built.tx.prerequisite ? { prerequisite: true } : {}),
+              ...(built.tx.prerequisite_kind ? { prerequisite_kind: built.tx.prerequisite_kind } : {}),
             },
             // A prerequisite moves no funds: nothing counts toward the spend caps until the step itself is signed.
             usd: built.tx.prerequisite ? 0 : pre.prepared.usd,
             resolved: pre.prepared.resolvedAmount,
-            note: built.tx.prerequisite
-              ? "One-time setup: this creates your wallet's lookup table so margin transactions fit in one Solana transaction. The step itself follows."
-              : pre.prepared.notes.join(" ") || null,
+            note: built.tx.prerequisite_kind === "phoenix_fund"
+              ? "Your account holds enough assets that this order doesn't fit in one Solana transaction. This first transaction moves the USDC into Phoenix; the order itself follows."
+              : built.tx.prerequisite
+                ? "One-time setup: this creates your wallet's lookup table so margin transactions fit in one Solana transaction. The step itself follows."
+                : pre.prepared.notes.join(" ") || null,
           }),
           state: "running",
           simulation: pre.prepared.simulation ?? r.simulation,
@@ -602,7 +605,9 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
       // The one-time setup landed: the step itself is built next (status back to pending).
       return {
         next: {
-          ...withStep(r, step.n, { status: "pending", tx: null, signature: null, submitted_at: null, note: "One-time setup done. Preparing the step itself." }),
+          ...withStep(r, step.n, s.tx.prerequisite_kind === "phoenix_fund"
+            ? { status: "pending", tx: null, signature: null, submitted_at: null, funded: true, note: "The USDC is in Phoenix. Preparing the order." }
+            : { status: "pending", tx: null, signature: null, submitted_at: null, note: "One-time setup done. Preparing the step itself." }),
           state: r.state === "paused" ? "running" : r.state,
           pause_reason: null,
           log: logEvent(r, t, `prerequisite_confirmed:${step.n}`),

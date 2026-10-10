@@ -205,9 +205,11 @@ async function preflightPerp(step: StoredStep, ctx: ReadCtx, notes: string[]): P
   }
   if (step.op === "perp_open") {
     const collateral = String(step.amount ?? "0");
+    // After a "phoenix_fund" prerequisite the USDC is already in Phoenix: the order is sized from it and moves nothing.
+    const funded = step.funded === true ? { funded: true } : {};
     let preview: Record<string, unknown>;
     try {
-      preview = await mcp.perpsPreview({ authority: wallet, market, side: step.slots.side === "short" ? "short" : "long", collateral_usdc: collateral, leverage: Number(step.slots.leverage) }, ctx);
+      preview = await mcp.perpsPreview({ authority: wallet, market, side: step.slots.side === "short" ? "short" : "long", collateral_usdc: collateral, leverage: Number(step.slots.leverage), ...funded }, ctx);
     } catch (err) {
       return fail("unavailable", humanizeMcpError(err).message);
     }
@@ -215,7 +217,7 @@ async function preflightPerp(step: StoredStep, ctx: ReadCtx, notes: string[]): P
     notes.push(`About ${String(preview.size)} ${market} (~$${String(preview.size_usd)}) at a limit of $${String(preview.limit_price)}; open fee about $${String(preview.open_fee_usd)}.`);
     if (preview.reduced_to_fit_cap === true) notes.push("Reduced to fit the market's leverage cap.");
     if (preview.liquidation_price_after) notes.push(`Liquidation price of the whole margin account after this: $${String(preview.liquidation_price_after)}.`);
-    return done({ action: "open", market, side: step.slots.side, collateral_usdc: collateral, leverage: Number(step.slots.leverage) }, collateral);
+    return done({ action: "open", market, side: step.slots.side, collateral_usdc: collateral, leverage: Number(step.slots.leverage), ...funded }, collateral);
   }
   if (step.op === "perp_close") {
     const open = positions.find((p) => p.market === market);

@@ -16,6 +16,7 @@ export interface StoredTx {
   summary?: string;
   /** A one-time setup signed before the step itself (see UnsignedTx.prerequisite); the step is rebuilt after it. */
   prerequisite?: boolean;
+  prerequisite_kind?: string;
 }
 
 export interface StoredStep extends StepSpec {
@@ -38,6 +39,8 @@ export interface StoredStep extends StepSpec {
   builds: number;
   /** A read leg's answer, once it ran. */
   answer?: StructuredAnswer | null;
+  /** perp_open: its USDC already moved into Phoenix in a confirmed "phoenix_fund" prerequisite; the order moves nothing more. */
+  funded?: boolean;
 }
 
 export type WorkflowState = PlanView["state"];
