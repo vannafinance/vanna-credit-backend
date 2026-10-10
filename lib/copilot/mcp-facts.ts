@@ -145,12 +145,25 @@ export async function loadFreshPrice(asset: string, ctx: ReadCtx): Promise<Price
 
 export type Sized = { ok: true; amount: string; usd: number; hfAfter: number | null; protocolMax: string | null } | { ok: false; reason: string };
 
-/** Largest borrow that keeps HF >= floor, verified through the MCP. */
+/** Share of a pool's available liquidity a sized borrow may take: interest accrues between the read and the borrow. */
+export const POOL_HEADROOM = 0.99;
+
+/** Units of `asset` the Vanna pool can lend right now, or null when the pool can't be read (the borrow check still runs). */
+export async function poolAvailable(asset: string, ctx: ReadCtx): Promise<number | null> {
+  try {
+    const v = Number((await mcp.poolStats(asset, ctx)).available_liquidity);
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Largest borrow that keeps HF >= floor and fits the pool's available liquidity, verified through the MCP. */
 export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult; floor?: number } = {}): Promise<Sized> {
   // A user may ask for a higher floor ("borrow down to a health factor of 1.5"), never a lower one.
   const floor = Math.max(copilotConfig.minHealthFactor, opts.floor ?? 0);
-  // The account and the price are independent reads: fetched together.
-  const [h, price] = await Promise.all([opts.hint ? Promise.resolve(opts.hint) : loadHealth(ctx), loadFreshPrice(asset, ctx)]);
+  // The account, the price and the pool are independent reads: fetched together.
+  const [h, price, available] = await Promise.all([opts.hint ? Promise.resolve(opts.hint) : loadHealth(ctx), loadFreshPrice(asset, ctx), poolAvailable(asset, ctx)]);
   if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
   if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe borrow." };
   if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
@@ -162,6 +175,11 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
     .then((m) => (typeof m.max_amount === "string" ? m.max_amount : null))
     .catch(() => null);
   let units = Number(usdToUnits(maxUsd * 0.995, price.usd, asset));
+  // The health maths can't see the pool: a borrow above what the pool can lend fails on chain.
+  if (available !== null) {
+    if (!(available > 0)) return { ok: false, reason: `The ${asset} pool has nothing available to borrow right now.` };
+    units = Math.min(units, available * POOL_HEADROOM);
+  }
   for (let i = 0; i < 8 && units > 0; i++) {
     const amount = floorDecimals(units, tokenDecimals(asset));
     if (Number(amount) <= 0) break;

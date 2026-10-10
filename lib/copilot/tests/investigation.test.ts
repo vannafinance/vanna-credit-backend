@@ -6,6 +6,7 @@
 import { investigationDeps } from "../investigation/runtime";
 import { onlyDeclineWording } from "../testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { copilotConfig } from "../config";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
 import { setLimitStoreForTests } from "../limits";
@@ -472,6 +473,64 @@ describe("only what the user asked for", () => {
     const res = await chat("borrow usdc using 50 sol at 2x");
     expect(res.kind).toBe("clarification");
     expect(res.message).toMatch(/holds 5 SOL/);
+  });
+});
+
+describe("a borrow sized on one holding", () => {
+  const floor = copilotConfig.minHealthFactor;
+  const PROMPT = "Deposit 5 JupSOL as collateral, borrow what i can against 5 jupSol";
+  const plan = (base = "5") => [
+    { op: "deposit", asset: "JupSOL", sizing: { kind: "literal", amount: "5" }, source_quote: "Deposit 5 JupSOL as collateral" },
+    { op: "borrow", asset: "USDC", sizing: { kind: "max_safe", base_asset: "JupSOL", base_amount: base }, source_quote: "borrow what i can against 5 jupSol" },
+  ];
+
+  beforeEach(() => {
+    vi.spyOn(mcp, "wallet").mockImplementation(async () => ({
+      authority: WALLET_A,
+      sol_balance: "10",
+      margin_account_exists: true,
+      assets: ["SOL", "USDC", "USDT", "JupSOL"].map((symbol) => ({ symbol, wallet_balance: "5000", lender_share_balance: "0", lender_redeemable_underlying: "0" })),
+    }));
+  });
+
+  it("sizes the borrow on that holding alone, not the whole account", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan() } }]]));
+    const res = await chat(PROMPT);
+    expect(res.kind).toBe("plan_preview");
+    const [deposit, borrow] = res.plan?.steps.map((s) => Number(s.amount)) ?? [];
+    expect(deposit).toBe(5);
+    // 5 JupSOL x $130 = $650; on its own it holds (650 + x) / x >= floor at x = 650 / (floor - 1); the whole account
+    // ($600 SOL + $650 JupSOL) would allow far more.
+    const onItsOwn = 650 / (floor - 1);
+    expect(borrow).toBeLessThanOrEqual(onItsOwn);
+    expect(borrow).toBeGreaterThan(onItsOwn * 0.99);
+    expect(JSON.stringify(res.plan)).toMatch(/5 JupSOL of your collateral/);
+  });
+
+  it("never sizes past what the pool can lend", async () => {
+    vi.spyOn(mcp, "poolStats").mockImplementation(async (symbol: string) => ({ asset_symbol: symbol, available_liquidity: "1000" }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan() } }]]));
+    const res = await chat(PROMPT);
+    expect(res.kind).toBe("plan_preview");
+    expect(Number(res.plan?.steps[1].amount)).toBeLessThanOrEqual(1000 * 0.99);
+    expect(JSON.stringify(res.plan)).toMatch(/what the USDC pool can lend/);
+  });
+
+  it("will not size against more than the account holds plus this plan deposits", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan("50") } }]]));
+    const res = await chat("Deposit 5 JupSOL as collateral, borrow what i can against 50 jupSol");
+    expect(res.kind).toBe("clarification");
+    expect(res.message).toMatch(/this plan deposits 5 JupSOL/);
+  });
+
+  it("caps a whole-account max borrow at the pool's available liquidity", async () => {
+    vi.spyOn(mcp, "poolStats").mockImplementation(async (symbol: string) => ({ asset_symbol: symbol, available_liquidity: "100" }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "borrow", asset: "USDC", sizing: { kind: "max_safe" }, source_quote: "borrow the max usdc" },
+    ] } }]]));
+    const res = await chat("borrow the max usdc");
+    expect(res.kind).toBe("preview");
+    expect(Number(res.preview?.slots.amount)).toBeLessThanOrEqual(99);
   });
 });
 

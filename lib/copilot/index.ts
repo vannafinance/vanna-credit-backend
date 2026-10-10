@@ -43,7 +43,7 @@ import { isConversationId, savePending, takePending } from "./workflow/pending";
 import { planLever, type PlannedWorkflow } from "./workflow/strategy";
 import { planUnwind } from "./workflow/unwind";
 import { checkFunding } from "./workflow/funding";
-import { sizeLevBorrow } from "./workflow/leverage-borrow";
+import { sizeBorrowAgainst, sizeLevBorrow } from "./workflow/leverage-borrow";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
 import type { CopilotUser } from "./types";
@@ -391,6 +391,7 @@ async function resolveAmount(w: WriteIntent, earlier: StepSpec[], t: Turn): Prom
   if (a.kind === "prev") return { ok: false, message: "That amount depends on an earlier step. Say it in the same request." };
   if (a.kind === "lev") return { ok: false, message: "A leverage target is sized together with the deposit it applies to. Say it in one request, for example: deposit 100 USDC in margin and borrow SOL at 3x." };
   if (a.kind === "hf") return { ok: true, amount: `${HF_PREFIX}${a.target}` };
+  if (a.kind === "against") return { ok: false, message: "A borrow against a holding is sized with the plan. Say it in one request." };
   if (a.kind === "usd") return { ok: false, message: "That dollar amount couldn't be converted." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
   // A percentage is sized now, from the balance as it is. That is exact unless an earlier step of this plan changes
@@ -495,6 +496,14 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
     if (w.amount?.kind === "lev") {
       // "borrow SOL 3x against that deposit": the amount is sized here from live prices and the health floor, never typed.
       const sized = await sizeLevBorrow(w, steps, t.ctx, copilotConfig.minHealthFactor);
+      if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
+      steps.push(stepFromWrite(w, sized.amount));
+      extras.push(...sized.notes);
+      continue;
+    }
+    if (w.amount?.kind === "against") {
+      // "borrow what I can against 5 JupSOL": sized here on that holding, from live prices and the health floor.
+      const sized = await sizeBorrowAgainst(w, steps, t.ctx, copilotConfig.minHealthFactor);
       if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
       steps.push(stepFromWrite(w, sized.amount));
       extras.push(...sized.notes);

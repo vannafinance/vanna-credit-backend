@@ -690,6 +690,7 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
     if (a.kind === "exact" || a.kind === "out" || a.kind === "usd") return typedAs(a.value);
     if (a.kind === "hf") return typedAs(String(a.target));
     if (a.kind === "lev" && a.base) return typedAs(a.base.value);
+    if (a.kind === "against") return typedAs(a.base.value);
     return true;
   };
   switch (intent.lane) {

@@ -106,7 +106,13 @@ export type AmountSpec =
    * "borrow until my health factor is 1.5", "repay enough to get back to 2": sized when the step is built, from the account
    * as it is then, so the step leaves the health factor at `target` (borrow, withdraw: down to it; repay, deposit: up to it).
    */
-  | { kind: "hf"; target: number };
+  | { kind: "hf"; target: number }
+  /**
+   * borrow only: "borrow what I can against 5 JupSOL". The largest borrow that the named holding alone supports at the
+   * health floor (the borrowed asset stays in the account as collateral), never more than the whole account allows. Sized
+   * by the server from live prices (workflow/leverage-borrow.ts `sizeBorrowAgainst`).
+   */
+  | { kind: "against"; base: { asset: Asset; value: string } };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
@@ -522,6 +528,11 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
         if (!(PRODUCT_ASSETS as readonly string[]).includes(w.amount.base.asset)) return fail(unofferedMessage(String(w.amount.base.asset)));
         if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the leverage is taken on is not valid.");
       }
+    }
+    if (w.amount.kind === "against") {
+      if (w.op !== "borrow") return fail("Only a borrow can be sized against a holding.");
+      if (!(PRODUCT_ASSETS as readonly string[]).includes(w.amount.base.asset)) return fail(unofferedMessage(String(w.amount.base.asset)));
+      if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the borrow is taken against is not valid.");
     }
     if (w.amount.kind === "usd") {
       if (!w.asset) return fail("Which asset should that dollar amount buy or move?");
