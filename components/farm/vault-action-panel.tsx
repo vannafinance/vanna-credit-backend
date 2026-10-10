@@ -195,7 +195,7 @@ export function VaultActionPanel({
       )}
       {state?.stale && <p className="fm-warnn">Perena NAV is stale on the fork. The deposit refreshes the fork timestamp before it simulates.</p>}
       {!state?.registered && <p className="fm-note">Vault registration is being checked.</p>}
-      {closed && <p className="fm-warnn">Vault deposits are paused.</p>}
+      {closed && <p className="fm-warnn">{state?.depositBlockedReason ?? "Vault deposits are paused."}</p>}
       {overMax && <p className="fm-warnn">Maximum deposit is {nf(state!.maxDepositUsd!, 0)} USDC.</p>}
       {state?.error && <p className="fm-warnn dg">{state.error}</p>}
 
@@ -207,10 +207,10 @@ export function VaultActionPanel({
       <button
         type="button"
         className="fm-cta"
-        disabled={a.busy || !a.address || !state?.registered || !a.amount || Number(a.amount) <= 0 || overMax || Boolean(closed)}
+        disabled={a.busy || !a.address || !state?.registered || !state?.available || !a.amount || Number(a.amount) <= 0 || overMax || Boolean(closed)}
         onClick={a.run}
       >
-        {a.busy ? (deposit ? "Depositing…" : "Withdrawing…") : !a.address ? "Connect wallet" : overMax ? `Max ${nf(state!.maxDepositUsd!, 0)} USDC` : deposit ? "Deposit" : "Withdraw"}
+        {a.busy ? (deposit ? "Depositing…" : "Withdrawing…") : !a.address ? "Connect wallet" : overMax ? `Max ${nf(state!.maxDepositUsd!, 0)} USDC` : closed ? (state?.marketAfterHours ? "Market session closed" : "Deposits paused") : deposit ? "Deposit" : "Withdraw"}
       </button>
       {id === "basis-sol" && a.walletShares > 0n && (
         <button type="button" className="fm-cta2" disabled={a.busy} onClick={a.move}>
