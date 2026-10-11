@@ -8,6 +8,7 @@ import { getMarketInfo, listMarketInfos, openInterestOf, refreshOpenInterest } f
 import { groupMarkets, type EventSkeleton } from "./grouping";
 import { countdown, fromRawUnits, poolBar, shortDate, timeAgo, toCents } from "./math";
 import { readPoolStates, type PoolState } from "./pool.server";
+import { featuredOnly, featuredRank } from "./featured";
 import { getMarketPrices, getMarketVolume, scanMarketMints } from "./prices.server";
 import type { MarketInfo, PoolDetail, PredictEvent, PredictOutcome } from "./types";
 
@@ -86,6 +87,12 @@ function toEvent(sk: EventSkeleton, infos: Map<string, MarketInfo>, pools: Map<s
 
 /** Sorts like World: live windows first, then by open interest. */
 const rank = (e: PredictEvent) => (e.live ? 1e15 : 0) + e.oi;
+/** Featured mode keeps World's Trending order (lib/predict/featured.ts); otherwise {@link rank}. */
+const byPageOrder = (a: PredictEvent, b: PredictEvent) => {
+  const fa = Math.min(...a.outs.map((o) => featuredRank(o.marketId)));
+  const fb = Math.min(...b.outs.map((o) => featuredRank(o.marketId)));
+  return fa !== fb ? fa - fb : rank(b) - rank(a);
+};
 
 async function rebuild(): Promise<void> {
   const { markets, groups } = await listMarketInfos();
@@ -96,7 +103,7 @@ async function rebuild(): Promise<void> {
     return new Map<string, PoolState>();
   });
   const now = Date.now();
-  const events = skeletons.map((sk) => toEvent(sk, infos, pools, now)).sort((a, b) => rank(b) - rank(a));
+  const events = skeletons.map((sk) => toEvent(sk, infos, pools, now)).sort(featuredOnly() ? byPageOrder : (a, b) => rank(b) - rank(a));
   const byMarket = new Map<string, string>();
   for (const e of events) for (const o of e.outs) byMarket.set(o.marketId, e.id);
   state.events = events;

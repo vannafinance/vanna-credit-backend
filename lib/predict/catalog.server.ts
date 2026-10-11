@@ -21,6 +21,7 @@ import { CASH_DECIMALS, GROUP_DISCRIMINATOR_HEX, MARKET_ACCOUNT_SIZE, WORLD_PROG
 import { decodeGroup, decodeMarket, parseTokenMetadata, tokenAmountOf } from "./decode";
 import { classify, questionFrom } from "./grouping";
 import type { JsonMeta, MarketInfo, MintMeta, RawGroup, RawMarket } from "./types";
+import { FEATURED_GROUP_IDS, FEATURED_MARKET_IDS, featuredOnly } from "./featured";
 import { sweepUnpricedMarkets } from "./prices.server";
 import { scanUrls, withFallback, withMainnet } from "./rpc.server";
 
@@ -130,12 +131,31 @@ async function loadOpenInterest(ids: string[]): Promise<void> {
   });
 }
 
-/** Scans all World markets and Groups on mainnet and fetches what the listed ones need. */
+/**
+ * The featured markets and Groups (lib/predict/featured.ts) read directly by address — two batched
+ * getMultipleAccounts calls instead of scanning every World market — in the scan's result shape.
+ */
+async function readFeatured() {
+  const ids = [...FEATURED_MARKET_IDS, ...FEATURED_GROUP_IDS];
+  const infos = await readMany(ids);
+  const rows = ids.map((id, i) => ({ pubkey: new PublicKey(id), account: infos[i] })).filter((r): r is { pubkey: PublicKey; account: AccountInfo<Buffer> } => Boolean(r.account));
+  const groupSet = new Set(FEATURED_GROUP_IDS);
+  return [rows.filter((r) => !groupSet.has(r.pubkey.toBase58())), rows.filter((r) => groupSet.has(r.pubkey.toBase58()))] as const;
+}
+
+/**
+ * Loads the catalog: by default only the featured markets (World's Trending events); with
+ * PREDICT_ALL_MARKETS=1 it scans all World markets and Groups on mainnet. Then it fetches what the
+ * listed ones need.
+ */
 async function loadCatalog(): Promise<void> {
-  const [marketAccounts, groupAccounts] = await Promise.all([
-    scanProgram({ filters: [{ dataSize: MARKET_ACCOUNT_SIZE }] }),
-    scanProgram({ filters: [{ memcmp: { offset: 0, bytes: utils.bytes.bs58.encode(Buffer.from(GROUP_DISCRIMINATOR_HEX, "hex")) } }] }),
-  ]);
+  const featured = featuredOnly();
+  const [marketAccounts, groupAccounts] = featured
+    ? await readFeatured()
+    : await Promise.all([
+        scanProgram({ filters: [{ dataSize: MARKET_ACCOUNT_SIZE }] }),
+        scanProgram({ filters: [{ memcmp: { offset: 0, bytes: utils.bytes.bs58.encode(Buffer.from(GROUP_DISCRIMINATOR_HEX, "hex")) } }] }),
+      ]);
   const now = Date.now();
   const all = new Map<string, RawMarket>();
   const marketByMint = new Map<string, string>();
@@ -164,7 +184,10 @@ async function loadCatalog(): Promise<void> {
   await loadOpenInterest(nonWindow);
   const live = new Set<string>();
   for (const m of all.values()) {
-    if (isWindow(m)) {
+    if (featured) {
+      // Curated: every featured market is listed (no open-interest floor) until it ends.
+      if (m.endMs === null || m.endMs > now) live.add(m.id);
+    } else if (isWindow(m)) {
       if (m.endMs! > now && m.startMs! <= now + UPCOMING_WINDOW_MS) live.add(m.id);
     } else if ((state.openInterest.get(m.id) ?? 0) >= MIN_OPEN_INTEREST && (m.endMs === null || m.endMs > now)) {
       live.add(m.id);
