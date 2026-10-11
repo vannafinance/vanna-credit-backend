@@ -72,10 +72,14 @@ export function BasisVaultPage({ id }: { id: string }) {
   const apy7 = state?.apy7 ?? null;
   const eventEstimate = state?.apy7Source === "deposit-event";
   const fundingEstimate = grossFundingApr(funding?.stats.avg7, state?.shortUsd, state?.navUsd);
-  // Headline APY: realized 7D when it exists, else the Phoenix-funding estimate (labelled).
-  const headline = vaultApy(apy7, funding?.stats.avg7, state?.shortUsd, state?.navUsd);
+  // Headline APY: realized 7D when it exists, else realized since launch (by the second), else the
+  // Phoenix-funding estimate (labelled).
+  const headline = vaultApy(apy7, funding?.stats.avg7, state?.shortUsd, state?.navUsd, state?.apySinceLaunch);
   const apyLabel = apyText(headline.value);
-  const apyTitle = headline.estimate ? "Est. APY (7D funding)" : eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)";
+  const sinceLaunch = headline.source === "launch";
+  const launchDay = state?.launchedAt ? new Date(state.launchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+  const apyTitle = headline.estimate ? "Est. APY (7D funding)" : sinceLaunch ? "Vault APY (since launch)" : eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)";
+  const launchTip = `Realized: the vault's share price started at 1.00 at launch${launchDay ? ` (${launchDay})` : ""} and is ${(state?.sharePriceUsd ?? 0).toFixed(6)} now; that change is annualised by the second (compounded). A short history makes it swing a lot; it switches to the 7-day APY once the vault has 7 days of history.${fundingEstimate !== null ? ` For reference, the last 7 days of Phoenix funding on its short would be about ${pct(fundingEstimate, 2)} a year before fees.` : ""}`;
   const estTip = `Estimated from what this vault earns: the last 7 days of Phoenix mainnet ${def.asset}-PERP funding on the share of the vault held short. Before Phoenix fees and execution. It switches to the realized share-price APY once the vault has 7 days of history.`;
 
   const current = position.shares > 0
@@ -131,7 +135,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <VTag name="Phoenix" />
         </div>
         <section className="fm-stats num">
-          <Stat label={apyTitle} value={apyLabel} cls={headline.estimate && (headline.value ?? 0) > 0 ? "pos" : ""} tip={headline.estimate ? estTip : eventEstimate ? `Approximate annualised share-price return from a deposit event on ${new Date(state!.apy7BaselineAt!).toLocaleDateString()}. Covers the full interval since that event, at least 7 days; mint rounding may affect the baseline.` : "Annualised share-price return over 7 days. It reads 0.00% until a 7-day price baseline exists, which is not a measured zero return."} />
+          <Stat label={apyTitle} value={apyLabel} cls={(headline.value ?? 0) > 0 ? "pos" : (headline.value ?? 0) < 0 ? "neg" : ""} tip={headline.estimate ? estTip : sinceLaunch ? launchTip : eventEstimate ? `Approximate annualised share-price return from a deposit event on ${new Date(state!.apy7BaselineAt!).toLocaleDateString()}. Covers the full interval since that event, at least 7 days; mint rounding may affect the baseline.` : "Annualised share-price return over 7 days. It reads 0.00% until a 7-day price baseline exists, which is not a measured zero return."} />
           <Stat
             label="Funding Now"
             value={spct(fundingNow, 1)}
@@ -143,9 +147,11 @@ export function BasisVaultPage({ id }: { id: string }) {
         </section>
         {apy7 === null && (
           <p className="fm-sub" style={{ marginBlock: 12 }}>
-            {fundingEstimate !== null
-              ? `Est. APY ${pct(fundingEstimate, 2)}: the last 7 days of Phoenix mainnet funding on this vault's short, before fees and execution. The realized APY replaces it once the vault has 7 days of share-price history.`
-              : "Vault APY appears once the vault has 7 days of share-price history; it then updates day by day."}
+            {sinceLaunch
+              ? `Realized since launch${launchDay ? ` (${launchDay})` : ""}, annualised by the second; it switches to the 7-day APY once the vault has 7 days of history.`
+              : fundingEstimate !== null
+                ? `Est. APY ${pct(fundingEstimate, 2)}: the last 7 days of Phoenix mainnet funding on this vault's short, before fees and execution. The realized APY replaces it once the vault has 7 days of share-price history.`
+                : "Vault APY appears once the vault has 7 days of share-price history; it then updates day by day."}
           </p>
         )}
         <div className="fm-cols">
@@ -186,7 +192,7 @@ export function BasisVaultPage({ id }: { id: string }) {
               state={state}
               account={account}
               apy7={headline.value}
-              apySource={headline.estimate ? "The estimated APY from the last 7 days of Phoenix funding on the vault's short (before fees and execution)" : undefined}
+              apySource={headline.estimate ? "The estimated APY from the last 7 days of Phoenix funding on the vault's short (before fees and execution)" : sinceLaunch ? "The vault's realized APY since launch (share price annualised by the second)" : undefined}
             />
             <Tiles
               items={[
@@ -203,7 +209,7 @@ export function BasisVaultPage({ id }: { id: string }) {
             <HowItWorks
               steps={[
                 ["Hold USDC in Margin", def.id === "basis-sol" ? "Or in your wallet: SOL Basis deposits start from your wallet." : "Deposit or borrow USDC on the Margin page."],
-                ["Deposit to the vault", def.id === "basis-sol" ? "From your wallet; a second approval moves the shares to margin." : "From your margin account, in one approval."],
+                ["Deposit to the vault", def.id === "basis-sol" ? "From your margin account, in one approval (routed through your wallet; the vbSOL returns to margin)." : "From your margin account, in one approval."],
                 ["Vault hedges", def.id === "basis-sol" ? "SOL held at Phoenix, an equal 1x SOL-PERP short." : `Spot ${def.asset} via Jupiter, an equal 1x short on Phoenix.`],
                 ["Earn funding", "Shares stay in your margin account and count toward its health factor."],
               ]}

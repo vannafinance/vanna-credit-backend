@@ -26,15 +26,15 @@ import idlJson from "@/idl/outcome_yield_pool.json";
 import { SOLANA_RPC_URL, VANNA_PROGRAM_ID } from "@/lib/solana/config";
 import { getConnection, getMultipleAccountsChunked } from "@/lib/solana/connection";
 import { confirmSignatureHttp } from "@/lib/solana/confirmation";
-import { lenderTotalAssets, supplySharesToAssetsDown } from "@/lib/solana/math";
+import { lenderTotalAssets, projectReserve, supplySharesToAssetsDown } from "@/lib/solana/math";
 import { assetConfigPda, protocolConfigPda, reservePda, reserveVault, shareMintPda } from "@/lib/solana/pdas";
 import { fetchPoolStates } from "@/lib/solana/protocol-state";
 import { getToken } from "@/lib/solana/tokens";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, CASH_MINT, JUPITER_V6_PROGRAM_ID, OUTCOME_POOL_PROGRAM_ID, WORLD_PROGRAM_ID } from "./constants";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, CASH_MINT, JUPITER_V6_PROGRAM_ID, OUTCOME_POOL_PROGRAM_ID, POOL_REDEEM_HORIZON_SECS, WORLD_PROGRAM_ID } from "./constants";
 import { mintSupplyOf, tokenAmountOf } from "./decode";
 import { healRouteAccounts, manifestQuote, swapInstructions } from "./jupiter.server";
 import { getPoolKeeper } from "./keys.server";
-import { previewRedeemValue } from "./math";
+import { previewRedeemValue, sizeRedeem } from "./math";
 import type { Side } from "./types";
 
 export const POOL_PROGRAM = new PublicKey(OUTCOME_POOL_PROGRAM_ID);
@@ -149,8 +149,14 @@ export interface PoolState {
   account: PoolAccount | null;
   yesDangling: bigint;
   noDangling: bigint;
-  /** Pool's Vanna USDC position valued at the reserve's projected exchange rate (6 decimals). */
+  /**
+   * Pool's invested balance as the program's `VannaAccounts::invested` counts it: idle `pool_usdc`
+   * plus its Vanna USDC position valued at the reserve's exchange rate projected to the fork's now
+   * (6 decimals).
+   */
   invested: bigint;
+  /** `invested` with the reserve projected `POOL_REDEEM_HORIZON_SECS` further: sizes redeem routes (see `sizeRedeem`). */
+  investedAhead: bigint;
   yesShareSupply: bigint;
   noShareSupply: bigint;
 }
@@ -171,15 +177,22 @@ export async function readAllowlist(marketIds: string[]): Promise<Map<string, bo
   return new Map(marketIds.map((id) => [id, cache.map.get(id) ?? false]));
 }
 
-/** The pool's USDC claim: Vanna lender shares × the reserve's projected exchange rate. */
+/**
+ * The pool's USDC claim: Vanna lender shares × the reserve's exchange rate projected to the fork's
+ * now, plus `aheadSecs` more seconds of accrual (the program refreshes the reserve before pricing a redeem).
+ */
 async function usdcValueOf() {
   const usdc = (await fetchPoolStates()).USDC;
-  return (vannaShares: bigint) => (usdc?.projected ? supplySharesToAssetsDown(vannaShares, usdc.shareSupply, lenderTotalAssets(usdc.projected)) : 0n);
+  return (vannaShares: bigint, aheadSecs = 0n) => {
+    if (!usdc?.reserve || !usdc.projected) return 0n;
+    const reserve = aheadSecs > 0n ? projectReserve(usdc.reserve, usdc.now + aheadSecs) : usdc.projected;
+    return supplySharesToAssetsDown(vannaShares, usdc.shareSupply, lenderTotalAssets(reserve));
+  };
 }
 
 /**
  * Live pool figures for many markets in a few batched reads: allowlist, Pool accounts, then their
- * YES / NO token accounts, Vanna share accounts and share-mint supplies.
+ * YES / NO token accounts, Vanna share accounts, share-mint supplies and idle USDC accounts.
  */
 export async function readPoolStates(marketIds: string[]): Promise<Map<string, PoolState>> {
   const out = new Map<string, PoolState>();
@@ -191,7 +204,7 @@ export async function readPoolStates(marketIds: string[]): Promise<Map<string, P
   const accounts = poolInfos.map((i) => decodePool(i as AccountInfo<Buffer> | null));
   const keys: PublicKey[] = [];
   accounts.forEach((a) => {
-    if (a) keys.push(a.poolYes, a.poolNo, a.poolVannaShares, a.yesShareMint, a.noShareMint);
+    if (a) keys.push(a.poolYes, a.poolNo, a.poolVannaShares, a.yesShareMint, a.noShareMint, a.poolUsdc);
   });
   const [infos, value] = await Promise.all([keys.length ? getMultipleAccountsChunked(conn, keys) : Promise.resolve([]), usdcValueOf()]);
   let k = 0;
@@ -199,20 +212,23 @@ export async function readPoolStates(marketIds: string[]): Promise<Map<string, P
     const a = accounts[i];
     const base = { marketId: id, allowlisted: allow.get(id) ?? false, pool: pools[i], account: a };
     if (!a) {
-      out.set(id, { ...base, exists: false, yesDangling: 0n, noDangling: 0n, invested: 0n, yesShareSupply: 0n, noShareSupply: 0n });
+      out.set(id, { ...base, exists: false, yesDangling: 0n, noDangling: 0n, invested: 0n, investedAhead: 0n, yesShareSupply: 0n, noShareSupply: 0n });
       return;
     }
     const d = (j: number) => (infos[k + j]?.data as Buffer | undefined) ?? null;
+    // Idle USDC (e.g. the rounding dust a redeem's `lender_redeem` leaves) counts too, as on chain.
+    const idle = tokenAmountOf(d(5));
     out.set(id, {
       ...base,
       exists: true,
       yesDangling: tokenAmountOf(d(0)),
       noDangling: tokenAmountOf(d(1)),
-      invested: value(tokenAmountOf(d(2))),
+      invested: idle + value(tokenAmountOf(d(2))),
+      investedAhead: idle + value(tokenAmountOf(d(2)), POOL_REDEEM_HORIZON_SECS),
       yesShareSupply: mintSupplyOf(d(3)),
       noShareSupply: mintSupplyOf(d(4)),
     });
-    k += 5;
+    k += 6;
   });
   return out;
 }
@@ -309,9 +325,13 @@ export async function depositIxs(owner: PublicKey, m: MarketMints, side: Side, a
 
 /**
  * `redeem(is_yes, shares, swap_data)` of `sharesRaw` pool shares into outcome tokens. When the
- * pool's dangling tokens of that side do not cover the redeem value, a USDC → CASH route for
- * exactly the shortfall (signed by the pool via CPI) is attached; it must clear par for any caller,
- * so a route below par fails with the program's own `SwapBelowMinimum` (a market condition).
+ * pool's dangling tokens of that side do not cover the redeem value, a USDC → CASH route for the
+ * shortfall (signed by the pool via CPI) is attached, sized by `sizeRedeem` for the shortfall the
+ * program computes after its reserve refresh when the transaction lands (interest accrued since the
+ * read raises it; an exact-at-read route fails `SwapAmountMismatch` on any large redeem). It must
+ * clear par for any caller, so a route below par fails with the program's own `SwapBelowMinimum`
+ * (a market condition). Returns the shares actually burnt (fewer than asked only for a side's last
+ * holders, see `sizeRedeem`) and the outcome tokens the redeem pays at least.
  */
 export async function redeemIxs(
   owner: PublicKey,
@@ -319,29 +339,27 @@ export async function redeemIxs(
   side: Side,
   sharesRaw: bigint,
   state: PoolState,
-): Promise<{ instructions: TransactionInstruction[]; lookupTables: AddressLookupTableAccount[]; value: bigint; routeAccounts: PublicKey[] }> {
+): Promise<{ instructions: TransactionInstruction[]; lookupTables: AddressLookupTableAccount[]; value: bigint; shares: bigint; routeAccounts: PublicKey[] }> {
   if (!state.account) throw new Error("Pool not initialised for this market yet");
   const market = new PublicKey(m.marketId);
   const pool = poolPda(market);
   const mint = new PublicKey(side === "yes" ? m.yesMint : m.noMint);
   const shareMint = shareMintPdaFor(pool, side);
   const recipientOutcome = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_2022_PROGRAM_ID);
-  const value = redeemValue(state, side, sharesRaw);
-  const dangling = sideDangling(state, side);
+  const { shares, value, usdcIn } = sizeRedeem(sharesRaw, sideDangling(state, side), state.invested, state.investedAhead, sideSupply(state, side));
 
   let swapData: Buffer = Buffer.alloc(0);
   let remainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
   let lookupTables: AddressLookupTableAccount[] = [];
-  if (dangling < value) {
-    const shortfall = value - dangling;
-    const quote = await manifestQuote(usdcMint().toBase58(), CASH_MINT, shortfall);
+  if (usdcIn > 0n) {
+    const quote = await manifestQuote(usdcMint().toBase58(), CASH_MINT, usdcIn);
     const route = await swapInstructions(getConnection(), quote, pool, ata2022(CASH, pool));
     swapData = route.swapData;
     remainingAccounts = route.swapAccounts;
     lookupTables = route.lookupTables;
   }
   const ix = await poolProgram()
-    .methods.redeem(side === "yes", new BN(sharesRaw.toString()), swapData)
+    .methods.redeem(side === "yes", new BN(shares.toString()), swapData)
     .accounts({
       authority: owner,
       pool,
@@ -369,6 +387,7 @@ export async function redeemIxs(
     instructions: [createAssociatedTokenAccountIdempotentInstruction(owner, recipientOutcome, owner, mint, TOKEN_2022_PROGRAM_ID), ix],
     lookupTables,
     value,
+    shares,
     routeAccounts: remainingAccounts.map((a) => a.pubkey),
   };
 }

@@ -278,7 +278,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
               <b>+{usd(mo)} a month</b>
             </div>
             <p className="pd-eb-p">
-              Paired shares earn {p2(rate)} in Vanna&apos;s USDC pool. Yield comes as extra {L} shares, so it pays only if {L} wins.
+              Yield comes as extra {L} shares, so it pays only if {L} wins.
             </p>
             {!fx.after.full && od.full && od.mine > 0 && (
               <p className="pd-eb-tip">

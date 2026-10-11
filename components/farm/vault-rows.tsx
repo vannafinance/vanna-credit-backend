@@ -49,7 +49,7 @@ export function useBasisApys(): Record<string, VaultApy> {
   VAULTS.filter((v) => v.kind === "basis").forEach((v) => {
     const s = live.data.find((x) => x.id === v.id);
     const days = history[BASIS_SYMBOLS.indexOf(v.asset)]?.data?.days ?? [];
-    out[v.id] = vaultApy(s?.apy7, fundingStats(days).avg7, s?.shortUsd, s?.navUsd);
+    out[v.id] = vaultApy(s?.apy7, fundingStats(days).avg7, s?.shortUsd, s?.navUsd, s?.apySinceLaunch);
   });
   return out;
 }
@@ -115,7 +115,7 @@ export function VaultTable({
             <Cell v={<Venue name="Jupiter · Phoenix" />} />
             <Cell v={`${cmp(shares)} ${v.symbol}`} mini={usd(tvl)} />
             <Cell v={usdC(cap)} mini={cap > 0 ? (tvl / cap > 0.9 ? "Almost full" : `${nf((tvl / cap) * 100, 2)}% used`) : "No cap"} />
-            <Cell v={apyText(apys[v.id]?.value)} mini={apys[v.id]?.estimate ? "Est. · Phoenix funding" : s?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D realized"} />
+            <Cell v={apyText(apys[v.id]?.value)} mini={apys[v.id]?.source === "launch" ? "Since launch" : apys[v.id]?.estimate ? "Est. · Phoenix funding" : s?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D realized"} />
             <Cell v={spct(f, 1)} cls={f < 0 ? "neg" : ""} />
             <Cell v={spct(delta, 2)} />
             <Cell v={`${nf(holding?.amount ?? 0, 4)} ${v.symbol}`} mini={usd(holding?.usd ?? 0)} />
@@ -135,7 +135,7 @@ export function VaultTable({
           ["Protocol", "prot"],
           ["Total Deposits", "dep", "Vault shares outstanding, and their value (the vault's net asset value) on chain."],
           ["Capacity", "cap", "The most total exposure the vault accepts, and how much of it is used."],
-          ["Vault APY", "apy", "Annualised 7-day share-price return. Until a vault has 7 days of history it shows the estimate from its last 7 days of Phoenix funding on the short (before fees), labelled Est."],
+          ["Vault APY", "apy", "Realized share-price return, annualised by the second: over the last 7 days once a vault has them, until then since its launch (share price starts at 1.0). Only without any price history: the Phoenix-funding estimate, labelled Est."],
           ["Funding Now", "fund", "Phoenix's current hourly funding, annualised; when positive, shorts get paid."],
           ["Net Delta", "delta", "Spot leg minus short leg, as a share of the short; near zero means price moves cancel out."],
           ["Holding", "hold"],

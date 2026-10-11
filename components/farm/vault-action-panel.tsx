@@ -5,12 +5,15 @@ import { netYield } from "@/lib/farm/yield";
  * Deposit / Withdraw column of the Basis and Perena vault pages — the design's `dnAside` look,
  * driving the REAL vault flow ({@link useVaultAction}, lib/farm/use-vault-action.ts):
  *
- * - deposits are USDC only (from the margin account; SOL Basis from the wallet, two approvals);
+ * - deposits are USDC only, from the margin account. SOL Basis routes that USDC through the wallet
+ *   and returns the vbSOL to the margin in the same single-approval transaction; because the USDC
+ *   leaves the margin first, its health factor at that point is previewed (estimate) and checked
+ *   on-chain;
  * - one Deposit / Withdraw click simulates the exact transaction (minimum received for Basis, the
  *   Junior 1% instant-exit fee included) and, if it passes, sends it — no separate preview step; a
  *   failed simulation stops before the wallet is asked to sign;
- * - SOL Basis shares stranded in the wallet can be moved into the margin account with the recovery
- *   button.
+ * - SOL Basis shares left in the wallet (minted above the deposit's minimum) can be moved into the
+ *   margin account with the recovery button.
  *
  * Net APY uses the vault's recorded 7-day APY (0 until enough history exists) minus the Vanna USDC
  * borrow APY on the part of the deposit covered by the margin account's USDC debt.
@@ -20,6 +23,8 @@ import type { LiveVault } from "@/lib/solana/vault-state";
 import { useVaultAction } from "@/lib/farm/use-vault-action";
 import { useVaultAccount } from "@/lib/farm/use-vaults";
 import { usePoolData } from "@/hooks/use-earn";
+import { projectHealthFactor } from "@/lib/solana/margin";
+import { LIQUIDATION_HEALTH_FACTOR } from "@/lib/solana/config";
 import { fromRaw } from "@/lib/solana/math";
 import { explorerUrl } from "@/lib/solana/config";
 import { Icon } from "@/components/v3/icons";
@@ -34,6 +39,10 @@ export interface VaultAccountInputs {
   usdcDebt: number;
   /** On-chain USDC price, USD. */
   usdcPrice: number;
+  /** Margin account collateral, USD (for the SOL Basis health-factor estimate). */
+  collateralUsd: number;
+  /** Margin account debt, USD. */
+  debtUsd: number;
 }
 
 /** The live margin-account and pool figures the panel's Net APY works from. */
@@ -47,6 +56,8 @@ export function useVaultAccountInputs(): VaultAccountInputs {
       usdcDebt: margin?.debts.filter((d) => d.symbol === "USDC").reduce((s, d) => s + d.debt, 0) ?? 0,
       // USDC's on-chain price when the snapshot carries it; USDC otherwise counts at its $1 peg.
       usdcPrice: margin?.prices?.USDC?.usd ?? 1,
+      collateralUsd: margin?.totalCollateralUsd ?? 0,
+      debtUsd: margin?.totalDebtUsd ?? 0,
     };
   }, [margin, pools]);
 }
@@ -79,7 +90,11 @@ export function VaultActionPanel({
   const usdIn = deposit ? units * account.usdcPrice : units * (state?.sharePriceUsd ?? 0);
   const apy7 = (apyOverride !== undefined ? apyOverride : state?.apy7) ?? null;
   const borrow = account.usdcBorrowApy;
-  const borrowedShare = !units || a.walletDeposit ? 0 : Math.min(units, account.usdcDebt) / units;
+  const borrowedShare = !units ? 0 : Math.min(units, account.usdcDebt) / units;
+  // SOL Basis: the USDC leaves the margin before the vbSOL comes back, so the lowest health factor
+  // of the transaction is collateral minus this deposit over debt (estimate; the simulation decides).
+  const routedHf = a.routedDeposit && units > 0 && account.debtUsd > 0 ? projectHealthFactor(account.collateralUsd - usdIn, account.debtUsd) : null;
+  const routedHfLow = routedHf !== null && routedHf <= LIQUIDATION_HEALTH_FACTOR;
   const netApy = netYield(apy7, borrow, borrowedShare);
   const perYear = netApy === null ? null : (usdIn * netApy) / 100;
   const formula = netApy === null ? "0.00% until the vault has enough share-price history" : !units
@@ -150,7 +165,7 @@ export function VaultActionPanel({
               setPctOn(100);
             }}
           >
-            {a.walletDeposit ? "Wallet" : "Margin"}: {fromRaw(a.balance, 6)} {unit}
+            Margin: {fromRaw(a.balance, 6)} {unit}
           </button>
         </div>
       </div>
@@ -176,6 +191,14 @@ export function VaultActionPanel({
               <span>USDC borrow APR</span>
               <span>{pct(borrow ?? 0, 2)}</span>
             </div>
+            {routedHf !== null && (
+              <div className="kv">
+                <span>
+                  Health factor while USDC moves <Info text="SOL Basis withdraws this USDC from your margin account before the vault deposit and returns the vbSOL in the same transaction. The program checks your health factor at that point; this is an estimate at current prices." />
+                </span>
+                <span className={routedHfLow ? "n" : ""}>{nf(Math.max(routedHf, 0), 2)}</span>
+              </div>
+            )}
             {def.kind === "basis" && (
               <div className="kv">
                 <span>Max deposit</span>
@@ -187,8 +210,11 @@ export function VaultActionPanel({
       )}
 
       <p className="fm-note">First use may ask for one extra wallet approval to prepare your account; that setup step does not move funds.</p>
-      {a.walletDeposit && (
-        <p className="fm-note">SOL Basis uses wallet USDC. After the vault deposit, a second approval moves the received shares into your margin account.</p>
+      {a.routedDeposit && (
+        <p className="fm-note">SOL Basis moves this margin USDC through your wallet into the vault and returns the vbSOL to your margin account, in one approval.</p>
+      )}
+      {routedHfLow && (
+        <p className="fm-warnn dg">This would take your health factor to {nf(Math.max(routedHf!, 0), 2)} while the USDC is out of your margin account (must stay above 1.10). Deposit less or repay some USDC debt first.</p>
       )}
       {def.id === "perena-junior" && !deposit && (
         <p className="fm-note">Vanna uses Perena&apos;s instant withdrawal, which includes a 1% exit fee (the 7-day cooldown path is not used).</p>

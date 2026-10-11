@@ -156,9 +156,14 @@ async function readRecentVannaTransactions(address: PublicKey, limit: number) {
         let walletVaultDeposit: RawTx["walletVaultDeposit"];
         if (logs.includes(`Program ${BASIS_PROGRAM} invoke [1]`)) {
           const owner = address.toBase58();
+          // Wallet + its margin account together: the SOL Basis deposit takes the USDC out of the
+          // margin, passes it through the wallet into the vault and puts the vbSOL back into the
+          // margin in one transaction, so the wallet alone nets ~zero (older wallet-funded
+          // deposits net out the same way).
+          const holders = new Set([owner, marginPda(address).toBase58()]);
           const delta = new Map<string,bigint>();
           for (const [balances,sign] of [[tx.meta?.preTokenBalances,-1n],[tx.meta?.postTokenBalances,1n]] as const) {
-            for (const b of balances ?? []) if (b.owner === owner) delta.set(b.mint,(delta.get(b.mint) ?? 0n)+sign*BigInt(b.uiTokenAmount.amount));
+            for (const b of balances ?? []) if (b.owner && holders.has(b.owner)) delta.set(b.mint,(delta.get(b.mint) ?? 0n)+sign*BigInt(b.uiTokenAmount.amount));
           }
           const receipt = VAULTS.find(v=>v.kind==='basis' && (delta.get(v.mint) ?? 0n)>0n);
           const usdc = -(delta.get(getToken('USDC').mint.toBase58()) ?? 0n);
@@ -254,8 +259,9 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
   };
   const basisParser = new EventParser(new PublicKey(BASIS_PROGRAM), vaultProgram(getConnection()).coder as unknown as ConstructorParameters<typeof EventParser>[1]);
   for (const tx of txs) {
-    // SOL Basis deposits execute from the wallet, before a separate margin deposit.
-    // Match the wallet owner so CPI deposits already represented below are not duplicated.
+    // SOL Basis deposits call the vault from the wallet (USDC routed out of and vbSOL back into the
+    // margin in the same transaction). Match the wallet owner so CPI deposits already represented
+    // below are not duplicated.
     try {
       for (const e of basisParser.parseLogs(tx.logs)) {
         const data = e.data as any;

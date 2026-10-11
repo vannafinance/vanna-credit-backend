@@ -10,9 +10,12 @@
  *   that transaction (`submitVaultAction`) straight away. A failed simulation stops before any wallet
  *   approval; a newer request supersedes an older in-flight one.
  * - `quote` / `confirm` (the earlier two-step preview flow) are kept for callers that want a preview.
- * - SOL Basis deposits are wallet-funded: step 1 deposits wallet USDC into the vault, step 2 moves the
- *   received vbSOL into the margin account. Shares stranded in the wallet (step 2 not done) can be
- *   moved with {@link VaultAction.move} (the recovery button).
+ * - Every deposit is paid from the margin account's USDC. SOL Basis cannot run through
+ *   `margin_execute`, so its deposit is ONE transaction (one approval) that moves the USDC from the
+ *   margin to the wallet (health-checked), deposits it into the vault and deposits the received
+ *   vbSOL back into the margin. It is atomic: a failure moves nothing. vbSOL minted above the
+ *   slippage minimum stays in the wallet; it is reported after the deposit and can be moved with
+ *   {@link VaultAction.move} (the recovery button) or is swept by the next SOL Basis deposit.
  * - Withdrawals burn receipt shares held in the margin account.
  */
 import { useRef, useState } from "react";
@@ -28,12 +31,31 @@ import {
 } from "@/lib/solana/vault-actions";
 import { getConnection } from "@/lib/solana/connection";
 import { marginVault } from "@/lib/solana/pdas";
-import { getToken } from "@/lib/solana/tokens";
 import { fromRaw } from "@/lib/solana/math";
 import { showTxStep, showTxSuccess, showTxError, onTxStatus } from "@/lib/tx-progress";
 import { useVaultAccount } from "./use-vaults";
 
 export type VaultCall = "deposit" | "withdraw";
+
+/** Raw receipt shares in the wallet's associated token account (0 when it does not exist). */
+async function walletReceipt(owner: string, mint: string): Promise<bigint> {
+  const a = await getConnection().getAccountInfo(marginVault(new PublicKey(owner), new PublicKey(mint), TOKEN_PROGRAM_ID));
+  return a && a.data.length >= 165 ? a.data.readBigUInt64LE(64) : 0n;
+}
+
+/**
+ * Success text; after a SOL Basis deposit it also reports vbSOL left in the wallet (minted above the
+ * minimum the transaction moved into the margin), which the recovery button can move.
+ */
+async function successText(p: PreparedVaultAction, text: string): Promise<string> {
+  if (!p.walletRouted) return text;
+  try {
+    const left = await walletReceipt(p.owner, p.definition.mint);
+    return left > 0n ? `${text}. ${fromRaw(left, 6)} ${p.definition.symbol} stayed in your wallet; use Move to margin.` : text;
+  } catch {
+    return text;
+  }
+}
 
 export interface VaultAction {
   def: VaultDefinition | undefined;
@@ -45,11 +67,11 @@ export interface VaultAction {
   setAmount: (v: string) => void;
   /** Sets the amount to `pct`% of the spendable balance. */
   fillPercent: (pct: number) => void;
-  /** True for SOL Basis deposits (wallet USDC, two approvals). */
-  walletDeposit: boolean;
-  /** Spendable raw units (6 dp): margin USDC, wallet USDC (SOL Basis deposit) or margin receipt shares. */
+  /** True for SOL Basis deposits (margin USDC routed through the wallet in one transaction). */
+  routedDeposit: boolean;
+  /** Spendable raw units (6 dp): margin USDC (deposit) or margin receipt shares (withdraw). */
   balance: bigint;
-  /** vbSOL sitting in the wallet (SOL Basis step 2 not done). */
+  /** vbSOL sitting in the wallet (minted above a deposit's minimum, or left by an older deposit). */
   walletShares: bigint;
   preview: PreparedVaultAction | null;
   busy: boolean;
@@ -78,24 +100,14 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
     queryKey: ["farm", "wallet-shares", address, id],
     enabled: !!address && !!def,
     staleTime: 5_000,
-    queryFn: async () => {
-      const c = getConnection(),
-        owner = new PublicKey(address!);
-      const data = await c.getMultipleAccountsInfo([
-        marginVault(owner, new PublicKey(def!.mint), TOKEN_PROGRAM_ID),
-        marginVault(owner, getToken("USDC").mint, TOKEN_PROGRAM_ID),
-      ]);
-      return data.map((a) => (a && a.data.length >= 165 ? a.data.readBigUInt64LE(64) : 0n));
-    },
+    queryFn: () => walletReceipt(address!, def!.mint),
   });
   const holding = def ? margin?.collateral.find((c) => c.mint === def.mint) : undefined;
-  const walletDeposit = id === "basis-sol" && call === "deposit";
+  const routedDeposit = id === "basis-sol" && call === "deposit";
   const balance =
     call === "withdraw"
       ? BigInt(holding?.amountRaw ?? "0")
-      : walletDeposit
-        ? (wallet.data?.[1] ?? 0n)
-        : BigInt(margin?.collateral.find((c) => c.symbol === "USDC")?.amountRaw ?? "0");
+      : BigInt(margin?.collateral.find((c) => c.symbol === "USDC")?.amountRaw ?? "0");
   const usable = preview && preview.owner === address && preview.definition.id === id && preview.call === call ? preview : null;
   const reset = () => {
     request.current++;
@@ -124,13 +136,13 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
     if (!usable) return;
     setBusy(true);
     setError("");
-    showTxStep(walletDeposit ? "Step 1/2: Deposit wallet USDC into SOL Basis" : "Confirm vault transaction");
+    showTxStep(routedDeposit ? "Deposit margin USDC into SOL Basis" : "Confirm vault transaction");
     try {
       const sig = await submitVaultAction(usable, undefined, onTxStatus);
       setSignature(sig);
       setAmountState("");
       setPreview(null);
-      showTxSuccess("Vault transaction confirmed");
+      showTxSuccess(await successText(usable, "Vault transaction confirmed"));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Transaction failed";
       setError(msg);
@@ -146,7 +158,7 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
     setBusy(true);
     setError("");
     setPreview(null);
-    showTxStep(walletDeposit ? "Step 1/2: Deposit wallet USDC into SOL Basis" : call === "deposit" ? "Deposit into the vault" : "Withdraw from the vault");
+    showTxStep(routedDeposit ? "Deposit margin USDC into SOL Basis" : call === "deposit" ? "Deposit into the vault" : "Withdraw from the vault");
     try {
       // Simulates first: a failing simulation throws here, before the wallet is asked to sign.
       const prepared = await prepareVaultAction(id, call, amount);
@@ -154,7 +166,7 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
       const sig = await submitVaultAction(prepared, undefined, onTxStatus);
       setSignature(sig);
       setAmountState("");
-      showTxSuccess(call === "deposit" ? "Deposit confirmed" : "Withdrawal confirmed");
+      showTxSuccess(await successText(prepared, call === "deposit" ? "Deposit confirmed" : "Withdrawal confirmed"));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Transaction failed";
       if (current === request.current) setError(msg);
@@ -198,9 +210,9 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
       reset();
       setAmountState(fromRaw((balance * BigInt(pct)) / 100n, 6));
     },
-    walletDeposit,
+    routedDeposit,
     balance,
-    walletShares: wallet.data?.[0] ?? 0n,
+    walletShares: wallet.data ?? 0n,
     preview: usable,
     busy,
     error,

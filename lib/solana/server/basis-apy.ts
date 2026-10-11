@@ -53,3 +53,37 @@ export function basisDepositPrices(def: VaultDefinition): Promise<NavPoint[]> {
   pending.set(key, request);
   return request;
 }
+
+const launchCache = new Map<string, number>();
+/**
+ * Unix seconds of a vault account's first transaction (its launch), read once per process by paging
+ * its signatures back to the oldest; null when the history can't be read.
+ */
+export async function basisLaunchedAt(def: VaultDefinition): Promise<number | null> {
+  const hit = launchCache.get(def.account);
+  if (hit) return hit;
+  try {
+    const conn = getConnection();
+    let before: string | undefined;
+    let oldest: number | null = null;
+    for (let page = 0; page < 20; page++) {
+      const sigs = await conn.getSignaturesForAddress(new PublicKey(def.account), { limit: 1000, before }, 'confirmed');
+      if (!sigs.length) break;
+      for (const s of sigs) if (s.blockTime && s.blockTime > 1.6e9) oldest = oldest === null ? s.blockTime : Math.min(oldest, s.blockTime);
+      before = sigs[sigs.length - 1].signature;
+      if (sigs.length < 1000) break;
+    }
+    if (oldest !== null) launchCache.set(def.account, oldest);
+    return oldest;
+  } catch {
+    return null;
+  }
+}
+
+/** Compounded annual rate of a share price that started at 1.0, `seconds` after launch. */
+export function sinceLaunchApy(sharePrice: number, seconds: number): number | null {
+  // Under a day the annualised figure is too noisy to show.
+  if (!(sharePrice > 0) || !(seconds >= DAY / 1000)) return null;
+  const v = (Math.pow(sharePrice, (365 * 86400) / seconds) - 1) * 100;
+  return Number.isFinite(v) ? v : null;
+}

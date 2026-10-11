@@ -258,11 +258,12 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
         const dangling = side === "yes" ? pool.yesDangling : pool.noDangling;
         const supply = side === "yes" ? pool.yesShareSupply : pool.noShareSupply;
         const redeemShares = sharesForAssets(need, ownShares, dangling, pool.invested, supply);
+        // redeemIxs may burn fewer shares than asked (a side's last holders; see sizeRedeem): r.shares / r.value are what it does.
         const r = await redeemIxs(owner, mints, side, redeemShares, pool);
         routeAccounts.push(...r.routeAccounts);
         groups.push({ label: `Redeem pooled ${side.toUpperCase()}`, legIndex, instructions: r.instructions, computeUnits: 600_000, heap: true, lookupTables: r.lookupTables, alone: r.lookupTables.length > 0 });
         wallet += r.value;
-        quote.redeemedShares = fromRawUnits(redeemShares, 9);
+        quote.redeemedShares = fromRawUnits(r.shares, 9);
         mergeMarkets.add(m.info.id);
       }
       if (wallet < amount) {

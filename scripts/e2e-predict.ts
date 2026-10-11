@@ -7,6 +7,11 @@
  *   3. buy NO on the same market → keeper merge → pool USDC lent into Vanna's USDC reserve
  *   4. multi-leg buy across 2 outcomes of one event with ONE signAllTransactions
  *   5. sell the pooled YES back (redeem + sell to the maker)
+ *   5b. LARGE pooled position (E2E_PREDICT_LARGE CASH per side, default 400; 0 skips): buy YES + NO
+ *       (merged and lent), then sell ALL of the pooled side whose redeem needs the larger route
+ *       (normally YES on a fresh pool). The redeem's USDC → CASH route is hundreds of
+ *       USDC, so interest accrued between the server's read and the transaction landing must be
+ *       covered (regression: SwapAmountMismatch 6020 when the route was sized exactly at the read).
  *   6. (optional, E2E_PREDICT_USDC=1) buy paying with USDC (USDC → CASH via Jupiter/Manifest)
  *
  * Usage: npx tsx scripts/e2e-predict.ts [marketId]   (PREDICT_API=http://localhost:3100)
@@ -117,6 +122,40 @@ async function main() {
   const after = pos.positions.find((p) => p.marketId === m.marketId && p.side === "yes");
   check(pos.wallet.cash > cash0, `CASH ${cash0} → ${pos.wallet.cash} (+${qs.amountOut})`);
   check(!after || after.poolShares < held.poolShares, `pool shares ${held.poolShares} → ${after?.poolShares ?? 0}`);
+
+  // ---- 5b. large pooled position: sell it all ---------------------------------------------------
+  const large = Number(process.env.E2E_PREDICT_LARGE ?? 400);
+  if (large > 0) {
+    log("Faucet (large)", await client.requestPredictFaucet(owner, Math.min(1000, 2 * large + 50)));
+    await trade("buy YES (large)", [{ marketId: m.marketId, outcome: "yes", side: "buy", amount: large }]);
+    const bigNo = await trade("buy NO (large)", [{ marketId: m.marketId, outcome: "no", side: "buy", amount: large }]);
+    const bigMerge = bigNo.merges.find((r) => r.marketId === m.marketId);
+    check(bigMerge?.signature, `keeper merged ${bigMerge?.merged} pairs (large): ${bigMerge?.signature ?? bigMerge?.error ?? bigMerge?.skipped}`);
+    pos = await positions();
+    const poolBig = await poolOf(m.marketId);
+    // Sell the side whose redeem needs the bigger USDC → CASH route (the other side's dangling tokens
+    // may cover it outright on a pool that already holds a lot of them).
+    const routeOf = (side: "yes" | "no") => {
+      const p = pos.positions.find((x) => x.marketId === m.marketId && x.side === side);
+      return p ? p.poolValueShares - (side === "yes" ? poolBig.yesDangling : poolBig.noDangling) : -Infinity;
+    };
+    const bigSide = routeOf("yes") >= routeOf("no") ? "yes" : "no";
+    const BIG = bigSide.toUpperCase();
+    const big = pos.positions.find((p) => p.marketId === m.marketId && p.side === bigSide)!;
+    log(`Large ${BIG} position`, { shares: big.shares, wallet: big.walletShares, pool: big.poolShares, poolValue: big.poolValueShares }, "pool", poolBig);
+    const route = routeOf(bigSide);
+    if (route > 100) log(`  redeeming it needs a ${route.toFixed(2)} USDC → CASH route`);
+    else log(`  ⚠ the pool's dangling ${BIG} cover most of it (route ${route.toFixed(2)}): pass a market id with fewer dangling tokens to exercise a large route`);
+    const cashBig = pos.wallet.cash;
+    const sellAll = await trade(`sell ALL ${BIG} (large)`, [{ marketId: m.marketId, outcome: bigSide, side: "sell", amount: Math.floor(big.shares * 1e6) / 1e6 }]);
+    const qa = sellAll.built.quotes[0];
+    pos = await positions();
+    const left = pos.positions.find((p) => p.marketId === m.marketId && p.side === bigSide);
+    check(qa.redeemedShares > 0 && pos.wallet.cash > cashBig, `sold ${qa.amountIn} ${BIG} for ${qa.amountOut} CASH after redeeming ${qa.redeemedShares} pool shares`);
+    // A route returning above par (Manifest often does) becomes extra pairs for both sides; a side's last
+    // holder keeps that surplus on its dust shares, so allow a sliver rather than exactly zero.
+    check(!left || left.poolValueShares < big.poolValueShares * 0.005, `pooled ${BIG} left: ${left?.poolValueShares ?? 0} of ${big.poolValueShares}`);
+  }
 
   // ---- 6. pay with USDC ------------------------------------------------------------------------
   if (process.env.E2E_PREDICT_USDC !== "0") {

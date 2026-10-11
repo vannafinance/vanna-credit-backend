@@ -2,7 +2,7 @@
  * Pure Predict maths (unit-tested in math.test.ts): prices from maker fills, trade sizing, and the
  * outcome_yield_pool share maths (bit-for-bit with programs/outcome_yield_pool/src/math.rs).
  */
-import { POOL_VIRTUAL_ASSETS, POOL_VIRTUAL_SHARES } from "./constants";
+import { POOL_SWAP_DUST_UNITS, POOL_SWAP_SLACK_PPM, POOL_SWAP_SLACK_UNITS, POOL_VIRTUAL_ASSETS, POOL_VIRTUAL_SHARES } from "./constants";
 import type { MarketPrices } from "./types";
 
 export interface Fill {
@@ -101,6 +101,59 @@ export function sharesForAssets(assetsRaw: bigint, held: bigint, dangling: bigin
   // Ceil-division can still undershoot by the floor in to_assets_down; nudge up until it covers.
   while (shares < held && previewRedeemValue(shares, dangling, invested, shareSupply) < assetsRaw) shares += 1n;
   return shares > held ? held : shares;
+}
+
+/**
+ * Most shares whose redeem value is at most `assetsRaw` (the largest s with
+ * `floor(s × (dangling + invested + 1) / (supply + 1000)) ≤ assetsRaw`), capped at `held`.
+ */
+export function maxSharesForAssets(assetsRaw: bigint, held: bigint, dangling: bigint, invested: bigint, shareSupply: bigint): bigint {
+  if (assetsRaw < 0n) return 0n;
+  const totalAssets = dangling + invested + POOL_VIRTUAL_ASSETS;
+  const supply = shareSupply + POOL_VIRTUAL_SHARES;
+  const shares = ((assetsRaw + 1n) * supply - 1n) / totalAssets;
+  return shares > held ? held : shares;
+}
+
+/** redeem.rs: how far the declared route input may exceed `shortfall` (`SWAP_SLACK_PPM`, `SWAP_SLACK_UNITS`). */
+export const redeemSwapSlack = (shortfall: bigint): bigint => (shortfall * POOL_SWAP_SLACK_PPM) / 1_000_000n + POOL_SWAP_SLACK_UNITS;
+
+export interface RedeemSizing {
+  /** Shares to burn (≤ requested; fewer only when the pool cannot fund the route's headroom, see below). */
+  shares: bigint;
+  /** Outcome tokens the redeem pays at least (value at the read, which interest only raises). */
+  value: bigint;
+  /** Declared USDC input of the USDC → CASH route; 0n when the dangling tokens cover the redeem. */
+  usdcIn: bigint;
+}
+
+/**
+ * Sizes one `redeem` so its route passes the program's `SwapAmountMismatch` check when it lands, not
+ * when it was read. The program computes the shortfall AFTER `PublicRefreshReserve` accrues interest,
+ * so it only grows with time, and requires `shortfall ≤ usdc_in ≤ shortfall + slack(shortfall)`.
+ * The route is therefore sized for the shortfall at `investedAhead` (invested projected
+ * `POOL_REDEEM_HORIZON_SECS` ahead) plus `SWAP_DUST_UNITS` (so a route a few units under par still
+ * splits the full payout), never above `shortfall_now + slack(shortfall_now)` (≤ the program's
+ * slack, since its shortfall is ≥ ours) nor above `investedNow` (what the pool can surely redeem
+ * from Vanna). When that last cap bites — the side's last holders redeeming nearly all of it —
+ * the shares are trimmed so the projected shortfall fits, leaving accrued dust in the pool.
+ */
+export function sizeRedeem(sharesRaw: bigint, dangling: bigint, investedNow: bigint, investedAhead: bigint, shareSupply: bigint): RedeemSizing {
+  let shares = sharesRaw;
+  const valueAhead = (s: bigint) => previewRedeemValue(s, dangling, investedAhead, shareSupply);
+  if (valueAhead(shares) - dangling + POOL_SWAP_DUST_UNITS > investedNow && valueAhead(shares) > dangling) {
+    shares = maxSharesForAssets(dangling + investedNow - POOL_SWAP_DUST_UNITS, shares, dangling, investedAhead, shareSupply);
+  }
+  const value = previewRedeemValue(shares, dangling, investedNow, shareSupply);
+  const ahead = valueAhead(shares);
+  // Dangling tokens cover it even at the horizon: no route (the program ignores swap_data then).
+  if (ahead <= dangling) return { shares, value, usdcIn: 0n };
+  // Covered now but maybe not when it lands: a route is attached anyway (ignored if unneeded).
+  const shortfall = value > dangling ? value - dangling : 0n;
+  const want = ahead - dangling + POOL_SWAP_DUST_UNITS;
+  const cap = shortfall + redeemSwapSlack(shortfall);
+  const usdcIn = [want, cap, investedNow].reduce((a, b) => (b < a ? b : a));
+  return { shares, value, usdcIn: usdcIn < shortfall ? shortfall : usdcIn };
 }
 
 /**

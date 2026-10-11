@@ -81,6 +81,22 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTN
 export const POOL_VIRTUAL_ASSETS = 1n;
 export const POOL_VIRTUAL_SHARES = 1_000n;
 
+/**
+ * `redeem`'s tolerance on the declared route input (programs/outcome_yield_pool/src/instructions/redeem.rs,
+ * `SWAP_SLACK_PPM` / `SWAP_SLACK_UNITS`): it must be ≥ the shortfall the program computes AFTER refreshing
+ * Vanna's reserve, and at most `shortfall × 1000 / 1e6 + 1000` above it.
+ */
+export const POOL_SWAP_SLACK_PPM = 1_000n;
+export const POOL_SWAP_SLACK_UNITS = 1_000n;
+/** constants.rs `SWAP_DUST_UNITS`: what a route may return under par (the redeemer is paid that much less). */
+export const POOL_SWAP_DUST_UNITS = 5n;
+/**
+ * How far ahead (seconds of fork time) a redeem's route is sized for: the reserve keeps accruing interest
+ * between the server's read and the transaction landing (wallet prompt, retries), and every second of it
+ * raises the shortfall the program will compute. 15 minutes of accrual is far below the slack above.
+ */
+export const POOL_REDEEM_HORIZON_SECS = 900n;
+
 /** Trade limits (CASH, UI units) for one leg. */
 export const MAX_TRADE_CASH = 5_000;
 export const MIN_TRADE_CASH = 0.1;

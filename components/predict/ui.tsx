@@ -169,11 +169,14 @@ export function VsBadge({ e, cls = "" }: { e: PredictEvent; cls?: string }) {
 export const EvLogo = ({ e, cls = "" }: { e: PredictEvent; cls?: string }) =>
   e.type === "match" && mainOuts(e).filter((o) => !isDraw(o)).length === 2 ? <VsBadge e={e} cls={cls} /> : <EvIc e={e} cls={cls} />;
 
+/** Same text as the tag (World tags some events "Politics" in the Politics category): shown once. */
+export const catDup = (e: PredictEvent) => e.tag.trim().toLowerCase() === CATN[e.cat].toLowerCase();
+
 export function Tags({ e }: { e: PredictEvent }) {
   return (
     <div className="pd-tags">
       <span className="pd-tag">{e.tag}</span>
-      <span className="pd-cat">{CATN[e.cat]}</span>
+      {!catDup(e) && <span className="pd-cat">{CATN[e.cat]}</span>}
       {e.live && <span className="pd-live">LIVE</span>}
       {e.when && <span className="pd-when">{e.when}</span>}
     </div>

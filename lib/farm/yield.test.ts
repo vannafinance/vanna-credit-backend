@@ -45,12 +45,19 @@ describe('vault yield availability and fallback', () => {
 
 describe('vaultApy (Basis headline APY)', () => {
   it('uses the realized 7D APY when it exists', () => {
-    expect(vaultApy(12.5, 30, 500, 1000)).toEqual({ value: 12.5, estimate: false });
+    expect(vaultApy(12.5, 30, 500, 1000)).toEqual({ value: 12.5, estimate: false, source: '7d' });
   });
   it('falls back to the funding estimate on the short share, labelled as an estimate', () => {
-    expect(vaultApy(null, 30, 500, 1000)).toEqual({ value: 15, estimate: true });
+    expect(vaultApy(null, 30, 500, 1000)).toEqual({ value: 15, estimate: true, source: 'funding' });
   });
   it('has no value without funding data', () => {
-    expect(vaultApy(undefined, null, 500, 1000)).toEqual({ value: null, estimate: false });
+    expect(vaultApy(undefined, null, 500, 1000)).toEqual({ value: null, estimate: false, source: null });
+  });
+});
+
+describe('vaultApy since launch', () => {
+  it('prefers 7D, then since-launch, then the funding estimate', () => {
+    expect(vaultApy(null, 30, 500, 1000, 5.46)).toEqual({ value: 5.46, estimate: false, source: 'launch' });
+    expect(vaultApy(4, 30, 500, 1000, 5.46)).toEqual({ value: 4, estimate: false, source: '7d' });
   });
 });

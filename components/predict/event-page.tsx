@@ -3,8 +3,9 @@
 /**
  * Predict event page (design predict.js `viewEvent`, V4): head card (tiles; price history is not
  * indexed, so a quiet note replaces the chart), the outcome rows (Buy Yes / Buy No, or +/✓ while
- * the bet slip is on), "Your position" (paired gauge, source badge, Buy more / Sell), the Earning /
- * Prices / Rules / Activity tabs and the sticky trade panel.
+ * the bet slip is on), "Your position" (one collapsible row per position: side, outcome, status,
+ * shares, value; expanded: paired gauge, tiles, Buy more / Sell; the source badge once when every
+ * position shares it), the Earning / Prices / Rules / Activity tabs and the sticky trade panel.
  * Route id = `<eventId>[~<marketId>[~yes|no]]`: a market id opens that market selected, the panel
  * on Buy with the default amount. Real data: GET /api/predict/events/:id (fresh prices and pool
  * balances), the wallet's positions and its own trades, the USDC pool rate.
@@ -22,7 +23,7 @@ import {
   DEF_AMT, LEG_AMT, MAX_TRADE_LEGS, ask, bid, byChance, canTrade, defaultOut, isDraw, lab, mName, mainOuts, nl, outOf, pairsIn, pairsOf, parseRouteId, poolSide, pooled, yl,
 } from "@/lib/predict/view";
 import type { PredictEvent, PredictOutcome as Outcome, PredictPosition, Side } from "@/lib/predict/types";
-import { CATN, Cell, EvLogo, INFO, Kv, Meter, PIC, PoolBar, SideTag, SrcBadge, TeamLogo, Tile, cf, cpair, p2, pc, pp, shf } from "./ui";
+import { CATN, Cell, catDup, EvLogo, INFO, Kv, Meter, PIC, PoolBar, SideTag, SrcBadge, TeamLogo, Tile, cf, cpair, p2, pc, pp, shf } from "./ui";
 import { TradePanel, type PanelState, heldOf } from "./trade-panel";
 import { LinkedSheet } from "./linked-sheet";
 
@@ -118,13 +119,22 @@ function OutRow({ e, o, on, st, held, onRow, onPick }: { e: PredictEvent; o: Out
   );
 }
 
-function EarnTab({ e, o, rate, mineV }: { e: PredictEvent; o: Outcome; rate: number; mineV: number }) {
+/**
+ * Earning tab: the selected market's pairs and pool balance, then every pooled market of the event.
+ * Markets whose pool is still empty (no Yes, no No) fold behind a "+N markets with no pool yet" toggle.
+ */
+function EarnTab({ e, o, rate }: { e: PredictEvent; o: Outcome; rate: number }) {
+  const [showEmpty, setShowEmpty] = useState(false);
   const y = poolSide(o, "yes", rate);
   const n = poolSide(o, "no", rate);
   const pairs = pairsOf(o);
   const ops = e.outs.filter(pooled);
   if (!pooled(o) && !ops.length)
     return <p className="pd-note sm">{INFO.notPooled} Pools open market by market.</p>;
+  // An empty pool has no pairs and nothing on either side; the selected market always stays listed.
+  const isEmpty = (x: Outcome) => pairsOf(x) <= 0 && x.pool.yes <= 0 && x.pool.no <= 0;
+  const hidden = ops.filter((x) => isEmpty(x) && x.k !== o.k);
+  const shown = showEmpty ? ops : ops.filter((x) => !hidden.includes(x));
   return (
     <>
       <div className="pd-et">
@@ -158,12 +168,6 @@ function EarnTab({ e, o, rate, mineV }: { e: PredictEvent; o: Outcome; rate: num
             </div>
           </>
         )}
-        <ul className="pd-how">
-          <li>Your shares earn when they can be paired with the opposite side in this market&apos;s pool.</li>
-          <li>Paired shares earn {p2(rate)} in Vanna&apos;s USDC pool. Unpaired shares wait until more of the other side arrives.</li>
-          <li>More deposits on the other side mean more of yours earn. If they leave, fewer of yours earn.</li>
-          <li>Yield is paid in extra shares of your side, so it pays out only if your side wins.</li>
-        </ul>
       </div>
       {e.outs.length > 1 && ops.length > 0 && (
         <div className="pd-vtbl">
@@ -176,7 +180,7 @@ function EarnTab({ e, o, rate, mineV }: { e: PredictEvent; o: Outcome; rate: num
             </span>
             <span>No earns</span>
           </div>
-          {ops.map((x) => {
+          {shown.map((x) => {
             const a = poolSide(x, "yes", rate);
             const b = poolSide(x, "no", rate);
             return (
@@ -197,16 +201,12 @@ function EarnTab({ e, o, rate, mineV }: { e: PredictEvent; o: Outcome; rate: num
               </div>
             );
           })}
+          {hidden.length > 0 && (
+            <button type="button" className="pd-vt-more" aria-expanded={showEmpty} onClick={() => setShowEmpty(!showEmpty)}>
+              {showEmpty ? "Hide markets with no pool yet" : `+${hidden.length} market${hidden.length === 1 ? "" : "s"} with no pool yet`}
+            </button>
+          )}
         </div>
-      )}
-      {mineV > 0 && (
-        <p className="pd-note">
-          Your paired shares here are worth{" "}
-          <b className="num" style={{ color: "var(--pd-text)" }}>
-            {usd(mineV)}
-          </b>{" "}
-          today.
-        </p>
       )}
     </>
   );
@@ -289,69 +289,108 @@ function ActTab({ e, connected }: { e: PredictEvent; connected: boolean }) {
   );
 }
 
-/** One position on this event (pool part + wallet part of one market side). */
-function PosBlock({ e, p, rate, onMore, onSell, onEarn, busy }: { e: PredictEvent; p: PredictPosition; rate: number; onMore: () => void; onSell: () => void; onEarn: (() => void) | null; busy: boolean }) {
+/** Where a position's shares are: Vanna's pool when any of them are in it, else the wallet (World). */
+const srcOf = (p: PredictPosition): "vanna" | "world" => (p.poolValueShares > 0 ? "vanna" : "world");
+
+/**
+ * One position on this event (pool part + wallet part of one market side), as a collapsible row.
+ * Collapsed: side, outcome, status, shares, value with P&L. Expanded: the paired gauge, the wallet
+ * notice (Start earning), the detail tiles and Buy more / Sell. `showSrc` adds the source badge when
+ * the event's positions do not all share one source (otherwise the section header shows it once).
+ */
+function PosBlock({
+  e, p, onMore, onSell, onEarn, busy, defaultOpen, showSrc,
+}: { e: PredictEvent; p: PredictPosition; onMore: () => void; onSell: () => void; onEarn: (() => void) | null; busy: boolean; defaultOpen: boolean; showSrc: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const o = outOf(e, p.marketId);
   const L = p.label;
   const share = p.shares > 0 ? Math.min(1, p.matched / 100) : 0;
   const inPool = p.poolValueShares > 0;
-  const status = !inPool ? <span className="mini warn">Not earning</span> : p.merging ? <span className="mini warn">Joining the pool</span> : <span className="mini ok">Earning {p2(p.apy)}</span>;
+  // In the pool with nothing paired yet earns 0%, so it reads "Not paired" rather than "Earning 0.00%".
+  const status = !inPool ? (
+    <span className="mini warn">Not earning</span>
+  ) : p.merging ? (
+    <span className="mini warn">Joining the pool</span>
+  ) : share <= 0 || p.apy <= 0 ? (
+    <span className="mini warn">Not paired</span>
+  ) : (
+    <span className="mini ok">Earning {p2(p.apy)}</span>
+  );
+  const bodyId = `pd-pos-${p.id}`;
+  const [pa, pn] = cpair(p.avg * 100, p.mark * 100);
   return (
-    <div className="pd-p">
-      <div className="pd-p-h">
+    <div className={`pd-p ${open ? "open" : ""}`}>
+      <button type="button" className="pd-p-row" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
         <SideTag s={p.side} L={L} />
-        <b>{o ? mName(e, o) : p.market}</b>
-        {status}
-        <SrcBadge src={inPool ? "vanna" : "world"} />
-        <span className="pd-p-a">
-          <button type="button" className="btn-s" onClick={onMore} disabled={!o || !canTrade(o)}>
-            Buy more
-          </button>
-          <button type="button" className="btn-s" onClick={onSell}>
-            Sell
-          </button>
+        <span className="pd-p-n">
+          <b>{o ? mName(e, o) : p.market}</b>
+          {status}
         </span>
-      </div>
-      {inPool && !p.merging && (
-        <div className="pd-pair">
-          <div className="pd-pair-h">
-            <b>
-              Earning on {pp(share)} of your shares <Info text={INFO.paired} />
-            </b>
-            <span className="num">
-              {shf(p.shares * share)} of {shf(p.shares)} {L} paired
+        <span className="pd-p-sh num">{shf(p.shares)} shares</span>
+        <span className="pd-p-v num">
+          <b>{usd(p.value)}</b>
+          <small className={p.pnl >= 0 ? "pos" : "neg"}>{sUsd(p.pnl)}</small>
+        </span>
+        <span className="pd-p-cv" aria-hidden="true">
+          {IC.chev}
+        </span>
+      </button>
+      {open && (
+        <div className="pd-p-b" id={bodyId}>
+          {inPool && !p.merging && share > 0 && (
+            <div className="pd-pair">
+              <div className="pd-pair-h">
+                <b>
+                  Earning on {pp(share)} of your shares <Info text={INFO.paired} />
+                </b>
+                <span className="num">
+                  {shf(p.shares * share)} of {shf(p.shares)} {L} paired
+                </span>
+              </div>
+              <Meter v={share} />
+            </div>
+          )}
+          {p.walletShares > 0 && (
+            <div className="pd-qd">
+              <span>
+                {IC.wallet}
+                <span>
+                  <b className="num">
+                    {shf(p.walletShares)} {L} in your wallet
+                  </b>{" "}
+                  {onEarn ? "are not earning. Move them into Vanna's pool to earn." : "do not earn: this market is not in Vanna's pool yet."}
+                </span>
+              </span>
+              {onEarn && (
+                <button type="button" className="btn-v" disabled={busy} onClick={onEarn}>
+                  Start earning
+                </button>
+              )}
+            </div>
+          )}
+          {/* Sub-lines only where they add something (yield shares, buy date, joining); tiles with nothing in them
+              (no value in the pool, nothing earned) are left out, as is the gauge while nothing is paired. */}
+          <div className="pd-p-g num">
+            <Cell k="Avg / now" v={<span className="pd-ba">{pa}{IC.arrow}{pn}</span>} sub={p.since ? `bought ${p.since}` : undefined} />
+            {(p.inVault > 0 || p.merging) && <Cell k={<>Earning in pool <Info text={INFO.inPool} /></>} v={usd(p.inVault)} sub={p.merging ? "joining" : undefined} />}
+            {(p.inVault > 0 || p.earned > 0) && (
+              <Cell k={<>Earned <Info text={INFO.earned} /></>} v={<span className="pos">{sUsd(p.earned)}</span>} sub={p.yieldShares > 0.005 ? `${shf(p.yieldShares)} extra ${L} shares` : undefined} />
+            )}
+            <Cell k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(p.pays)} />
+          </div>
+          <div className="pd-p-a">
+            {showSrc && <SrcBadge src={srcOf(p)} />}
+            <span className="pd-p-ab">
+              <button type="button" className="btn-s" onClick={onMore} disabled={!o || !canTrade(o)}>
+                Buy more
+              </button>
+              <button type="button" className="btn-s" onClick={onSell}>
+                Sell
+              </button>
             </span>
           </div>
-          <Meter v={share} />
-          <p className="num">Changes as people buy or sell on either side. Paired shares earn {p2(rate)}.</p>
         </div>
       )}
-      {p.walletShares > 0 && (
-        <div className="pd-qd">
-          <span>
-            {IC.wallet}
-            <span>
-              <b className="num">
-                {shf(p.walletShares)} {L} in your wallet
-              </b>{" "}
-              {onEarn ? "are not earning. Move them into Vanna's pool to earn." : "do not earn: this market is not in Vanna's pool yet."}
-            </span>
-          </span>
-          {onEarn && (
-            <button type="button" className="btn-v" disabled={busy} onClick={onEarn}>
-              Start earning
-            </button>
-          )}
-        </div>
-      )}
-      <div className="pd-p-g num">
-        <Cell k="Shares" v={shf(p.shares)} sub={p.yieldShares > 0.005 ? `${shf(p.yieldShares)} extra from yield` : p.since ? `bought ${p.since}` : "held now"} />
-        <Cell k="Avg / now" v={<span className="pd-ba">{cpair(p.avg * 100, p.mark * 100)[0]}{IC.arrow}{cpair(p.avg * 100, p.mark * 100)[1]}</span>} />
-        <Cell k="Value" v={usd(p.value)} sub={<span className={p.pnl >= 0 ? "pos" : "neg"}>{sUsd(p.pnl)} P&amp;L</span>} />
-        <Cell k={<>Earning in pool <Info text={INFO.inPool} /></>} v={usd(p.inVault)} sub={p.merging ? "joining" : `${pp(share)} paired`} />
-        <Cell k={<>Earned <Info text={INFO.earned} /></>} v={<span className="pos">{sUsd(p.earned)}</span>} sub={`${shf(Math.max(0, p.yieldShares))} extra ${L} shares`} />
-        <Cell k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(p.pays)} sub={`${p2(p.apy)} APY now`} />
-      </div>
     </div>
   );
 }
@@ -405,7 +444,8 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
   const note = e.note ? e.note.charAt(0).toUpperCase() + e.note.slice(1) : e.exh === false ? "Every listed outcome can lose" : "";
   const when = e.live ? `${e.when ?? ""}` : e.when ? e.when : e.ends ? `Ends ${e.ends}` : e.last ? `Last trade ${e.last}` : "";
   const tv = mine.reduce((t, p) => t + p.value, 0);
-  const mineV = mine.reduce((t, p) => t + p.inVault, 0);
+  // Source shown once in the header when every position shares it, else on each expanded row.
+  const oneSrc = mine.length && mine.every((p) => srcOf(p) === srcOf(mine[0])) ? srcOf(mine[0]) : null;
   const pairsAll = pairsIn(e);
 
   return (
@@ -421,7 +461,7 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
               <div className="pd-h-q">
                 <div className="pd-h-tags">
                   <span className="pd-ltag">{e.tag}</span>
-                  <span className="pd-hcat">{CATN[e.cat]}</span>
+                  {!catDup(e) && <span className="pd-hcat">{CATN[e.cat]}</span>}
                   {e.live && <span className="pd-live">LIVE</span>}
                   {when && <span className="pd-hcat num">{when}</span>}
                   <span className="pd-hcat num">Vol {usdC(e.vol)}</span>
@@ -488,8 +528,11 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
           {mine.length > 0 && (
             <section className="pd-box pd-pos">
               <div className="pd-oh">
-                <h2>Your position</h2>
-                <span className="num">{usd(tv)}</span>
+                <h2>Your position{mine.length > 1 ? "s" : ""}</h2>
+                <span className="pd-pos-t num">
+                  {oneSrc && <SrcBadge src={oneSrc} />}
+                  {usd(tv)}
+                </span>
               </div>
               {mine.map((p) => {
                 const x = outOf(e, p.marketId);
@@ -499,8 +542,9 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
                     key={p.id}
                     e={e}
                     p={p}
-                    rate={rate}
                     busy={earn.busy}
+                    defaultOpen={mine.length === 1}
+                    showSrc={!oneSrc}
                     onEarn={imp ? () => earn.start([imp]) : null}
                     onMore={() => {
                       setSel(p.marketId);
@@ -527,7 +571,7 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
               ))}
             </div>
             <div className="pd-tab-b">
-              {tab === "earning" ? <EarnTab e={e} o={o} rate={rate} mineV={mineV} /> : tab === "prices" ? <PricesTab e={e} o={o} /> : tab === "rules" ? <RulesTab e={e} /> : <ActTab e={e} connected={acct.connected} />}
+              {tab === "earning" ? <EarnTab e={e} o={o} rate={rate} /> : tab === "prices" ? <PricesTab e={e} o={o} /> : tab === "rules" ? <RulesTab e={e} /> : <ActTab e={e} connected={acct.connected} />}
             </div>
           </section>
         </div>

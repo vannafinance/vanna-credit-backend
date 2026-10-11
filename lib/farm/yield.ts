@@ -41,15 +41,26 @@ export interface VaultApy {
   value: number | null;
   /** True when `value` is the funding estimate, not a realized share-price return. */
   estimate: boolean;
+  /** Where it comes from: 7-day share price, share price since launch, or Phoenix funding. */
+  source?: "7d" | "launch" | "funding" | null;
 }
 
 /**
- * Realized 7-day share-price APY when the vault has a 7-day baseline; until then the estimate from
+ * Realized 7-day share-price APY when the vault has a 7-day baseline; else the realized APY since
+ * launch (share price from 1.0, annualised by the second); only without either, the estimate from
  * what a basis vault actually earns — the last 7 days of Phoenix mainnet funding (real, hourly) on
  * the share of NAV held short (`grossFundingApr`). Before fees and execution, so it is labelled.
  */
-export function vaultApy(realized: number | null | undefined, fundingAvg7: number | null | undefined, shortUsd: number | null | undefined, navUsd: number | null | undefined): VaultApy {
-  if (realized != null && Number.isFinite(realized)) return { value: realized, estimate: false };
+export function vaultApy(
+  realized: number | null | undefined,
+  fundingAvg7: number | null | undefined,
+  shortUsd: number | null | undefined,
+  navUsd: number | null | undefined,
+  sinceLaunch?: number | null,
+): VaultApy {
+  if (realized != null && Number.isFinite(realized)) return { value: realized, estimate: false, source: "7d" };
+  // Realized by the second since launch (share price from 1.0) before 7 days of history exist.
+  if (sinceLaunch != null && Number.isFinite(sinceLaunch)) return { value: sinceLaunch, estimate: false, source: "launch" };
   const est = grossFundingApr(fundingAvg7, shortUsd, navUsd);
-  return { value: est, estimate: est !== null };
+  return { value: est, estimate: est !== null, source: est !== null ? "funding" : null };
 }

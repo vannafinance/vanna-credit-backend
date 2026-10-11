@@ -277,6 +277,7 @@ html:not(.dark) .v3 .fm-act.k .fm-cta:disabled{background:#a7a7a7;color:#fff}   
 .v3 .fm-net .r .big{color:var(--text)}
 .v3 .fm-net .f{font-size:11px;color:var(--label);margin-top:2px;min-height:16px}
 .v3 .fm-kvs{margin-top:8px}
+.v3 .fm-kvs .kv .n{color:var(--danger)}
 .v3 .fm-warnn.dg{color:var(--danger);background:var(--short-soft);border-color:var(--danger)}
 .v3 .fm-warnn{margin-top:8px;font-size:11px;line-height:1.45;color:var(--warn);background:var(--fm-warnn-bg);border:1px solid var(--fm-warnn-bd);border-radius:10px;padding:8px 10px}
 .v3 .fm-wpos{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px;border-radius:12px;background:var(--tile);font-size:12px;font-weight:500;color:var(--label)}

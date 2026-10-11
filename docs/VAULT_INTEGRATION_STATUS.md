@@ -20,13 +20,13 @@ A separately approved migration preserved the old `UNCAPPED = 0` meaning as the 
 
 - `/farm`: Perena USD* and Junior under Lending/Single Assets; five live Basis vaults under Delta-Neutral.
 - `/farm/basis/{sol,eth,btc,tsla,meta}` and `/farm/perena/{usdstar,junior}`: live NAV/share price, receipt holdings, positions, history and simulated deposit/withdraw previews.
-- Every deposit uses USDC. ETH/BTC/TSLA/META and Perena execute from the margin account.
-- SOL Basis uses wallet USDC, followed by a second transaction to deposit the minted shares into margin. This is a deployed vault-program constraint. A recovery button can move shares left in the wallet if the second approval fails.
+- Every deposit uses margin-account USDC. ETH/BTC/TSLA/META and Perena execute from the margin account via `margin_execute`.
+- SOL Basis (since 11 October 2026) also deposits from the margin account, but routed through the wallet because the deployed vault program cannot take that deposit through `margin_execute` (Phoenix ReallocTrader). See "October 11: SOL Basis deposits from margin" below. The earlier wallet-USDC / two-approval flow is gone.
 - Withdrawals use margin shares and pay USDC. SOL can partially burn the requested shares when Phoenix only releases part of the collateral; the preview shows the actual burn and payout.
 - Basis minimum output is set from simulation with a 0.5% allowance. Perena has no minimum-output parameter; its simulated payout includes fees. Junior instant withdrawals include its 1% exit fee.
 - Quotes are rebuilt after pool healing. Phoenix market data is refreshed together before Basis calls. Simulation failures stop before the deposit/withdraw wallet approval.
 - A reusable wallet lookup table may require an initial setup approval for large transactions. The shared table contains only static protocol accounts.
-- History reads the latest CPI events. Wallet-funded SOL deposits use confirmed token balance changes when long transaction logs omit the final event.
+- History reads the latest CPI events. SOL Basis deposits use confirmed token balance changes of the wallet and its margin account together when long transaction logs omit the final event.
 
 ## Fork-specific data
 
@@ -134,3 +134,47 @@ availability/rate limits. No existing user funds were used.
 TSLA and META deposit previews were also exercised against the live fork with a
 signer that throws if called: both returned the friendly market-session message
 before any signing callback.
+
+## October 11: SOL Basis deposits from margin
+
+The SOL Basis deposit form now shows and spends **margin USDC**, like every other vault. One
+transaction, one wallet approval (`prepareVaultAction` / `submitVaultAction` in
+`lib/solana/vault-actions.ts`):
+
+1. `user_withdraw_collateral`: the USDC amount from the margin account to the wallet's USDC
+   account (created idempotently). With debt it is health-checked with the full position accounts
+   (`buildHealthRemainingAccounts`, USDC's own group excluded), exactly as a normal collateral
+   withdrawal.
+2. The SOL Basis vault `deposit` from the wallet (`min_shares` = simulated shares − 0.5%).
+3. `user_deposit_collateral`: vbSOL from the wallet into the margin account — wallet vbSOL already
+   held + `min_shares`.
+
+The transaction is atomic: if any leg fails, nothing moves. Before the signature the app simulates
+legs 1–2 (shares minted, `CollateralWithdrawn` health factor) and `sendInstructions` simulates the
+exact signed transaction again. Lookup tables are sized for the full transaction.
+
+- **Health factor.** The USDC leaves the margin before the vbSOL returns, and the program checks the
+  health factor at that point. A leveraged account can therefore be refused even though its final
+  state would be healthy. The panel shows an estimated "Health factor while USDC moves" (collateral
+  minus the deposit, over debt) with a warning at or below 1.10; a simulation refusal shows
+  "SOL Basis moves this USDC out of your margin account before the vault deposit, and that would
+  push your health factor to or below 1.10…" before any approval.
+- **Leftover vbSOL.** Leg 3 must be sized before the transaction lands, so it moves the guaranteed
+  minimum. Shares minted above it (about the 0.5% slippage allowance when the fill matches the
+  simulation) stay in the wallet. The success message reports them; the "Move … vbSOL to margin"
+  recovery button moves them, and the next SOL Basis deposit sweeps them automatically.
+- Measured on the fork: ~783k CU of the 1.4M limit and 101 loaded accounts (13 static + 88 from
+  lookup tables) for a margin with a USDC loan. Margins with many positions add health-check
+  accounts; a transaction above the account limits fails in simulation without moving funds.
+
+Validation: `E2E_VAULT_BORROW=1 node --env-file=.env.local --import tsx scripts/e2e-vaults.ts basis-sol basis-eth`
+(the script now asserts margin USDC −10, wallet USDC unchanged, receipt in margin, a clear refusal
+of an unhealthy 100 USDC SOL deposit, and deposit + withdraw history rows). Isolated fork wallet
+`TAwvoc4G6sD4J6SepyicKiPRYUAPbqRLPvpXeMaDqw9` with a 20 USDC loan:
+
+| Vault | Deposit signature | Withdrawal signature | USDC returned |
+| --- | --- | --- | ---: |
+| SOL Basis | `4Uh61JmFFroMMUHDTUyvrwSuBFQ12n8sKyBzErHVZ76S3H685sagLZ96ayiQ7mJfM1rYkCdPFv9tT9eKGYdNu6Eu` | `2v3FzQZfgV11R966JLdwpY6toXEt7czRb3tJMdtZMCBpquMgxp8pzuNGkMpYaJb1iRE6aUxXF6TPXMLzEnTecfug` | 9.934913 (for the 10.12349 vbSOL moved to margin; 0.050872 stayed in the wallet) |
+| ETH Basis | `2h4kBjaHDq7o4EwDCe1EM4qRXLQ3ekhpczzV42mkdrVYVBsHgHPgYyA7c5s9BDN222H3Z5TGQbV42NzHA2YoxoNr` | `5HubSggN1UPKvRFb4g1Jsdbsd4QLEVyd4Tsj3ynVBJwUKwEatY1hAXhWHDqqe1R7f1pVi75QvjRUC3pMS4efc1Hk` | 10.027734 |
+
+Not deployed; the application owner deploys.

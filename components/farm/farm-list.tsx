@@ -322,7 +322,7 @@ export function FarmList() {
             ) : (
               <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={apyText(apy)} mini={basisApy?.estimate ? "Est. · Phoenix funding" : !basis ? "Perena 7D" : st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
+            <Cell v={apyText(apy)} mini={basisApy?.source === "launch" ? "Since launch" : basisApy?.estimate ? "Est. · Phoenix funding" : !basis ? "Perena 7D" : st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
           </Link>
         ),
       };

@@ -50,6 +50,13 @@ export interface LiveVault {
   apyHistoryStatus?: "collecting" | "available" | "unavailable";
   apy7: number | null;
   apy30: number | null;
+  /**
+   * Basis only: realized APY since launch — the share price (it starts at 1.0) annualised by the
+   * seconds since the vault's first transaction, compounded. Null until known.
+   */
+  apySinceLaunch?: number | null;
+  /** Basis only: unix ms of the vault account's first transaction (its launch). */
+  launchedAt?: number | null;
 }
 export async function readLiveVault(def: VaultDefinition): Promise<LiveVault> {
   const c = getConnection();
