@@ -62,6 +62,10 @@ export function perpsFlowPnl(history: HistoryPage<MarginHistoryRow> | undefined,
  * Kamino farm earnings per underlying symbol: underlying redeemable now − (Σ supplied − Σ redeemed)
  * from the decoded farm-deposit / farm-withdraw events. null per symbol (and overall) when the
  * history is incomplete. A liquidation resets the count (positions before it were seized).
+ *
+ * Only Kamino rows count here: Basis / Perena vault rows (`vaultId` set) are also farm-deposit /
+ * farm-withdraw rows in USDC, but `positions` holds Kamino cTokens only, so counting them read every
+ * USDC put into a vault as a Kamino USDC loss. Vault earnings come from {@link vaultEarnedUsd}.
  */
 export function farmEarnedBySymbol(
   history: HistoryPage<MarginHistoryRow> | undefined,
@@ -71,6 +75,7 @@ export function farmEarnedBySymbol(
   const net: Record<string, number> = {};
   for (const r of history.rows) {
     if (r.type === "liquidation") break; // newest first: older rows belong to seized positions
+    if (r.vaultId) continue; // Basis / Perena vault, not Kamino
     if (r.type === "farm-deposit") net[r.symbol] = (net[r.symbol] ?? 0) + (Number(r.amount) || 0);
     else if (r.type === "farm-withdraw") net[r.symbol] = (net[r.symbol] ?? 0) - (Number(r.amount) || 0);
   }
@@ -78,6 +83,20 @@ export function farmEarnedBySymbol(
   const held = Object.fromEntries(positions.map((p) => [p.symbol, p.underlying]));
   for (const sym of new Set([...Object.keys(net), ...Object.keys(held)])) out[sym] = (held[sym] ?? 0) - (net[sym] ?? 0);
   return out;
+}
+
+/**
+ * Basis / Perena vault earnings, USD: Σ per vault (receipts held now at the oracle's NAV price −
+ * net USDC put in), each from `positionOf` (lib/farm/basis-live.ts). null when any held vault's
+ * cost basis is unknown (history incomplete), so a partial sum is never shown as the total.
+ */
+export function vaultEarnedUsd(perVault: { earnedUsd: number | null }[]): number | null {
+  let sum = 0;
+  for (const v of perVault) {
+    if (v.earnedUsd === null) return null;
+    sum += v.earnedUsd;
+  }
+  return sum;
 }
 
 /** Σ farm earnings × price, USD (null when unknown). */

@@ -10,23 +10,22 @@
  * margin-account receipt balance. Unknown APYs stay unavailable rather than becoming zero.
  */
 import Link from "next/link";
-import { apyText } from "@/lib/farm/yield";
+import { apyText, vaultApy, type VaultApy } from "@/lib/farm/yield";
 import { useQueries } from "@tanstack/react-query";
 import { fetchWithTimeout } from "@/lib/async";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
 import { fundingNowApr, usePhoenixFundingNow, vaultHref } from "@/lib/farm/basis-live";
-import type { FundingResponse } from "@/lib/farm/nav-math";
+import { fundingStats, type FundingResponse } from "@/lib/farm/nav-math";
 import { Icon } from "@/components/v3/icons";
 import { cmp, nf, spct, usd, usdC } from "@/components/v3/format";
 import { Cell, SortHead, Venue, sortRows, type SortState } from "./fm-ui";
 
 const BASIS_SYMBOLS = VAULTS.filter((v) => v.kind === "basis").map((v) => v.asset);
 
-/** Funding now (annualised %) per basis market. */
-function useFundingNow(): Record<string, number> {
-  const live = usePhoenixFundingNow(BASIS_SYMBOLS);
-  const history = useQueries({
+/** Phoenix funding history per basis market (shared React Query cache with the vault pages). */
+function useFundingHistory() {
+  return useQueries({
     queries: BASIS_SYMBOLS.map((symbol) => ({
       queryKey: ["farm", "funding", symbol],
       staleTime: 5 * 60_000,
@@ -37,6 +36,28 @@ function useFundingNow(): Record<string, number> {
       },
     })),
   });
+}
+
+/**
+ * Headline APY per Basis vault id ({@link vaultApy}): the realized 7-day APY, or until a vault has
+ * 7 days of share prices, the estimate from its last 7 days of Phoenix funding on the short share.
+ */
+export function useBasisApys(): Record<string, VaultApy> {
+  const live = useVaults();
+  const history = useFundingHistory();
+  const out: Record<string, VaultApy> = {};
+  VAULTS.filter((v) => v.kind === "basis").forEach((v) => {
+    const s = live.data.find((x) => x.id === v.id);
+    const days = history[BASIS_SYMBOLS.indexOf(v.asset)]?.data?.days ?? [];
+    out[v.id] = vaultApy(s?.apy7, fundingStats(days).avg7, s?.shortUsd, s?.navUsd);
+  });
+  return out;
+}
+
+/** Funding now (annualised %) per basis market. */
+function useFundingNow(): Record<string, number> {
+  const live = usePhoenixFundingNow(BASIS_SYMBOLS);
+  const history = useFundingHistory();
   const out: Record<string, number> = {};
   BASIS_SYMBOLS.forEach((s, i) => {
     out[s] = fundingNowApr(s, live, history[i].data ?? null) ?? 0;
@@ -61,12 +82,13 @@ export function VaultTable({
   const live = useVaults();
   const { margin } = useVaultAccount();
   const funding = useFundingNow();
+  const apys = useBasisApys();
   const q = query.trim().toLowerCase();
   const items = VAULTS.filter(
     (v) => v.kind === "basis" && (!q || `${v.name} ${v.asset} ${v.symbol} basis jupiter phoenix`.toLowerCase().includes(q)) && keepAsset(v.asset),
   )
     .map((v) => ({ v, s: live.data.find((x) => x.id === v.id) }))
-    .filter(({ s }) => keepApy(s?.apy7 ?? null))
+    .filter(({ v }) => keepApy(apys[v.id]?.value ?? null))
     .map(({ v, s }) => {
       const holding = margin?.collateral.find((c) => c.mint === v.mint);
       const tvl = s?.navUsd ?? 0;
@@ -77,7 +99,7 @@ export function VaultTable({
       const delta = s?.netDeltaPct ?? 0;
       const status = s?.error ? "Data unavailable" : !s?.registered ? "Registration pending" : s.stale ? "NAV stale" : "1x hedge";
       return {
-        v: { asset: v.name, prot: "Jupiter · Phoenix", dep: tvl, cap, apy: s?.apy7 ?? Number.NEGATIVE_INFINITY, fund: f, delta: Math.abs(delta), hold: holding?.usd ?? 0 },
+        v: { asset: v.name, prot: "Jupiter · Phoenix", dep: tvl, cap, apy: apys[v.id]?.value ?? Number.NEGATIVE_INFINITY, fund: f, delta: Math.abs(delta), hold: holding?.usd ?? 0 },
         el: (
           <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k8" aria-label={`Open ${v.name}`}>
             <Cell
@@ -93,7 +115,7 @@ export function VaultTable({
             <Cell v={<Venue name="Jupiter · Phoenix" />} />
             <Cell v={`${cmp(shares)} ${v.symbol}`} mini={usd(tvl)} />
             <Cell v={usdC(cap)} mini={cap > 0 ? (tvl / cap > 0.9 ? "Almost full" : `${nf((tvl / cap) * 100, 2)}% used`) : "No cap"} />
-            <Cell v={apyText(s?.apy7)} mini={s?.apy7Source === "deposit-event" ? "Deposit-event estimate" : undefined} />
+            <Cell v={apyText(apys[v.id]?.value)} mini={apys[v.id]?.estimate ? "Est. · Phoenix funding" : s?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D realized"} />
             <Cell v={spct(f, 1)} cls={f < 0 ? "neg" : ""} />
             <Cell v={spct(delta, 2)} />
             <Cell v={`${nf(holding?.amount ?? 0, 4)} ${v.symbol}`} mini={usd(holding?.usd ?? 0)} />
@@ -113,7 +135,7 @@ export function VaultTable({
           ["Protocol", "prot"],
           ["Total Deposits", "dep", "Vault shares outstanding, and their value (the vault's net asset value) on chain."],
           ["Capacity", "cap", "The most total exposure the vault accepts, and how much of it is used."],
-          ["Vault APY", "apy", "Annualised share-price return. A deposit-event fallback is labelled as an estimate; missing history is never a zero return."],
+          ["Vault APY", "apy", "Annualised 7-day share-price return. Until a vault has 7 days of history it shows the estimate from its last 7 days of Phoenix funding on the short (before fees), labelled Est."],
           ["Funding Now", "fund", "Phoenix's current hourly funding, annualised; when positive, shorts get paid."],
           ["Net Delta", "delta", "Spot leg minus short leg, as a share of the short; near zero means price moves cancel out."],
           ["Holding", "hold"],

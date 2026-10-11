@@ -14,7 +14,7 @@
  * keep an explicit unavailable state.
  */
 import "../farm-v3.css";
-import { apyText, grossFundingApr } from "@/lib/farm/yield";
+import { apyText, grossFundingApr, vaultApy } from "@/lib/farm/yield";
 import { useState } from "react";
 import { Icon } from "@/components/v3/icons";
 import { nf, pct, spct, usd, usdC } from "@/components/v3/format";
@@ -70,9 +70,13 @@ export function BasisVaultPage({ id }: { id: string }) {
   const fundingNow = funding?.now ?? 0;
   const tvl = state?.navUsd ?? 0;
   const apy7 = state?.apy7 ?? null;
-  const apyLabel = apyText(apy7);
   const eventEstimate = state?.apy7Source === "deposit-event";
   const fundingEstimate = grossFundingApr(funding?.stats.avg7, state?.shortUsd, state?.navUsd);
+  // Headline APY: realized 7D when it exists, else the Phoenix-funding estimate (labelled).
+  const headline = vaultApy(apy7, funding?.stats.avg7, state?.shortUsd, state?.navUsd);
+  const apyLabel = apyText(headline.value);
+  const apyTitle = headline.estimate ? "Est. APY (7D funding)" : eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)";
+  const estTip = `Estimated from what this vault earns: the last 7 days of Phoenix mainnet ${def.asset}-PERP funding on the share of the vault held short. Before Phoenix fees and execution. It switches to the realized share-price APY once the vault has 7 days of history.`;
 
   const current = position.shares > 0
     ? [
@@ -127,7 +131,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <VTag name="Phoenix" />
         </div>
         <section className="fm-stats num">
-          <Stat label={eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)"} value={apyLabel} tip={eventEstimate ? `Approximate annualised share-price return from a deposit event on ${new Date(state!.apy7BaselineAt!).toLocaleDateString()}. Covers the full interval since that event, at least 7 days; mint rounding may affect the baseline.` : "Annualised share-price return over 7 days. It reads 0.00% until a 7-day price baseline exists, which is not a measured zero return."} />
+          <Stat label={apyTitle} value={apyLabel} cls={headline.estimate && (headline.value ?? 0) > 0 ? "pos" : ""} tip={headline.estimate ? estTip : eventEstimate ? `Approximate annualised share-price return from a deposit event on ${new Date(state!.apy7BaselineAt!).toLocaleDateString()}. Covers the full interval since that event, at least 7 days; mint rounding may affect the baseline.` : "Annualised share-price return over 7 days. It reads 0.00% until a 7-day price baseline exists, which is not a measured zero return."} />
           <Stat
             label="Funding Now"
             value={spct(fundingNow, 1)}
@@ -139,8 +143,9 @@ export function BasisVaultPage({ id }: { id: string }) {
         </section>
         {apy7 === null && (
           <p className="fm-sub" style={{ marginBlock: 12 }}>
-            Vault APY shows 0.00% until the vault has 7 days of share-price history; it then updates day by day.
-            {fundingEstimate !== null && ` Estimated gross funding APR: ${pct(fundingEstimate, 2)}. Based on available Phoenix mainnet funding observations and current short exposure; before fees, execution and borrowing costs. This is not realized vault APY.`}
+            {fundingEstimate !== null
+              ? `Est. APY ${pct(fundingEstimate, 2)}: the last 7 days of Phoenix mainnet funding on this vault's short, before fees and execution. The realized APY replaces it once the vault has 7 days of share-price history.`
+              : "Vault APY appears once the vault has 7 days of share-price history; it then updates day by day."}
           </p>
         )}
         <div className="fm-cols">
@@ -176,11 +181,17 @@ export function BasisVaultPage({ id }: { id: string }) {
             </div>
           </div>
           <aside className="fm-aside">
-            <VaultActionPanel id={vid} state={state} account={account} />
+            <VaultActionPanel
+              id={vid}
+              state={state}
+              account={account}
+              apy7={headline.value}
+              apySource={headline.estimate ? "The estimated APY from the last 7 days of Phoenix funding on the vault's short (before fees and execution)" : undefined}
+            />
             <Tiles
               items={[
                 ["Total Value Locked", usdC(tvl)],
-                [eventEstimate ? "APY · event estimate" : "Vault APY (7D)", apyLabel],
+                [apyTitle, apyLabel],
               ]}
             />
             <YieldList

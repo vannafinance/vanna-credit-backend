@@ -22,8 +22,8 @@ import { marginPda, reservePda } from "./pdas";
 import { getProgram } from "./program";
 import { fromRaw } from "./math";
 import { getToken, TOKENS, tokenByMint, type TokenInfo } from "./tokens";
-import { receiptByMint } from "./kamino";
-import { EMBER_PROGRAM_ID, PHOENIX_PROGRAM_ID } from "./phoenix";
+import { CTOKEN_DECIMALS, receiptByMint } from "./kamino";
+import { EMBER_PROGRAM_ID, PHOENIX_PROGRAM_ID, PHUSD_MINT } from "./phoenix";
 
 let parser: EventParser | null = null;
 const getParser = () => (parser ??= new EventParser(VANNA_PROGRAM_ID, getProgram().coder));
@@ -227,6 +227,23 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
   const margin = marginPda(owner).toBase58();
   const rows: MarginHistoryRow[] = [];
   const tokenOfMint = (m: unknown): TokenInfo | undefined => tokenByMint(key(m));
+  /**
+   * Any collateral mint the margin can hold, for deposit / withdraw / close rows: registry tokens,
+   * Basis / Perena vault receipts (vbSOL, USD* …, six decimals), Kamino cTokens (kSOL …) and phUSD.
+   * A receipt is not in the swap registry, so `tokenOfMint` alone left these rows with an empty
+   * asset and a "0" amount (e.g. moving wallet-held vbSOL into the margin after a SOL Basis deposit).
+   */
+  const assetOfMint = (m: unknown): Pick<TokenInfo, "symbol" | "decimals"> | undefined => {
+    const mint = key(m);
+    const token = tokenByMint(mint);
+    if (token) return token;
+    const vault = vaultByMint(mint);
+    if (vault) return { symbol: vault.symbol, decimals: 6 };
+    const k = receiptByMint(mint);
+    if (k) return { symbol: k.symbol, decimals: CTOKEN_DECIMALS };
+    if (mint === PHUSD_MINT.toBase58()) return { symbol: "phUSD", decimals: 6 };
+    return undefined;
+  };
   const tokenOfReserve = (r: unknown): TokenInfo | undefined => RESERVE_TOKENS.get(key(r));
   const hf = (data: any) => {
     const w = field(data, "borrow_health_factor_wad", "borrowHealthFactorWad");
@@ -260,7 +277,7 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
     for (const e of events(tx)) {
       if (key(field(e.data, "margin_account", "marginAccount")) !== margin) continue;
       const base = { timestamp: ts(e.data, tx), signature: tx.signature };
-      const push = (type: MarginEventType, token: TokenInfo | undefined, raw: bigint, extra: Partial<MarginHistoryRow> = {}) => {
+      const push = (type: MarginEventType, token: Pick<TokenInfo, "symbol" | "decimals"> | undefined, raw: bigint, extra: Partial<MarginHistoryRow> = {}) => {
         rows.push({ type, symbol: token?.symbol ?? "", amount: token ? fromRaw(raw, token.decimals) : "0", amountRaw: raw, ...base, ...extra });
       };
       switch (e.name) {
@@ -268,10 +285,10 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
           push("create", undefined, 0n);
           break;
         case "CollateralDeposited":
-          push("deposit", tokenOfMint(field(e.data, "mint", "mint")), bigOf(field(e.data, "amount", "amount")));
+          push("deposit", assetOfMint(field(e.data, "mint", "mint")), bigOf(field(e.data, "amount", "amount")));
           break;
         case "CollateralWithdrawn":
-          push("withdraw", tokenOfMint(field(e.data, "mint", "mint")), bigOf(field(e.data, "amount", "amount")), { healthFactor: hf(e.data) });
+          push("withdraw", assetOfMint(field(e.data, "mint", "mint")), bigOf(field(e.data, "amount", "amount")), { healthFactor: hf(e.data) });
           break;
         case "Borrowed":
           push("borrow", tokenOfReserve(field(e.data, "reserve", "reserve")), bigOf(field(e.data, "assets", "assets")), { healthFactor: hf(e.data) });
@@ -294,7 +311,7 @@ export async function fetchMarginHistory(owner: PublicKey): Promise<HistoryPage<
           push("close-debt", tokenOfReserve(field(e.data, "reserve", "reserve")), 0n);
           break;
         case "CollateralPositionClosed":
-          push("close-collateral", tokenOfMint(field(e.data, "mint", "mint")), 0n);
+          push("close-collateral", assetOfMint(field(e.data, "mint", "mint")), 0n);
           break;
         case "MarginExecuted": {
           // `spent` / `received`: [{ mint, amount }] per margin vault paid out of / into. Phoenix

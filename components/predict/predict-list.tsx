@@ -230,7 +230,6 @@ export function PredictList() {
   const sm = acct.data?.summary;
   const idle = acct.data?.importable ?? [];
   const idleV = idle.reduce((t, x) => t + x.value, 0);
-  const pooledV = rows.filter((r) => r.kind === "pool").reduce((t, r) => t + r.value, 0);
 
   let list = EV.slice();
   if (cat !== "trending" && cat !== "all") list = list.filter((e) => e.cat === cat);
@@ -334,11 +333,12 @@ export function PredictList() {
             <StatStrip
               n={5}
               items={[
-                { icon: IC.target, label: "Predictions value", value: usd(sm?.value ?? 0), sub: <>{sm?.count ?? 0} positions, <span className={(sm?.pnl ?? 0) >= 0 ? "pos" : "neg"}>{sUsd(sm?.pnl ?? 0)}</span></> },
-                { icon: IC.coins, label: <>Earning in USDC pool <Info text={INFO.inPool} /></>, value: usd(sm?.inVault ?? 0), sub: idleV > 0 ? `${usd(idleV)} more could earn` : "paired shares, today’s value" },
-                { icon: IC.pct, label: <>Passive yield <Info text={INFO.apy} /></>, value: `${p2(sm?.apy ?? 0)} APY`, sub: `on your ${usd(pooledV, 0)} in the pool` },
-                { icon: IC.spark, label: <>Earned <Info text={INFO.earned} /></>, value: <span className="pos">{sUsd(sm?.earned ?? 0)}</span>, sub: "paid in extra shares" },
-                { icon: IC.shield, label: <>Pays if right <Info text={INFO.paysMax} /></>, value: usd(sm?.payout ?? 0), sub: "if your picks win" },
+                // Values only (no sub-lines under the figures, per the product request).
+                { icon: IC.target, label: "Predictions value", value: usd(sm?.value ?? 0) },
+                { icon: IC.coins, label: <>Earning in USDC pool <Info text={INFO.inPool} /></>, value: usd(sm?.inVault ?? 0) },
+                { icon: IC.pct, label: <>Passive yield <Info text={INFO.apy} /></>, value: `${p2(sm?.apy ?? 0)} APY` },
+                { icon: IC.spark, label: <>Earned <Info text={INFO.earned} /></>, value: <span className="pos">{sUsd(sm?.earned ?? 0)}</span> },
+                { icon: IC.shield, label: <>Pays if right <Info text={INFO.paysMax} /></>, value: usd(sm?.payout ?? 0) },
               ]}
             />
           </div>

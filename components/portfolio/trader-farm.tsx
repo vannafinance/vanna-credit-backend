@@ -4,7 +4,8 @@
  * Portfolio → Trader → Farm: the margin account's Kamino Lend positions (margin-held cTokens valued
  * like the health factor values them, `useFarmPositions`), Kamino's supply APY (`useFarmPools`),
  * earnings from the margin's own farm-deposit / farm-withdraw events, and that history. The
- * Delta-neutral vaults on the Farm page are a UI preview, so they never appear here. The Farm
+ * history also lists Basis / Perena vault deposits and withdrawals (labelled with the vault's name);
+ * their earnings count in the header's Trading figure, not in the Kamino "earned" here. The Farm
  * Equity card shows the current value only (no on-chain value-over-time series).
  */
 import { useState } from "react";
@@ -12,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { IC, Icon } from "@/components/v3/icons";
 import { pct, sUsd, tokFmt, usd } from "@/components/v3/format";
 import { useFarmStore } from "@/store/farm-store";
+import { VAULTS } from "@/lib/solana/vault-catalogue";
 import type { Portfolio } from "./use-portfolio";
 import { Badge, ChartCard, Ct, Grid, HistNav, InfoCard, Success, TT, Tag, TokCell, TxCell, Venue, when } from "./pf-ui";
 
@@ -83,7 +85,7 @@ export function TraderFarm({ p }: { p: Portfolio }) {
               cells: [
                 <Ct key="d">{when(x.timestamp)}</Ct>,
                 <Badge key="t" act={x.type === "farm-deposit" ? "Supply" : "Withdraw"} />,
-                <Ct key="a" desc={`Kamino · ${usd((Number(x.amount) || 0) * (px[x.symbol] ?? 0))}`}>
+                <Ct key="a" desc={`${VAULTS.find((v) => v.id === x.vaultId)?.name ?? "Kamino"} · ${usd((Number(x.amount) || 0) * (px[x.symbol] ?? 0))}`}>
                   <Icon sym={x.symbol} className="ico pf-i16" />
                   {tokFmt(Number(x.amount) || 0, x.symbol)}
                 </Ct>,

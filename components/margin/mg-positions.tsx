@@ -282,7 +282,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
             const a = amountOf(r);
             return (
               <div key={`${r.signature}${r.type}${r.symbol}`} className="mg-tr2">
-                <div className="mg-td mg-dt num">{timeFmt(r.timestamp)}</div>
+                <div className="mg-td mg-dt num">{timeFmt(Math.floor(r.timestamp / 1000))}</div>
                 <div className="mg-td">{badge(r.type)}</div>
                 <div className="mg-td">
                   {a !== null ? (
@@ -313,7 +313,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
                   {badge(r.type)}
                   <span className="num">{a !== null ? tokFmt(a, r.symbol) : ""}</span>
                 </div>
-                <small className="num">{timeFmt(r.timestamp)}</small>
+                <small className="num">{timeFmt(Math.floor(r.timestamp / 1000))}</small>
               </div>
               {tx(r.signature)}
             </div>

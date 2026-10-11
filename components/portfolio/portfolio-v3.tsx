@@ -72,11 +72,24 @@ function Card({ ic, label, tip, children, cls = "" }: { ic: React.ReactNode; lab
   );
 }
 
-const Chip = ({ label, v }: { label: string; v: number | null }) => (
-  <span className={`pf-chip ${v === null ? "" : v > 0.004 ? "pf-ok" : v < -0.004 ? "pf-bad" : ""}`}>
+const Chip = ({ label, v, title }: { label: string; v: number | null; title?: string }) => (
+  <span title={title} className={`pf-chip ${v === null ? "" : v > 0.004 ? "pf-ok" : v < -0.004 ? "pf-bad" : ""}`}>
     {label} {sUsd(v ?? 0)}
   </span>
 );
+
+/** "Perps −$0.35 · Spot $0.00 · Kamino +$0.19 · Vaults +$1.63": what the Trading chip adds up. */
+const tradingSplit = (t: Portfolio["totals"]["tradingParts"]) =>
+  (
+    [
+      ["Perps", t.perps],
+      ["Spot", t.spot],
+      ["Kamino", t.farm],
+      ["Vaults", t.vaults],
+    ] as [string, number | null][]
+  )
+    .map(([k, v]) => `${k} ${v === null ? "N/A" : sUsd(v)}`)
+    .join(" · ");
 
 /** The three header cards. Disconnected: zeros, as in the design. */
 function Header({ p }: { p: Portfolio }) {
@@ -115,7 +128,7 @@ function Header({ p }: { p: Portfolio }) {
         <div className={`pf-big num ${on ? sign(T.netEarnings) : ""}`}>{on ? sUsd(T.netEarnings) : usd(0)}</div>
         <div className="pf-chips num">
           <Chip label="Lending" v={on ? T.lendEarned : 0} />
-          <Chip label="Trading" v={on ? T.trading : 0} />
+          <Chip label="Trading" v={on ? T.trading : 0} title={on ? tradingSplit(T.tradingParts) : undefined} />
         </div>
       </Card>
       <Card ic={IP.pulse} label="Health factor" tip={TT.hf}>

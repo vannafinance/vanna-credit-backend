@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DAY, historicalApy } from './nav-math';
-import { apyText, depositPrice, eventApy, grossFundingApr, netYield } from './yield';
+import { apyText, depositPrice, eventApy, grossFundingApr, netYield, vaultApy } from './yield';
 
 describe('vault yield availability and fallback', () => {
   it('shows the zero form for missing history, and measured zero / loss as they are', () => {
@@ -40,5 +40,17 @@ describe('vault yield availability and fallback', () => {
     expect(grossFundingApr(-10, 1100, 1000)).toBe(-11);
     expect(grossFundingApr(30, 500, 0)).toBeNull();
     expect(grossFundingApr(null, 500, 1000)).toBeNull();
+  });
+});
+
+describe('vaultApy (Basis headline APY)', () => {
+  it('uses the realized 7D APY when it exists', () => {
+    expect(vaultApy(12.5, 30, 500, 1000)).toEqual({ value: 12.5, estimate: false });
+  });
+  it('falls back to the funding estimate on the short share, labelled as an estimate', () => {
+    expect(vaultApy(null, 30, 500, 1000)).toEqual({ value: 15, estimate: true });
+  });
+  it('has no value without funding data', () => {
+    expect(vaultApy(undefined, null, 500, 1000)).toEqual({ value: null, estimate: false });
   });
 });

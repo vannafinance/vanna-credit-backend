@@ -24,7 +24,7 @@ import { isFarmListed } from "@/lib/solana/farm";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
 import { perenaProduct, positionOf, usePerenaMarket, vaultHref } from "@/lib/farm/basis-live";
-import { VaultTable } from "./vault-rows";
+import { VaultTable, useBasisApys } from "./vault-rows";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
@@ -64,6 +64,7 @@ export function FarmList() {
   const [sort, setSort] = useState<SortState>(null);
   const [perenaSort, setPerenaSort] = useState<SortState>(null);
   const liveVaults = useVaults();
+  const basisApys = useBasisApys();
   const perenaMarket = usePerenaMarket();
   const thrRef = useOutside(thrOpen, () => setThrOpen(false));
 
@@ -100,8 +101,23 @@ export function FarmList() {
   // ---- Stats strip (connected): live margin holdings across Kamino, Basis and Perena. ----
   const t = farm.totals;
   const hf = farm.hf;
+  // Basis / Perena positions in the strip: their earnings (value now − net USDC in, from the margin
+  // account's history) and their APY (Basis: realized 7D or the Phoenix-funding estimate; Perena:
+  // Perena's published 7D APY), weighted by value together with the Kamino positions.
+  const vaultPos = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0)).map((v) => {
+    const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
+    const apy = v.kind === "basis" ? basisApys[v.id]?.value ?? null : perenaProduct(perenaMarket, v.id).apy7 ?? null;
+    return { value: p.valueUsd, earned: p.earnedUsd, apy };
+  });
+  const vaultEarned = vaultPos.reduce((sum, p) => sum + (p.earned ?? 0), 0);
+  const earnedTotal = (t.earned ?? 0) + vaultEarned;
+  const earnedKnown = t.earned !== null || vaultPos.some((p) => p.earned !== null);
+  const kaminoW = t.netApy !== null ? t.tvl : 0;
+  const vaultW = vaultPos.filter((p) => p.apy !== null).reduce((sum, p) => sum + p.value, 0);
+  const netFarmApy =
+    kaminoW + vaultW > 0 ? ((t.netApy ?? 0) * 100 * kaminoW + vaultPos.reduce((sum, p) => sum + (p.apy !== null ? p.apy * p.value : 0), 0)) / (kaminoW + vaultW) : null;
   const netTip =
-    "Yearly yield of your farm positions after borrow cost: the value-weighted Kamino supply APY, minus the Vanna borrow rate on the part of each position funded by your debt in the same token (the smaller of the position's value and that debt). Rates are today's on-chain rates.";
+    "Value-weighted yearly yield of all your farm positions at today's rates: Kamino supply APY after the Vanna borrow rate on the part funded by your debt in the same token; Basis vaults at their realized 7-day APY (or, until a vault has 7 days of history, the estimate from Phoenix funding); Perena at its published 7-day APY.";
   const strip = farm.connected && (
     <div className="fm-fsw">
       <StatStrip
@@ -114,11 +130,11 @@ export function FarmList() {
             label: (
               <>
                 Your Earnings{" "}
-                <Info text="Underlying you can redeem now minus what you supplied (net of withdrawals), from your margin account's on-chain history, at today's price. Shows $0.00 when that history is incomplete." />
+                <Info text="Kamino and vault positions: what you can redeem now minus what you put in (net of withdrawals), from your margin account's on-chain history, at today's price." />
               </>
             ),
-            value: usd(vaultHoldings.length > 0 || t.earned === null ? 0 : t.earned),
-            valueClass: t.earned !== null && t.earned > 0 ? "pos" : "",
+            value: sUsd(earnedKnown ? earnedTotal : 0),
+            valueClass: earnedKnown && earnedTotal > 0 ? "pos" : earnedKnown && earnedTotal < 0 ? "neg" : "",
           },
           {
             icon: IC.pct,
@@ -127,9 +143,8 @@ export function FarmList() {
                 Net Farm APY <Info text={netTip} />
               </>
             ),
-            value: vaultHoldings.length > 0 || t.netApy === null ? pct(0) : pct(t.netApy * 100),
-            valueClass: t.netApy !== null && t.netApy < 0 ? "neg" : "",
-            sub: t.grossApy === null ? (farm.rows.length || vaultHoldings.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
+            value: pct(netFarmApy ?? 0),
+            valueClass: netFarmApy !== null && netFarmApy < 0 ? "neg" : "",
           },
           {
             icon: IC.spark,
@@ -282,8 +297,11 @@ export function FarmList() {
     const vaultItems = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0) && keepAsset(v.asset)).map((v) => {
       const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
       const st = liveVaults.data.find((x) => x.id === v.id);
-      const apy = st?.apy7 ?? null;
       const basis = v.kind === "basis";
+      // Basis: realized 7D APY, else the Phoenix-funding estimate (same as the Delta-Neutral list).
+      const basisApy = basis ? basisApys[v.id] : undefined;
+      // Perena: Perena's published 7D APY (the fork has no 7-day history of its own yet).
+      const apy = basisApy ? basisApy.value : perenaProduct(perenaMarket, v.id).apy7 ?? st?.apy7 ?? null;
       return {
         v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy === null ? Number.NEGATIVE_INFINITY : apy / 100 },
         el: (
@@ -304,7 +322,7 @@ export function FarmList() {
             ) : (
               <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={apyText(apy)} mini={st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
+            <Cell v={apyText(apy)} mini={basisApy?.estimate ? "Est. · Phoenix funding" : !basis ? "Perena 7D" : st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
           </Link>
         ),
       };

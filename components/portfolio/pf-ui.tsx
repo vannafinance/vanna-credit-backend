@@ -15,7 +15,7 @@ import { LIQ_HF, hfPos } from "@/lib/account-model";
 /** One sentence per info icon (the design's TT). */
 export const TT = {
   net: "Your wallet tokens, your lending supply (interest included) and your margin account's equity, at today's oracle prices.",
-  earn: "Lending interest plus trading P&L (perps realized and open, spot open) and farm earnings. Borrow interest is shown with the health factor.",
+  earn: "Lending interest plus trading P&L (perps realized and open, spot open) and farm earnings (Kamino, Basis and Perena vaults: value now minus what you put in). Borrowed funds are not P&L. Borrow interest is shown with the health factor.",
   hf: "Everything your margin account holds divided by what it owes; at 1.10 or below it can be liquidated.",
   interest: "Interest your loans have accrued so far; it adds to what the account owes, so it lowers the health factor.",
   value: "Everything in your margin account (tokens, farm receipts and the Phoenix account) before subtracting what it owes.",

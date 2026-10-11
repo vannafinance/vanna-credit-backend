@@ -35,3 +35,21 @@ export function grossFundingApr(avgApr: number | null | undefined, shortUsd: num
 export function apyText(value: number | null | undefined, digits = 2): string {
   return `${(value == null || !Number.isFinite(value) ? 0 : value).toFixed(digits)}%`;
 }
+
+/** A Basis vault's headline APY: realized when it exists, else the funding-based estimate. */
+export interface VaultApy {
+  value: number | null;
+  /** True when `value` is the funding estimate, not a realized share-price return. */
+  estimate: boolean;
+}
+
+/**
+ * Realized 7-day share-price APY when the vault has a 7-day baseline; until then the estimate from
+ * what a basis vault actually earns — the last 7 days of Phoenix mainnet funding (real, hourly) on
+ * the share of NAV held short (`grossFundingApr`). Before fees and execution, so it is labelled.
+ */
+export function vaultApy(realized: number | null | undefined, fundingAvg7: number | null | undefined, shortUsd: number | null | undefined, navUsd: number | null | undefined): VaultApy {
+  if (realized != null && Number.isFinite(realized)) return { value: realized, estimate: false };
+  const est = grossFundingApr(fundingAvg7, shortUsd, navUsd);
+  return { value: est, estimate: est !== null };
+}

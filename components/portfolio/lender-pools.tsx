@@ -99,7 +99,8 @@ export function LendingPools({ p }: { p: Portfolio }) {
 
   const colDefs: [Col, string, (r: (typeof rows)[number]) => React.ReactNode][] = [
     ["Amount Supplied", "1.3fr", (r) => <Ct tags={<Tag>{usd(r.val)}</Tag>}>{tokFmt(r.amt, r.sym)}</Ct>],
-    ["Supply APY", ".8fr", (r) => <Ct>{pct(r.apy)}</Ct>],
+    // A live but tiny rate (SOL at <1% utilization pays ~0.0001%) reads "<0.01%", not a flat 0.00%.
+    ["Supply APY", ".8fr", (r) => <Ct>{r.apy > 0 && r.apy < 0.005 ? "<0.01%" : pct(r.apy)}</Ct>],
     [
       "Earned",
       ".9fr",
