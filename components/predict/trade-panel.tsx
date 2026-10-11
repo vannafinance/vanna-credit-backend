@@ -72,7 +72,7 @@ function usePopClose(open: boolean, close: () => void, ref: RefObject<HTMLElemen
 const GRP_LABEL: Partial<Record<PredictEvent["type"], string>> = { match: "Market", strike: "Target", date: "Date", multi: "Outcome" };
 
 /** Market picker (or the bet slip's "Add an outcome"). */
-function OutSel({ e, o, add, st, set, choose, addLeg }: { e: PredictEvent; o: Outcome; add?: boolean; st: PanelState; set: (p: Partial<PanelState>) => void; choose: (k: string) => void; addLeg: (k: string) => void }) {
+function OutSel({ e, o, add, st, set, choose, addLeg, data }: { e: PredictEvent; o: Outcome; add?: boolean; st: PanelState; set: (p: Partial<PanelState>) => void; choose: (k: string) => void; addLeg: (k: string) => void; data?: PositionsResponse }) {
   const key = add ? "add" : "out";
   const open = st.pop === key;
   const ref = useRef<HTMLDivElement>(null);
@@ -94,7 +94,21 @@ function OutSel({ e, o, add, st, set, choose, addLeg }: { e: PredictEvent; o: Ou
       }}
     >
       {e.type === "match" ? <TeamLogo e={e} o={x} cls="xs" /> : null}
-      <span className="nm">{x.name}</span>
+      <span className="nm">
+        {x.name}
+        {/* The wallet's shares in this outcome (wallet + pool), so it's clear what can be sold. */}
+        {(() => {
+          const y = heldOf(data, x, "yes").total;
+          const n = heldOf(data, x, "no").total;
+          if (y < 0.01 && n < 0.01) return null;
+          return (
+            <small className="pd-oheld num">
+              {y >= 0.01 && <span className="y">{shf(y)} Yes</span>}
+              {n >= 0.01 && <span className="n">{shf(n)} No</span>}
+            </small>
+          );
+        })()}
+      </span>
       <span className="num">{pc(x.y)}</span>
     </button>
   );
@@ -397,7 +411,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
       );
     return (
       <>
-        <OutSel e={e} o={o} add st={st} set={set} choose={choose} addLeg={(k) => addLeg(k)} />
+        <OutSel e={e} o={o} add st={st} set={set} choose={choose} addLeg={(k) => addLeg(k)} data={data} />
         <div className="pd-bls">
           {legs.length ? (
             legs.map((l, i) => (
@@ -516,7 +530,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
         </>
       ) : (
         <>
-          {multi && <OutSel e={e} o={o} st={st} set={set} choose={choose} addLeg={(k) => addLeg(k)} />}
+          {multi && <OutSel e={e} o={o} st={st} set={set} choose={choose} addLeg={(k) => addLeg(k)} data={data} />}
           <div className="pd-yn num">
             {(["yes", "no"] as const).map((x, i) => (
               <button
