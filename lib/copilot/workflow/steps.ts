@@ -185,14 +185,14 @@ async function preflightVault(step: StoredStep, ctx: ReadCtx, notes: string[]): 
 
 /**
  * A Predict trade the app refused to build (its own simulation of the transactions failed, e.g. a pool redeem): the
- * app's reason in one line, not the generic "the network rejected it", so the user knows where it failed.
+ * app's own reason as the fact Gemini words for the user (not the generic "the network rejected it").
  */
 function predictAppError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (!/simulation failed|Program log/i.test(raw)) return humanizeMcpError(err).message;
   const first = (raw.split("\n")[0] ?? "").replace(/:\s*\{.*$/, "").trim();
   const log = /Program log: Error: ([^\n]+)/.exec(raw)?.[1]?.trim();
-  return `The website's Predict service couldn't build this trade: ${first}${log ? ` (${log})` : ""}. Nothing was built or sent.`;
+  return `The website's Predict trade builder refused the trade (nothing was built or sent): ${first}${log ? `; program error: ${log}` : ""}`;
 }
 
 /** The shares of one outcome side the user holds in Predict: in the wallet plus in Vanna's pool (sell), or wallet only (deposit). */

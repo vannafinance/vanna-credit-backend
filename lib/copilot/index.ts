@@ -33,7 +33,7 @@ import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
 import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, balancesTouched, labelFor, percentBalance, planWarnings, predictCashSpent, predictLegsOf, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type PredictStepLeg, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
 import { productRefusal } from "./domain-firewall";
-import { composeDecline } from "./decline";
+import { composeDecline, composeFailure, type FailureKind } from "./decline";
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -69,7 +69,34 @@ export interface ChatInput {
   requestId?: string;
 }
 
+/** Replies Gemini already wrote (its decline, its question, a refusal composeDecline worded): not worded again. */
+const MODEL_WORDED = new WeakSet<object>();
+const byModel = <T extends object>(r: T): T => {
+  MODEL_WORDED.add(r);
+  return r;
+};
+
+const FAILURE_KINDS: Partial<Record<ChatResponse["kind"], FailureKind>> = { clarification: "question", blocked: "blocked", unavailable: "unavailable", error: "error" };
+
+/**
+ * Every failure, refusal or question the server's checks produce reaches the user in Gemini's words, for this message
+ * (`composeFailure`): the code decides WHAT happened and what is needed; the model only says it. Not worded again:
+ * replies the model already wrote, and a rate or token-budget limit (wording it would spend the very budget that ran
+ * out). Clarification options and limit details are kept as they are.
+ */
 export async function handleChat(input: ChatInput): Promise<ChatResponse> {
+  const res = await handleChatTurn(input);
+  const kind = FAILURE_KINDS[res.kind];
+  if (!kind || MODEL_WORDED.has(res) || !input.user || res.limit?.kind === "rate" || res.limit?.kind === "daily_tokens") return res;
+  const message = typeof input.req?.message === "string" ? input.req.message.trim() : "";
+  const worded = await composeFailure({ message, kind, facts: res.message, history: cleanHistory(input.req.history), signal: AbortSignal.timeout(15_000) });
+  if (worded.tokens > 0) await recordTokens(input.user, worded.tokens).catch(() => undefined);
+  if (!worded.used) return res;
+  // A failed read also carries the answer card: it shows the same worded reply, not the code's headline.
+  return { ...res, message: worded.text, ...(res.answer ? { answer: { headline: worded.text, facts: [], venue: "none" as const } } : {}) };
+}
+
+async function handleChatTurn(input: ChatInput): Promise<ChatResponse> {
   const requestId = input.requestId ?? randomUUID();
   const { user } = input;
   const conversationId = isConversationId(input.req?.conversation_id) ? (input.req.conversation_id as string) : randomUUID();
@@ -106,7 +133,7 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
         // The rule decided the refusal; Gemini words it for this message (the rule's own wording if it can't).
         const declined = await composeDecline({ message, reason: fw.reason, fallback: fw.message, history, signal });
         tokens += declined.tokens;
-        return { kind: "blocked", message: declined.text, ...base };
+        return byModel({ kind: "blocked", message: declined.text, ...base });
       }
       let decided: Intent | null = null;
       if (modelDecides) {
@@ -181,23 +208,26 @@ async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
   switch (intent.lane) {
     case "refuse": {
       // Gemini's own decline is already its wording; a guard's or the router's refusal is worded for this message.
-      if (intent.reason === "model_decline") return { kind: "blocked", message: intent.message, ...base };
+      if (intent.reason === "model_decline") return byModel({ kind: "blocked", message: intent.message, ...base });
       const declined = await composeDecline({ message: t.message, reason: intent.reason, fallback: intent.message, history: t.history, signal: t.signal });
-      return { response: { kind: "blocked", message: declined.text, ...base }, tokens: declined.tokens };
+      return { response: byModel({ kind: "blocked", message: declined.text, ...base }), tokens: declined.tokens };
     }
     case "unknown": {
       if (t.source === "unavailable") {
-        return { kind: "unavailable", message: `I couldn't work out what you meant, and the language model that handles free-form requests is not reachable right now. ${CAPABILITY_LINE}`, ...base };
+        // The model is not reachable, so it can't word this either.
+        return byModel({ kind: "unavailable", message: `I couldn't work out what you meant, and the language model that handles free-form requests is not reachable right now. ${CAPABILITY_LINE}`, ...base });
       }
       const asked = await composeDecline({ message: t.message, reason: "unknown", fallback: `I'm not sure what you'd like to do. ${CAPABILITY_LINE}`, history: t.history, signal: t.signal });
-      return { response: { kind: "clarification", message: asked.text, ...base }, tokens: asked.tokens };
+      return { response: byModel({ kind: "clarification", message: asked.text, ...base }), tokens: asked.tokens };
     }
     case "ask": {
+      // A question Gemini asked (investigation, or the model router) is already its wording.
+      const own = <T extends object>(r: T): T => (t.source === "model" ? byModel(r) : r);
       if (intent.options?.length) {
         const saved = await savePending(t.conversationId, t.user, intent.options);
-        return { kind: "clarification", message: intent.question, clarify_options: saved.clarify_options, pending_id: saved.pending_id, ...base };
+        return own({ kind: "clarification", message: intent.question, clarify_options: saved.clarify_options, pending_id: saved.pending_id, ...base });
       }
-      return { kind: "clarification", message: intent.question, ...base };
+      return own({ kind: "clarification", message: intent.question, ...base });
     }
     case "read": {
       const out = await runRead(intent.read, t.ctx);

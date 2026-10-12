@@ -96,6 +96,15 @@ flowchart LR
    the model is off or fails, the rule's own wording is shown. Router and guard refusals and "I'm not sure what you
    mean" go through the same path.
 
+   Every other failure is worded the same way. `index.ts` `handleChat` sends any `blocked`, `clarification`,
+   `unavailable` or `error` reply that code produced (a sizing question, a pre-check refusal, an unreadable balance, a
+   build the app refused) through `decline.ts` `composeFailure`, with the code's message as FACTS: the code decides what
+   happened and what is needed, and Gemini writes what the user reads, checked the same way. Two kinds are not worded:
+   replies Gemini already wrote (its own question or decline), and rate / token-budget limits, since wording them would
+   spend the budget that ran out. While a plan runs, a pause, a rejected send and an on-chain failure are worded too
+   (`workflowDeps.word`); whether a pause is retried automatically is the server's flag (`pause_transient`), never read
+   from the wording.
+
 ### 3.2 Stage 2: investigate (Gemini)
 
 `investigation/runtime.ts` runs a bounded loop. Each turn is one Gemini call (`vertex.ts`, thinking level `MEDIUM` on the

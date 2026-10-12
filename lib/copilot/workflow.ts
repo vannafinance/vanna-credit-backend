@@ -21,6 +21,7 @@ import { copilotConfig } from "./config";
 import { answerToText, type StructuredAnswer } from "./answer-schema";
 import { humanizeFailure } from "./explain";
 import { recordSpend } from "./limits";
+import { composeFailure, type FailureKind } from "./decline";
 import { mcp } from "./mcp-client";
 import type { ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, PLAN_TTL_MS, RUN_WINDOW_MS, VENUE_BY_OP, labelFor, planDigest, signatureCount, validateSteps, type StepSpec } from "./plan";
@@ -63,6 +64,8 @@ export interface WorkflowDeps {
   readStep: typeof runReadStep;
   recordSpend: typeof recordSpend;
   sleep(ms: number): Promise<void>;
+  /** A failure while a plan runs, in Gemini's words for this plan (the facts themselves when the model can't be used). */
+  word(facts: string, kind: FailureKind, summary: string): Promise<string>;
   /** After a Predict trade confirms: the app's keeper merges the pools it touched (best effort). */
   predictMerge(marketIds: string[], user: CopilotUser): Promise<number | null>;
 }
@@ -88,12 +91,19 @@ export const workflowDeps: WorkflowDeps = {
   readStep: runReadStep,
   recordSpend,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  word: async (facts, kind, summary) => (await composeFailure({ message: `(the user approved this plan) ${summary}`, kind, facts, signal: AbortSignal.timeout(12_000) })).text,
   predictMerge: async (marketIds, user) => {
     const r = await mcp.predictMerge(marketIds, { user });
     const results = Array.isArray(r.results) ? (r.results as Array<Record<string, unknown>>) : [];
     return results.reduce((sum, x) => sum + (typeof x.merged_usdc === "number" ? x.merged_usdc : 0), 0);
   },
 };
+
+/**
+ * A pause the client may retry by itself because it came from a slow or stale read, not from a safety rule. Decided
+ * here, on the server's own facts, so the wording the user reads (Gemini's) never changes what is retried.
+ */
+const TRANSIENT_PAUSE = /could(?:n't| not) (?:reach|run the pre-checks)|timed out|aborted|price is (?:stale|unavailable)|try again in a minute|temporarily|unreachable/i;
 
 /** How long a Predict trade's transaction may take to confirm before the next one is sent. */
 const BATCH_CONFIRM_MS = 25_000;
@@ -406,13 +416,16 @@ export async function advanceWorkflow(id: string, user: CopilotUser, ctx: Omit<R
     if (!claim.out) continue; // someone else claimed it; the next pass reports its state
 
     const claimed = claim.rec.steps.find((s) => s.n === step.n) as StoredStep;
-    const pause = async (message: string, status: StepStatus = "pending"): Promise<AdvanceResponse> => {
+    const pause = async (facts: string, status: StepStatus = "pending"): Promise<AdvanceResponse> => {
+      const transient = TRANSIENT_PAUSE.test(facts);
+      // A transient pause is retried by the client within seconds: no need to word it; anything else is worded.
+      const message = transient ? facts : await workflowDeps.word(facts, "blocked", current.summary);
       const { rec: paused } = await update<null>(id, user, (r, t) => {
         const s = r.steps.find((x) => x.n === step.n);
         if (!s || s.claim !== token) return { next: null, out: null };
         return { next: { ...withStep(r, step.n, { status, claim: null, claimed_at: null, note: message }), state: "paused", pause_reason: message, log: logEvent(r, t, `paused:${step.n}`) }, out: null };
       });
-      return view(paused, { step: toStepView(paused.steps.find((s) => s.n === step.n) ?? claimed), pause_reason: message, message });
+      return view(paused, { step: toStepView(paused.steps.find((s) => s.n === step.n) ?? claimed), pause_reason: message, pause_transient: transient, message });
     };
 
     let pre;
@@ -549,12 +562,13 @@ export async function submitWorkflow(id: string, req: SubmitRequest, user: Copil
   } catch (e) {
     const kind = classifySendError(e);
     finalStatus = kind === "expired" ? "expired" : kind === "rejected" ? "failed" : "uncertain";
-    message =
+    const facts =
       kind === "ambiguous"
         ? "I couldn't confirm the network received this transaction. I won't send it again; check its status below."
         : kind === "expired"
           ? "The transaction expired before the network accepted it. Continue the plan to get a fresh one."
           : `The network rejected the transaction: ${humanizeFailure(e instanceof Error ? e.message : String(e))}`;
+    message = await workflowDeps.word(facts, "error", rec.summary);
     const { rec: after } = await update<null>(id, user, (r, t) => {
       const s = r.steps.find((x) => x.n === step.n);
       if (!s || s.status !== "submitted" || s.signature !== verified.signature) return { next: null, out: null };
@@ -605,7 +619,8 @@ async function submitBatch(id: string, step: StoredStep, req: SubmitRequest, use
     const s = marked.rec.steps.find((x) => x.n === step.n);
     return { plan: toPlanView(marked.rec), signature: s?.signature ?? null, status: s?.status ?? "pending", message: "This step was already sent." };
   }
-  const stop = async (status: StepStatus, message: string, clearTx: boolean): Promise<SubmitResponse> => {
+  const stop = async (status: StepStatus, facts: string, clearTx: boolean): Promise<SubmitResponse> => {
+    const message = await workflowDeps.word(facts, "error", marked.rec.summary);
     const { rec: after } = await update<null>(id, user, (r, t) => {
       const s = r.steps.find((x) => x.n === step.n);
       if (!s || s.status !== "submitted" || s.signature !== last) return { next: null, out: null };
@@ -693,10 +708,11 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
   }
 
   const confirmed = state.state === "confirmed";
+  const failedNote = confirmed ? null : await workflowDeps.word(`The transaction failed on chain: ${humanizeFailure((state as { err: string }).err)}`, "error", rec.summary);
   const { rec: next } = await update<null>(id, user, (r, t) => {
     const s = r.steps.find((x) => x.n === step.n);
     if (!s || s.signature !== signature || (s.status !== "submitted" && s.status !== "uncertain")) return { next: null, out: null };
-    const note = confirmed ? null : `The transaction failed on chain: ${humanizeFailure((state as { err: string }).err)}`;
+    const note = failedNote;
     if (confirmed && s.tx?.prerequisite) {
       // The one-time setup landed: the step itself is built next (status back to pending).
       return {

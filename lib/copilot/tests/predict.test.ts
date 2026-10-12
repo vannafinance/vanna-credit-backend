@@ -6,6 +6,7 @@
 import { Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FAILURE_SYSTEM } from "../decline";
 import { evaluateFirewall } from "../domain-firewall";
 import { handleChat } from "../index";
 import { setLimitStoreForTests } from "../limits";
@@ -210,6 +211,50 @@ describe("Predict through the Copilot", () => {
     const text = JSON.stringify(out.result);
     for (const id of [BARCA, DRAW, GALA]) expect(text).toContain(id);
     expect(text).toContain("yes_buy_cents");
+  });
+});
+
+describe("failures are worded by Gemini, from the server's facts", () => {
+  /** Scripted investigation turns; the failure-wording call (FAILURE_SYSTEM) answers with `reply`. */
+  function withWording(script: Call[][], reply: string): LlmClient & { wordings: LlmRequest[] } {
+    const wordings: LlmRequest[] = [];
+    let turn = 0;
+    return {
+      wordings,
+      async generate(req) {
+        if (req.system === FAILURE_SYSTEM) {
+          wordings.push(req);
+          return { text: JSON.stringify({ reply }), calls: [], tokens: 10 };
+        }
+        return { text: null, calls: script[Math.min(turn++, script.length - 1)], tokens: 10 };
+      },
+    };
+  }
+
+  it("a check that blocks the trade reaches the user in Gemini's words, built from the facts", async () => {
+    positions = { ...positions, wallet: { cash: 3, usdc: 0, sol: 2 } };
+    const llm = withWording([[read], [{ name: "propose_actions", args: { actions: [buy(BARCA, "10")] } }]], "Your wallet has 3 CASH but this bet needs 10, so I didn't prepare it. You can ask me for test CASH first.");
+    setLlmClient(llm);
+    const res = await chat("bet 10 on barcelona");
+    expect(res.kind).toBe("blocked");
+    expect(res.message).toBe("Your wallet has 3 CASH but this bet needs 10, so I didn't prepare it. You can ask me for test CASH first.");
+    expect(llm.wordings).toHaveLength(1);
+    expect(llm.wordings[0]!.user).toMatch(/KIND: blocked[^]*holds 3 CASH/);
+  });
+
+  it("a reply with a figure that isn't in the facts is not shown; the facts are", async () => {
+    positions = { ...positions, wallet: { cash: 3, usdc: 0, sol: 2 } };
+    setLlmClient(withWording([[read], [{ name: "propose_actions", args: { actions: [buy(BARCA, "10")] } }]], "You need 7.5 more CASH."));
+    const res = await chat("bet 10 on barcelona");
+    expect(res.message).toMatch(/holds 3 CASH and this trade spends 10 CASH/);
+  });
+
+  it("a question Gemini asked itself is not worded again", async () => {
+    const llm = withWording([[{ name: "ask_user", args: { question: "Which Barcelona market do you mean?" } }]], "unused");
+    setLlmClient(llm);
+    const res = await chat("bet on barca");
+    expect(res.message).toBe("Which Barcelona market do you mean?");
+    expect(llm.wordings).toHaveLength(0);
   });
 });
 

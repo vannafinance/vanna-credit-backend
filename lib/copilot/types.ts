@@ -216,6 +216,8 @@ export interface AdvanceResponse {
   unsigned_tx?: UnsignedTx | null;
   /** Why the plan paused (health floor, price moved, simulation failed, ...). */
   pause_reason?: string | null;
+  /** The pause came from a slow or stale read (the client retries it by itself), not from a safety rule. */
+  pause_transient?: boolean;
   message?: string | null;
   answer?: StructuredAnswer | null;
 }

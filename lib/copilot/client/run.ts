@@ -158,7 +158,8 @@ export function createRunController(opts: RunOptions): RunController {
       if (res.pause_reason) {
         // A pause caused only by a slow or stale read (not by a safety rule like the health floor) is retried a
         // few times by itself; the server re-checks everything on each advance, so nothing is skipped.
-        if (TRANSIENT_PAUSE.test(res.pause_reason) && transientRetries < MAX_TRANSIENT_RETRIES) {
+        // The server says which pauses are transient (its own facts); the text is Gemini's wording and isn't parsed.
+        if ((res.pause_transient ?? TRANSIENT_PAUSE.test(res.pause_reason)) && transientRetries < MAX_TRANSIENT_RETRIES) {
           transientRetries++;
           set({ phase: "advancing", message: "Waiting for fresh data, trying again..." });
           await sleep(3_000 * transientRetries);
