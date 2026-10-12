@@ -12,7 +12,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { IC, Icon } from "@/components/v3/icons";
-import { Info, StatStrip } from "@/components/v3/ui";
+import { Banner, Info, StatStrip } from "@/components/v3/ui";
 import { pct, sUsd, usd, usdC } from "@/components/v3/format";
 import { useWallet } from "@/hooks/use-wallet";
 import { usePredictEvents } from "@/hooks/use-predict";
@@ -314,28 +314,20 @@ export function PredictList() {
   return (
     <div className="v3 page">
       <div className="pd-wrap">
-        <section className="pd-hero">
-          <div className="pd-hero-l">
-            <span className="pd-hero-k">Vanna Predict</span>
-            <h1>Trade the world&apos;s outcomes</h1>
-            <p>Buy Yes or No on real events from World. Your shares earn in Vanna&apos;s USDC pool while you wait for the result.</p>
-          </div>
-          <div className="pd-hero-r num">
-            <span className="pd-hero-ic">{IC.coins}</span>
-            <span>
-              <span className="pd-hl">
-                Earn up to {pct(rate, 1)} APY while you wait <Info text={INFO.rate} />
-              </span>
-              <small>
-                {usdC(lent)} earning in Vanna&apos;s USDC pool from {lentMarkets} market{lentMarkets === 1 ? "" : "s"}
-              </small>
-            </span>
-          </div>
-        </section>
+        {/* Same banner (theme, carousel) as Margin and Farm. The live pool rate is in the second slide. */}
+        <Banner
+          page="predict"
+          slides={[
+            ["Trade the world's outcomes", "Buy Yes or No on real events from World. Your shares earn in Vanna's USDC pool while you wait for the result."],
+            [`Earn up to ${pct(rate, 1)} APY while you wait`, `${usdC(lent)} is earning in Vanna's USDC pool from ${lentMarkets} market${lentMarkets === 1 ? "" : "s"}. Paired Yes and No shares are lent out until the event resolves.`],
+            ["Bet slip", "Pick several outcomes of one event and buy them all with a single wallet approval."],
+          ]}
+        />
 
         {acct.connected && (
           <div className="pd-strip">
             <StatStrip
+              center
               n={5}
               items={[
                 // Values only (no sub-lines under the figures, per the product request).

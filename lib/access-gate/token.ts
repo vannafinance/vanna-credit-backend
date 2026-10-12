@@ -16,15 +16,15 @@ export const ACCESS_COOKIE_NAME = "vanna_access";
 /** How long a successful code entry is remembered (~30 days). */
 export const ACCESS_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/** Code used when ACCESS_CODE is unset (test deployment default). */
-const DEFAULT_ACCESS_CODE = "2861";
-
 const TOKEN_VERSION = "v1";
 
-/** The access code users must enter (env ACCESS_CODE, trimmed; falls back to the default). */
+/**
+ * The access code users must enter (env ACCESS_CODE, trimmed). There is no built-in default: the
+ * code lives only in the environment, and when it is unset the gate fails closed (no code is
+ * accepted and no cookie verifies) instead of falling back to a value committed in the repo.
+ */
 export function getAccessCode(): string {
-  const fromEnv = process.env.ACCESS_CODE?.trim();
-  return fromEnv ? fromEnv : DEFAULT_ACCESS_CODE;
+  return process.env.ACCESS_CODE?.trim() ?? "";
 }
 
 /**
@@ -54,6 +54,8 @@ export function isValidAccessCode(submitted: unknown): boolean {
   if (typeof submitted !== "string") return false;
   // Bound the work done on attacker-controlled input.
   if (submitted.length === 0 || submitted.length > 256) return false;
+  const code = getAccessCode();
+  if (!code) return false;
   return safeEqual(submitted.trim(), getAccessCode());
 }
 
@@ -73,6 +75,8 @@ export function createAccessToken(nowMs: number = Date.now()): string {
 /** True when `token` is a well-formed, correctly signed, unexpired access cookie. */
 export function verifyAccessToken(token: string | undefined | null, nowMs: number = Date.now()): boolean {
   if (!token || token.length > 200) return false;
+  // Gate not configured: fail closed (the derived fallback secret would be guessable).
+  if (!getAccessCode()) return false;
   const parts = token.split(".");
   if (parts.length !== 3 || parts[0] !== TOKEN_VERSION) return false;
   const [, expiresRaw, sig] = parts;

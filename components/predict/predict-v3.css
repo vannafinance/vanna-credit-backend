@@ -426,8 +426,8 @@ html.dark .v3{--pd-surface:#161616; --pd-inset:#222222; --pd-border:#333333; --p
 html.dark .v3{--pd-poly-bg:rgba(90,130,255,.18);--pd-poly-fg:#9db4ff;--pd-world-bg:#2a2a2a;--pd-world-fg:#ffffff}
 /* hero */
 .v3 .pd-hero-r{gap:12px}
-.v3 .pd-hero-ic{width:40px;height:40px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--pd-glass);border:1px solid var(--pd-glass-bd)}
-.v3 .pd-hero-ic svg{width:18px;height:18px}
+.v3 .pd-hero-r > .pd-hero-ic{width:40px;height:40px;border-radius:50%;flex:none;display:grid;place-items:center;gap:0;background:var(--pd-glass);border:1px solid var(--pd-glass-bd)}
+.v3 .pd-hero-r > .pd-hero-ic svg{width:18px;height:18px;display:block}
 .v3 .pd-hero-r .pd-hl{font-size:15px;font-weight:700;line-height:1.3}
 .v3 .pd-hero-r em{font-style:normal;font-size:11px;font-weight:500;color:var(--pd-w70)}
 /* stats strip: values sit under their titles (core puts the title after a 28 px icon + 8 px gap) */
@@ -690,3 +690,8 @@ html.dark .v3 .pd-bar3 i{background:color-mix(in srgb,var(--c),#fff 38%)}
 .v3 .pd-load{border:1px solid var(--pd-border);background:var(--pd-surface);border-radius:16px;padding:48px 16px;text-align:center;font-size:13px;color:var(--pd-muted)}
 .v3 .pd-more{display:flex;justify-content:center;margin-top:16px}
 .v3 .pd-cell .pd-ba{flex-wrap:wrap;white-space:normal}
+/* Centered strip (same look as Farm / Margin): no left indent on values, equal padding. */
+@media (min-width:768px){
+  .v3 .pd-strip .fs.c .v,.v3 .pd-strip .fs.c .s{margin-left:0}
+  .v3 .pd-strip .fs.c article{padding:20px 8px}
+}

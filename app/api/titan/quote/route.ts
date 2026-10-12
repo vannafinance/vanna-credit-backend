@@ -1,3 +1,4 @@
+import { redactSecrets } from "@/lib/solana/server/json";
 import { NextRequest, NextResponse } from "next/server";
 import { titanConfigured, titanQuote } from "@/lib/solana/server/titan-api";
 
@@ -31,6 +32,6 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json(route);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Titan quote failed" }, { status: 502 });
+    return NextResponse.json({ error: error instanceof Error ? redactSecrets(error.message) : "Titan quote failed" }, { status: 502 });
   }
 }

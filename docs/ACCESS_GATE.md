@@ -35,7 +35,7 @@ Always open without the cookie:
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `ACCESS_CODE` | `2861` | The code users type. Leading and trailing spaces are ignored. |
+| `ACCESS_CODE` | none (required) | The code users type. Leading and trailing spaces are ignored. Unset = the gate fails closed: no code is accepted and no cookie verifies. |
 | `ACCESS_COOKIE_SECRET` | derived from `ACCESS_CODE` | HMAC key with 32+ random characters. Set it in production. Without it, anyone who knows the code can mint a cookie, though they could also just log in. |
 
 Set them on Cloud Run. This only changes env vars and keeps the image and other vars:
@@ -43,7 +43,7 @@ Set them on Cloud Run. This only changes env vars and keeps the image and other 
 ```bash
 gcloud run services update vanna-credit-solana-test \
   --region=us-central1 --project=vanna-credit-solana-test \
-  --update-env-vars=ACCESS_CODE=2861,ACCESS_COOKIE_SECRET=$(openssl rand -hex 32)
+  --update-env-vars=ACCESS_CODE=<your-code>,ACCESS_COOKIE_SECRET=$(openssl rand -hex 32)
 ```
 
 Keeping the secret in Secret Manager is preferable. For example:
@@ -53,7 +53,7 @@ printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create access-cookie-secr
   --project=vanna-credit-solana-test --data-file=-
 gcloud run services update vanna-credit-solana-test \
   --region=us-central1 --project=vanna-credit-solana-test \
-  --update-env-vars=ACCESS_CODE=2861 \
+  --update-env-vars=ACCESS_CODE=<your-code> \
   --update-secrets=ACCESS_COOKIE_SECRET=access-cookie-secret:latest
 ```
 
