@@ -4,7 +4,9 @@
  * Presentation primitives for the Risk Analytics screens (styled by analytics.css). Pure
  * presentation: they receive finished values and never fetch or compute financial figures.
  */
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { marginPda } from "@/lib/solana/pdas";
 import Image from "next/image";
 import { KAMINO_RECEIPTS } from "@/lib/solana/kamino";
 import { TOKENS } from "@/lib/solana/tokens";
@@ -174,6 +176,13 @@ export function AssetStack({ symbols }: { symbols: string[] }) {
       {symbols.length > 4 && <span className="an-ph">+{symbols.length - 4}</span>}
     </span>
   );
+}
+
+/** "YOU" next to the connected wallet (or its margin account address), wherever it appears. */
+export function YouPill({ value }: { value?: string | null }) {
+  const { publicKey } = useWallet();
+  const mine = useMemo(() => (publicKey ? [publicKey.toBase58(), marginPda(publicKey).toBase58()] : []), [publicKey]);
+  return value && mine.includes(value) ? <span className="an-you-pill">YOU</span> : null;
 }
 
 export function Addr({ value, head = 5, tail = 5 }: { value: string; head?: number; tail?: number }) {

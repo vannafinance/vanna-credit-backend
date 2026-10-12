@@ -38,7 +38,7 @@ function CompositionPanel({ s }: { s: AccountsSummary | null }) {
   return (
     <Panel title="What collateral is made of" sub="Across all accounts" tip="composition">
       {s && s.valued && comp && total > 0 ? (
-        <div className="an-grid-2 an-comp" style={{ alignItems: "center", gap: 16 }}>
+        <div className="an-comp-box"><div className="an-grid-2 an-comp" style={{ alignItems: "center", gap: 16 }}>
           <Donut segments={defs.map(([k, label, color]) => ({ label, value: comp[k], color, tip: `${label}
 ${usd(comp[k])} · ${pct(comp[k] / total, 1)}` }))} center={["Collateral", usdC(total)]} />
           <div className="an-comp-list">{defs.map(([k, label, color]) => (
@@ -47,7 +47,7 @@ ${usd(comp[k])} · ${pct(comp[k] / total, 1)}` }))} center={["Collateral", usdC(
               <span className="an-comp-vals"><span>{usd(comp[k])}</span><span className="an-muted">{pct(comp[k] / total, 1)}</span></span>
             </div>
           ))}</div>
-        </div>
+        </div></div>
       ) : <Empty title={WAIT} text="This appears once accounts have been found and valued." />}
     </Panel>
   );

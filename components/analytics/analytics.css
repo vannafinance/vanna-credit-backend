@@ -414,11 +414,22 @@ html.dark .v3 .an-root { --an-card-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
 .v3 .an-root .an-kv-rows details.an-more > summary { display: flex; border-bottom: 1px solid var(--line-soft); }
 .v3 .an-root .an-kv-rows .an-kv dd { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 
-/* Composition legend: label, amount and share on one line in aligned columns; only when the card is too narrow
-   for that do the amount and share wrap together under the label. */
-.v3 .an-root .an-grid-2.an-comp { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
-.v3 .an-root .an-comp-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; column-gap: 12px; padding: 7px 0; }
-.v3 .an-root .an-comp-row > :first-child { flex: 1 1 140px; white-space: nowrap; }
-.v3 .an-root .an-comp-vals { display: grid; grid-template-columns: minmax(7.5em, auto) 3.6em; column-gap: 8px; white-space: nowrap; margin-left: auto; font-variant-numeric: tabular-nums; }
+/* Composition legend: dot + name, amount and share on ONE line, amounts and shares in aligned columns. */
+.v3 .an-root .an-comp-box { container-type: inline-size; }
+.v3 .an-root .an-grid-2.an-comp { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
+/* Not enough room beside the donut: put the legend under it at full width instead of squeezing a row onto two lines. */
+@container (max-width: 580px) { .v3 .an-root .an-grid-2.an-comp { grid-template-columns: minmax(0, 1fr); } }
+.v3 .an-root .an-comp-row { display: flex; align-items: center; justify-content: space-between; column-gap: 12px; padding: 7px 0; white-space: nowrap; font-size: 14px; }
+.v3 .an-root .an-comp-row > :first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.v3 .an-root .an-comp-vals { display: grid; grid-template-columns: minmax(6.2em, auto) 3.2em; column-gap: 8px; flex: none; font-variant-numeric: tabular-nums; }
 .v3 .an-root .an-comp-vals > span { text-align: right; }
 @media (max-width: 1000px) { .v3 .an-root .an-grid-2.an-comp { grid-template-columns: 1fr; } }
+
+/* Risk chips are always visible, with a colour cue; a selected row is clearly marked. */
+.v3 .an-root .an-seg button .an-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok-bar); flex: none; }
+.v3 .an-root .an-seg button[data-tone=danger] .an-dot { background: var(--danger-bar); }
+.v3 .an-root .an-seg button[data-tone=warn] .an-dot { background: var(--warn-bar); }
+.v3 .an-root .an-t tr.an-expanded:not(.an-you) > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.v3 .an-root .an-t tr.an-expanded > td { background: var(--accent-soft); border-bottom-color: transparent; }
+.v3 .an-root .an-t tr.an-expanded .an-chev { color: var(--accent); }
+.v3 .an-root .an-t tr.an-detail > td { box-shadow: inset 3px 0 0 var(--accent); }

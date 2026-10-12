@@ -7,7 +7,7 @@ import { hfText, pct, pct1, short, usd } from "@/lib/analytics/format";
 import { AccountsMonitor } from "../accounts-monitor";
 import { HBars, Legend, StackBar, TONE_VAR } from "../charts";
 import Link from "next/link";
-import { Empty, Kpi, Notice, Panel, Addr, ForkTime } from "../ui";
+import { Empty, Kpi, Notice, Panel, Addr, ForkTime, YouPill } from "../ui";
 import { ViewHead } from "../shell";
 
 const WAIT = "Waiting for accounts";
@@ -27,7 +27,7 @@ function Closest() {
       {rows.length === 0 ? <Empty title="No account has debt" text="Nothing to rank yet." /> : (
         <HBars rows={rows.map((r) => ({
           key: r.address,
-          name: <span title={r.owner}>{short(r.owner, 4, 4)}</span>,
+          name: <span title={r.owner}>{short(r.owner, 4, 4)}<YouPill value={r.owner} /></span>,
           segments: [{ value: r.bufferPct ?? 0, color: r.liquidatable ? TONE_VAR.danger : r.status === "healthy" ? TONE_VAR.ok : TONE_VAR.warn, tip: `Can lose ${pct1(r.bufferPct)} of its collateral value (${usd(r.bufferUsd)}) before liquidation\nHealth ${hfText(r.healthFactor)}` }],
           valueText: `Health ${hfText(r.healthFactor)}`,
         }))} />
@@ -81,8 +81,8 @@ export function LiquidationsView() {
             <tbody>{liquidated.map((e) => (
               <tr key={e.id}>
                 <td className="an-nowrap"><ForkTime t={e.time} /></td>
-                <td title={e.marginAccount ?? ""}>{short(e.marginAccount, 5, 5)}</td>
-                <td>{e.actor ? <Addr value={e.actor} /> : "-"}</td>
+                <td title={e.marginAccount ?? ""}>{short(e.marginAccount, 5, 5)}<YouPill value={e.marginAccount} /></td>
+                <td>{e.actor ? <><Addr value={e.actor} /><YouPill value={e.actor} /></> : "-"}</td>
                 <td className="an-r">{usd(e.debtValueUsd)}</td><td className="an-r">{usd(e.collateralValueUsd)}</td><td className="an-r">{hfText(e.healthFactor)}</td>
                 <td><Addr value={e.signature} /></td>
               </tr>

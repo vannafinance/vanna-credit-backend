@@ -13,10 +13,11 @@ import { hfText, levText, num, pct, pct1, short, usd, usdC } from "@/lib/analyti
 import { liquidationPrices, protocolsOf } from "@/lib/analytics/risk";
 import { reasonText } from "@/lib/analytics/reasons";
 import type { AccountFilter, AccountSortKey, AccountView } from "@/lib/analytics/types";
-import { Addr, AssetCell, Empty, Icon, InfoTip, StatusBadge, statusTone, ForkTime } from "./ui";
+import { Addr, AssetCell, Empty, Icon, InfoTip, StatusBadge, statusTone, ForkTime, YouPill } from "./ui";
 import { SERIES, Sparkline, StackBar } from "./charts";
 
 const FILTERS: Array<[AccountFilter, string]> = [["all", "All"], ["liquidatable", "Liquidatable"], ["atrisk", "At risk"], ["healthy", "Safe"], ["nodebt", "No debt"], ["incomplete", "Not valued"]];
+const FILTER_TONE: Partial<Record<AccountFilter, string>> = { liquidatable: "danger", atrisk: "warn", healthy: "ok" };
 const TABS = [["health", "By health", "health"], ["leverage", "By leverage", "activity"]] as const;
 type Tab = (typeof TABS)[number][0];
 const PER = 10;
@@ -43,6 +44,11 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
 
   useEffect(() => { const t = setTimeout(() => { setQ(text); setPage(1); }, 300); return () => clearTimeout(t); }, [text]);
   useEffect(() => { setPage(1); }, [band, filter]);
+  // Arriving from an alert (/analytics?filter=atrisk#accounts): open that list and scroll to it.
+  useEffect(() => {
+    const f = new URLSearchParams(window.location.search).get("filter");
+    if (f && !fixedFilter && FILTERS.some(([k]) => k === f)) { setFilter(f as AccountFilter); document.getElementById("accounts")?.scrollIntoView({ block: "start" }); }
+  }, [fixedFilter]);
 
   const query: AccountsQuery = { filter: fixedFilter ?? filter, sort, dir, q, page, per: PER, band, you };
   const { data, isLoading } = useAnalyticsAccounts(query);
@@ -106,8 +112,8 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
       <div className="an-toolbar">
         {!fixedFilter && (
           <div className="an-seg" role="group" aria-label="Status filter">
-            {FILTERS.filter(([k]) => k === "all" || (counts?.[k] ?? 0) > 0 || filter === k).map(([k, l]) => (
-              <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}{k !== "all" && counts ? <span className="an-muted"> {counts[k]}</span> : null}</button>
+            {FILTERS.map(([k, l]) => (
+              <button key={k} aria-pressed={filter === k} data-tone={FILTER_TONE[k]} onClick={() => setFilter(k)}>{FILTER_TONE[k] && <i className="an-dot" />}{l}{counts ? <span className="an-muted"> {counts[k]}</span> : null}</button>
             ))}
           </div>
         )}
@@ -122,10 +128,10 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
           <thead><tr>{heads}</tr></thead>
           <tbody>
             {shown.length ? shown.map((r, i) => {
-              const isYou = r.owner === mine?.row.owner;
+              const isYou = !!you && r.owner === you;
               const isOpen = open.has(r.owner);
               const tone = statusTone(r.status);
-              const rank = isYou ? mine?.rank ?? null : (data!.page - 1) * data!.per + (pinned ? i : i + 1);
+              const rank = isYou && mine?.row.owner === r.owner ? mine.rank ?? null : (data!.page - 1) * data!.per + (pinned ? i : i + 1);
               return (
                 <Fragment key={r.address}>
                   <tr className={`an-row-link ${tone === "danger" ? "an-tone-danger" : ""} ${isOpen ? "an-expanded" : ""} ${isYou ? "an-you" : ""}`} tabIndex={0} role="button" aria-expanded={isOpen}
@@ -133,7 +139,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (e.currentTarget as HTMLElement).click(); } }}>
                     <td className="an-c" style={{ width: 26 }}><Icon name="chevron" className="an-chev" /></td>
                     <td className={isYou ? "an-you-rank" : "an-muted"} style={{ width: 30 }}>{rank ?? "-"}</td>
-                    <td className="an-nowrap"><span className="an-strong" title={r.owner}>{short(r.owner, 5, 5)}</span>{isYou && <span className="an-you-pill">YOU</span>}</td>
+                    <td className="an-nowrap"><span className="an-strong" title={r.owner}>{short(r.owner, 5, 5)}</span><YouPill value={r.owner} /></td>
                     {tab === "health" ? (
                       <>
                         <td className="an-r">{hfCell(r)}</td>

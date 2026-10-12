@@ -52,7 +52,7 @@ function Inspector({ row, data }: { row: PoolRow; data: ProtocolOverview }) {
           {fact("Last interest update", detail && finite(detail.lastAccrual) ? <><ForkTime t={detail.lastAccrual} /> <span className="an-muted">· {ago(data.forkTime - detail.lastAccrual)}</span></> : "Not available")}
           {fact("Collateral / borrowing", detail ? <><Badge tone={detail.collateralEnabled ? "ok" : "warn"}>{detail.collateralEnabled ? "Collateral on" : "Collateral off"}</Badge> <Badge tone={detail.borrowEnabled ? "ok" : "warn"}>{detail.borrowEnabled ? "Borrow on" : "Borrow off"}</Badge></> : "Not available")}
         </dl>
-        <details className="an-more"><summary>More details</summary>
+        <details className="an-more" open><summary>More details</summary>
           <dl className="an-kv">
             {fact("Pool address", p.reserve ? <Addr value={p.reserve} head={6} tail={6} /> : "-")}
             {fact("Token mint", <Addr value={p.mint} head={6} tail={6} />)}

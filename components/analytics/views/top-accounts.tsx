@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useAnalyticsAccounts, useAnalyticsEvents, useAnalyticsSummary } from "@/hooks/use-analytics";
 import { hfText, levText, num, pct1, short, usd } from "@/lib/analytics/format";
 import type { ProgramEvent } from "@/lib/analytics/server/events";
-import { Addr, Badge, Empty, Kpi, Panel, StatusBadge, ForkTime } from "../ui";
+import { Addr, Badge, Empty, Kpi, Panel, StatusBadge, ForkTime, YouPill } from "../ui";
 import { ViewHead } from "../shell";
 
 const WAIT = "Waiting for accounts";
@@ -58,7 +58,7 @@ export function TopAccountsView() {
             {(data?.rows ?? []).length ? data!.rows.map((r, i) => (
               <tr key={r.address}>
                 <td className="an-muted">{(data!.page - 1) * data!.per + i + 1}</td>
-                <td><Addr value={r.owner} /></td>
+                <td className="an-nowrap"><Addr value={r.owner} /><YouPill value={r.owner} /></td>
                 <td className="an-r">{usd(r.debtUsd)}</td>
                 <td className="an-r">{s && s.debtUsd > 0 ? pct1((r.debtUsd ?? 0) / s.debtUsd) : "-"}</td>
                 <td className="an-r">{hfText(r.healthFactor)}</td>
