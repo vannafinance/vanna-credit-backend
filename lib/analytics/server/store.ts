@@ -28,7 +28,7 @@ import { getConnection } from "@/lib/solana/connection";
 import { summarize } from "../risk";
 import type { AccountRow, AccountView, AccountsSummary, Coverage } from "../types";
 import { exportKnownVaults, importKnownVaults, knownVaultCount, loadSharedContext, readAccountRows, type SharedContext } from "./accounts";
-import { coverage, exportRegistry, firstSeenTime, hasBacklog, importRegistry, knownMargins, newestKnownSignature, registerOwner, registryError, registryFingerprint, tick } from "./registry";
+import { coverage, exportRegistry, firstSeenTime, hasBacklog, importRegistry, knownMargins, newestKnownSignature, registerMargin, registerOwner, registryError, registryFingerprint, tick } from "./registry";
 import { eventsFingerprint, exportEvents, importEvents } from "./events";
 import { loadState, persistenceBackend, saveState, SCHEMA } from "./persistence";
 import { VANNA_PROGRAM_ID } from "@/lib/solana/config";
@@ -172,12 +172,13 @@ export function readSnapshot(): { snapshot: Snapshot | null; state: StoreState }
   };
 }
 
-/** Add one wallet's margin account on demand and return its row (null = no margin account). */
-export async function lookupOwner(owner: import("@solana/web3.js").PublicKey): Promise<AccountRow | null> {
-  const found = await registerOwner(owner);
-  if (!found) return null;
+/** Add one margin account on demand and return its row (null = none). Accepts a wallet or the margin account address. */
+export async function lookupOwner(address: import("@solana/web3.js").PublicKey): Promise<AccountRow | null> {
+  let owner: string | null = (await registerOwner(address)) ? address.toBase58() : null;
+  owner ??= await registerMargin(address);
+  if (!owner) return null;
   const ctx = await loadSharedContext();
-  const entry = knownMargins().find((m) => m.owner === owner.toBase58());
+  const entry = knownMargins().find((m) => m.owner === owner);
   if (!entry) return null;
   const [row] = await readAccountRows(ctx, [entry]);
   rowCache.set(row.address, row);
@@ -185,7 +186,7 @@ export async function lookupOwner(owner: import("@solana/web3.js").PublicKey): P
   return row;
 }
 
-export const cachedRow = (owner: string): AccountRow | null => [...rowCache.values()].find((r) => r.owner === owner) ?? null;
+export const cachedRow = (key: string): AccountRow | null => [...rowCache.values()].find((r) => r.owner === key || r.address === key) ?? null;
 
 /** Adds the server's own measurements to a row for the API. */
 export const decorate = (r: AccountRow): AccountView => ({ ...r, hfTrend: hfHistory.get(r.address) ?? [], firstSeenTime: firstSeenTime(r.address) });

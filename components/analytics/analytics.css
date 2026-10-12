@@ -7,7 +7,7 @@
 .v3 .an-root {
   --surface: var(--card); --surface-2: var(--tile); --surface-3: var(--tile-2);
   --line-soft: var(--line); --line-strong: var(--line-2);
-  --ink: var(--text); --ink-2: var(--label); --ink-3: var(--muted); --faint: var(--quiet);
+  --ink: var(--text); --ink-2: #5c5c5c; --ink-3: #6b6b6b; --faint: #8a8f98; /* secondary text: darker than the site's --label/--muted so it stays readable */
   --accent: var(--violet); --accent-ink: var(--violet-ink); --accent-soft: var(--violet-soft); --accent-line: rgba(112, 58, 230, .35);
   --nav-active-bg: #e4d9fb; --nav-active-ink: #4a238f;
   --ok-bg: rgba(34, 206, 217, .14); --ok-bar: #22ced9;
@@ -20,6 +20,7 @@
   color: var(--text); font-family: var(--font);
 }
 html.dark .v3 .an-root {
+  --ink-2: #e2e2e2; --ink-3: #c4c4c4; --faint: #9c9c9c; /* secondary text: brighter than the site's dim greys on dark cards */
   --nav-active-bg: #3a2c63; --nav-active-ink: #e4d9fb;
   --ok-bar: #32cbd6; --critical: #ffa468; --critical-bg: rgba(240, 138, 43, .16);
   --accent: #b69af5; --accent-ink: #d3c2f7; --accent-soft: rgba(154, 114, 240, .16); --accent-line: rgba(182, 154, 245, .4);
@@ -404,3 +405,11 @@ html.dark .v3 .an-root { --an-card-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
 .v3 .an-root .an-tag { display: inline-flex; align-items: center; margin-left: 0; padding: 1px 8px; border-radius: 6px; background: var(--surface-3); color: var(--ink-2); font-size: 11px; font-weight: 600; border: 1px solid var(--line); line-height: 1.5; }
 .v3 .an-root .an-assetrow { display: flex; align-items: center; gap: 4px; }
 .v3 .an-root .an-assetrow .an-tag { margin-left: 4px; }
+
+/* Key/value lists side by side (pool inspector): every row has the same height so the two columns line up row by row. */
+.v3 .an-root .an-kv-rows { align-items: start; }
+.v3 .an-root .an-kv-rows .an-kv > div,
+.v3 .an-root .an-kv-rows details.an-more > summary { min-height: 52px; padding-top: 0; padding-bottom: 0; align-items: center; }
+.v3 .an-root .an-kv-rows details.an-more { margin-top: 0; }
+.v3 .an-root .an-kv-rows details.an-more > summary { display: flex; border-bottom: 1px solid var(--line-soft); }
+.v3 .an-root .an-kv-rows .an-kv dd { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }

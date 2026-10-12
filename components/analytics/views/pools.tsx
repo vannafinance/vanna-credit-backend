@@ -41,7 +41,7 @@ function Inspector({ row, data }: { row: PoolRow; data: ProtocolOverview }) {
             : <Empty title="Rate model not available" text="The pool's rate settings could not be read from the chain." />}
         </div>
       </div>
-      <div className="an-grid-2 an-mt" style={{ gap: 32 }}>
+      <div className="an-grid-2 an-mt an-kv-rows" style={{ gap: 32 }}>
         <dl className="an-kv">
           {fact("Status", <Badge tone={p.status === "Active" ? "ok" : "warn"}>{p.status}</Badge>)}
           {fact(<>Reserve factor <InfoTip k="reserveFactor" /></>, pct(p.reserveFactor))}

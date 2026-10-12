@@ -165,7 +165,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
               <tr><td colSpan={COLS}>
                 {isWallet ? (
                   <div className="an-group-note" style={{ margin: "14px 20px" }}>
-                    <div><b>Not in the list</b><span>Look up this wallet directly.</span></div>
+                    <div><b>Not in the list</b><span>Look up this address directly.</span></div>
                     <button className="an-btn an-sm" onClick={doLookup} disabled={lookup.loading}>{lookup.loading ? "Looking…" : "Look up"}</button>
                     {lookup.error && <p className="an-panel-foot" style={{ color: "var(--danger)", padding: "0 20px" }}>{lookup.error}</p>}
                   </div>

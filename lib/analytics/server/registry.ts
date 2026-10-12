@@ -109,7 +109,9 @@ async function verify(keys: PublicKey[]) {
   fresh.forEach((key, i) => {
     const authority = marginAuthority(key, infos[i]);
     if (authority) registry.margins.set(key.toBase58(), authority.toBase58());
-    else registry.rejected.add(key.toBase58());
+    // Only an account that exists and is not a margin account is a lasting "no". A key with no account
+    // yet may become a margin account later (a wallet looked up before it created one), so it is re-read.
+    else if (infos[i]) registry.rejected.add(key.toBase58());
   });
   if (registry.rejected.size > REJECTED_LIMIT) {
     // Bound memory; forgetting a rejection only costs one re-read.
@@ -227,12 +229,23 @@ export function tick(): Promise<void> {
 /** True while there is more look-back work to do (the store keeps ticking back-to-back). */
 export const hasBacklog = () => registry.queue.length > 0 || (!registry.backfillExhausted && registry.discovered < MAX_SIGNATURES);
 
+/**
+ * Verify one margin account key on demand. A user asking for it is new information: an earlier "no
+ * such account" (e.g. the page looked the wallet up before its margin account was created) must not stick.
+ */
+async function verifyNow(key: PublicKey): Promise<string | null> {
+  registry.rejected.delete(key.toBase58());
+  await verify([key]);
+  return registry.margins.get(key.toBase58()) ?? null;
+}
+
 /** Add a wallet's margin account on demand (the "look up a wallet" box). Verified like the rest. */
 export async function registerOwner(owner: PublicKey): Promise<boolean> {
-  const key = marginPda(owner);
-  await verify([key]);
-  return registry.margins.has(key.toBase58());
+  return (await verifyNow(marginPda(owner))) !== null;
 }
+
+/** Same, for a pasted margin account address. Returns its owner wallet, or null if it is not a margin account. */
+export const registerMargin = (address: PublicKey): Promise<string | null> => verifyNow(address);
 
 /** Cheap change detector so the store only saves when something moved. */
 export const registryFingerprint = () => `${registry.margins.size}:${registry.inspected}:${registry.discovered}:${registry.queue.length}:${registry.firstSeen.size}`;
