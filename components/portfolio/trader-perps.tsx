@@ -16,6 +16,7 @@ import { usePerpsHistory } from "@/hooks/use-perps";
 import { pairSlug } from "@/components/perps/perps-format";
 import type { Portfolio } from "./use-portfolio";
 import { ChartCard, HistNav, InfoCard, PTable, TT, TxCell, sign, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const SideTxt = ({ s }: { s: "long" | "short" | null }) =>
   s ? <b className={s === "long" ? "pf-long" : "pf-short"}>{s === "long" ? "Long" : "Short"}</b> : <>N/A</>;
@@ -93,7 +94,7 @@ export function TraderPerps({ p }: { p: Portfolio }) {
               }))}
             />
           ) : (
-            <div className="pf-pnone">{history.isLoading ? "Loading perps history…" : "No perps activity yet"}</div>
+            <div className="pf-pnone">{history.isLoading ? <VannaLoader size="block" /> : "No perps activity yet"}</div>
           )
         ) : list.length ? (
           <PTable

@@ -23,6 +23,7 @@ import { NoData, Pie, SV, usePop } from "./earn-ui";
 import { fL, fLoc, fP, fT, fU, fXr, shortAddr, usdOr } from "./earn-format";
 import { seriesFor, useEarnV3 } from "./use-earn-v3";
 import type { Tf } from "./earn-series";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 type D = ReturnType<typeof useEarnV3>;
 
@@ -112,7 +113,7 @@ export function TabDetails({ sym, d }: { sym: string; d: D }) {
       <section className="earn-det" aria-label="Vault Details">
         <div className="earn-detin">
           <h2>Statistics</h2>
-          <NoData text={isLoading ? "Loading vault statistics…" : `The ${sym} pool is not initialised on this network.`} />
+          <NoData text={isLoading ? <VannaLoader size="block" caption="Loading vault statistics" /> : `The ${sym} pool is not initialised on this network.`} />
           <div style={{ height: 20 }} />
         </div>
       </section>
@@ -237,7 +238,7 @@ export function TabPositions({ sym, d }: { sym: string; d: D }) {
             { t: fU(px > 0 ? v * px : 0) },
             { t: fP(apy) },
             earnedTok === null
-              ? { t: `${fT(0)} ${sym}`, d: earnedE?.reason ?? "Reading history…" }
+              ? { t: `${fT(0)} ${sym}`, d: earnedE?.reason ?? <VannaLoader size="inline" caption="Reading history" /> }
               : { t: `${fT(Math.max(0, earnedTok))} ${sym}`, d: px > 0 ? usd(Math.max(0, earnedTok) * px) : "" },
           ],
         },
@@ -340,7 +341,7 @@ export function TabActivity({ sym, d }: { sym: string; d: D }) {
   const hs = connected ? d.transactions.filter((h) => h.symbol === sym).sort((a, b) => b.timestamp - a.timestamp) : [];
   const txRows: Row[] = hs.length
     ? hs.map((h) => ({ key: h.signature + h.type, cells: histCells(h, px) }))
-    : [{ key: "none", cells: [{ t: "None", d: d.historyLoading ? "Loading…" : "No transactions yet" }, { t: "N/A" }, { t: `0 ${sym}` }, { t: "N/A" }, { t: "None" }] }];
+    : [{ key: "none", cells: [{ t: "None", d: d.historyLoading ? <VannaLoader size="inline" label="Loading transactions" /> : "No transactions yet" }, { t: "N/A" }, { t: `0 ${sym}` }, { t: "N/A" }, { t: "None" }] }];
   return (
     <section className="earn-act" aria-label="Activity Overview">
       <h2>Pool Composition</h2>
@@ -354,7 +355,7 @@ export function TabActivity({ sym, d }: { sym: string; d: D }) {
           rows={comp}
         />
       ) : (
-        <NoData text={p ? "This pool has no supply yet" : "Loading…"} />
+        <NoData text={p ? "This pool has no supply yet" : <VannaLoader />} />
       )}
       <div className="earn-acth">
         <h3>Your Recent Transactions</h3>
@@ -389,7 +390,7 @@ export function TabCollateral() {
   const [pg, setPg] = useState({ coll: 0, sup: 0, bor: 0 });
   const pages = Math.max(1, Math.ceil(TOKENS.length / PAGE));
   const slice = (k: keyof typeof pg) => TOKENS.slice(pg[k] * PAGE, pg[k] * PAGE + PAGE);
-  if (isLoading) return <NoData text="Loading collateral and limits…" />;
+  if (isLoading) return <NoData text={<VannaLoader size="block" caption="Loading collateral and limits" />} />;
 
   const cp: Row[] = slice("coll").map((t) => {
     const a = details[t.symbol]?.asset;

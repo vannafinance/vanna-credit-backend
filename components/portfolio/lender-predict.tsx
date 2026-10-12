@@ -18,6 +18,7 @@ import { predictHref } from "@/lib/predict/view";
 import { rowsOf, usePredictAccount } from "@/components/predict/positions";
 import { LinkedSheet, openLinkedSheet } from "@/components/predict/linked-sheet";
 import { Badge, ChartCard, Ct, Grid, HistNav, InfoCard, Success, Tag, TxCell, sign, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const TP = {
   pVal: "Value of your Yes/No shares at today's price; each pays $1 if its side wins and $0 if it loses.",
@@ -125,7 +126,7 @@ export function LenderPredict() {
           <Grid
             cols={HIST_COLS}
             heads={HIST_HEADS}
-            empty={hist.isLoading ? "Loading history…" : "No transactions yet"}
+            empty={hist.isLoading ? <VannaLoader size="block" /> : "No transactions yet"}
             rows={(hist.data ?? []).map((t, i) => ({
               key: `${t.signature}-${t.marketId}-${t.outcome}-${i}`,
               onClick: t.eventId ? () => router.push(predictHref(t.eventId!, t.marketId, t.outcome)) : undefined,
@@ -155,7 +156,7 @@ export function LenderPredict() {
               "Status",
               "Pays if right",
             ]}
-            empty={acct.loading ? "Loading positions…" : "No positions yet."}
+            empty={acct.loading ? <VannaLoader size="block" /> : "No positions yet."}
             rows={rows.map((r) => {
               const pool = r.kind === "pool";
               const part = r.p.shares > 0 ? r.shares / r.p.shares : 0;

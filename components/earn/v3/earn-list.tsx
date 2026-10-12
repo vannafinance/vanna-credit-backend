@@ -21,6 +21,7 @@ import { NoData, SV, usePop } from "./earn-ui";
 import { fP, fT, usdOr } from "./earn-format";
 import { seriesFor, useEarnV3 } from "./use-earn-v3";
 import type { Tf } from "./earn-series";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const VCOLS: Col[] = [
   { id: "pool", label: "Pool" },
@@ -81,7 +82,7 @@ export function EarnList({ initialTab = "vaults" }: { initialTab?: "vaults" | "p
         ? `Past values can't be rebuilt for ${depS.excluded.join(", ")} (shares moved outside supply / withdraw, or older than the scanned history), so only today's value is drawn.`
         : null;
   const netNote = d.historyLoading
-    ? "Reading your supply history from chain…"
+    ? <VannaLoader size="inline" caption="Reading your supply history from chain" />
     : d.earnedSummary.usd === null
       ? d.earnedSummary.unknownSymbols.length
         ? "Earned interest can't be proven from your on-chain history (positions opened outside the scanned history)."
@@ -294,7 +295,7 @@ export function EarnList({ initialTab = "vaults" }: { initialTab?: "vaults" | "p
       return rows.length ? <LiveTable cols={PCOLS} rows={rows} /> : <NoData />;
     }
     const rows = filterRows(vaultRows);
-    return rows.length ? <LiveTable cols={VCOLS} rows={rows} /> : <NoData text={d.poolsLoading ? "Loading pools…" : undefined} />;
+    return rows.length ? <LiveTable cols={VCOLS} rows={rows} /> : <NoData text={d.poolsLoading ? <VannaLoader size="block" /> : undefined} />;
   };
 
   return (
@@ -325,7 +326,7 @@ export function EarnList({ initialTab = "vaults" }: { initialTab?: "vaults" | "p
               onTf={setTfNet}
               pts={d.earnedSummary.usd === null ? [] : netS.pts}
               kind="net"
-              empty={d.historyLoading ? "Reading your supply history…" : "Earned interest can't be proven from your history"}
+              empty={d.historyLoading ? <VannaLoader label="Reading your supply history" /> : "Earned interest can't be proven from your history"}
               note={netNote}
             />
           </article>

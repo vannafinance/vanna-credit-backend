@@ -24,9 +24,10 @@ import { isFarmListed } from "@/lib/solana/farm";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
 import { perenaProduct, positionOf, usePerenaMarket, vaultHref } from "@/lib/farm/basis-live";
-import { VaultTable, useBasisApys } from "./vault-rows";
+import { VaultTable, basisApyMinis, useBasisApys } from "./vault-rows";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const DN_SLIDES: [string, string][] = [
   ["Delta-neutral Vaults", "Deposit from your margin account. Each vault buys spot on Jupiter and holds an equal 1x short on Phoenix, and earns the funding."],
@@ -117,7 +118,7 @@ export function FarmList() {
   const netFarmApy =
     kaminoW + vaultW > 0 ? ((t.netApy ?? 0) * 100 * kaminoW + vaultPos.reduce((sum, p) => sum + (p.apy !== null ? p.apy * p.value : 0), 0)) / (kaminoW + vaultW) : null;
   const netTip =
-    "Value-weighted yearly yield of all your farm positions at today's rates: Kamino supply APY after the Vanna borrow rate on the part funded by your debt in the same token; Basis vaults at their realized 7-day APY (or, until a vault has 7 days of history, the estimate from Phoenix funding); Perena at its published 7-day APY.";
+    "Value-weighted yearly yield of all your farm positions at today's rates: Kamino supply APY after the Vanna borrow rate on the part funded by your debt in the same token; Basis vaults at their realized 7-day APY (or, until a vault has 7 days of history, the estimate from Phoenix funding on its short; fewer days of share-price history are never annualised); Perena at its published 7-day APY.";
   const strip = farm.connected && (
     <div className="fm-fsw">
       <StatStrip
@@ -322,12 +323,15 @@ export function FarmList() {
             ) : (
               <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={apyText(apy)} mini={basisApy?.source === "launch" ? "Since launch" : basisApy?.estimate ? "Est. · Phoenix funding" : !basis ? "Perena 7D" : st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
+            <Cell
+              v={apyText(apy)}
+              mini={basis ? basisApyMinis(basisApy, st?.apy7Source, st?.returnSinceLaunchPct, st?.sinceLaunchDays) : "Perena 7D"}
+            />
           </Link>
         ),
       };
     });
-    if (!farm.connected || (!farm.rows.length && !vaultItems.length)) return <div className="fm-empty">{farm.positionsLoading ? "Loading positions…" : "No farm positions yet"}</div>;
+    if (!farm.connected || (!farm.rows.length && !vaultItems.length)) return <div className="fm-empty">{farm.positionsLoading ? <VannaLoader size="block" /> : "No farm positions yet"}</div>;
     const items = farm.rows
       .filter((r) => keepAsset(r.symbol))
       .map((r: FarmPositionRow) => ({
@@ -367,7 +371,7 @@ export function FarmList() {
             ["Protocol", "prot"],
             ["Holdings", "hold"],
             ["Earnings", "earn", "Redeemable now minus supplied (net of withdrawals), from your on-chain history, at today's price."],
-            ["APY", "apy", "Kamino's current supply APY; for Basis and Perena vaults, the recorded 7-day vault APY."],
+            ["APY", "apy", "Kamino's current supply APY; for Basis vaults, the realized 7-day vault APY or, until 7 days of history exist, the Phoenix-funding estimate (Est.); for Perena, its published 7-day APY."],
           ]}
         />
         {rows.length ? rows : <div className="fm-none">No positions match these filters</div>}

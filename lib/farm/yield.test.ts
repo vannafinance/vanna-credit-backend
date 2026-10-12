@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DAY, historicalApy } from './nav-math';
-import { apyText, depositPrice, eventApy, grossFundingApr, netYield, vaultApy } from './yield';
+import { LOW_TVL_USD, apyText, daysText, depositPrice, eventApy, grossFundingApr, netYield, sinceLaunchLabel, vaultApy } from './yield';
 
 describe('vault yield availability and fallback', () => {
   it('shows the zero form for missing history, and measured zero / loss as they are', () => {
@@ -44,20 +44,34 @@ describe('vault yield availability and fallback', () => {
 });
 
 describe('vaultApy (Basis headline APY)', () => {
-  it('uses the realized 7D APY when it exists', () => {
-    expect(vaultApy(12.5, 30, 500, 1000)).toEqual({ value: 12.5, estimate: false, source: '7d' });
+  it('uses the realized 7D APY when it exists, with funding beside it', () => {
+    expect(vaultApy(12.5, 30, 50_000, 100_000)).toEqual({ value: 12.5, estimate: false, source: '7d', fundingApr: 30, lowTvl: false });
   });
   it('falls back to the funding estimate on the short share, labelled as an estimate', () => {
-    expect(vaultApy(null, 30, 500, 1000)).toEqual({ value: 15, estimate: true, source: 'funding' });
+    expect(vaultApy(null, 30, 50_000, 100_000)).toEqual({ value: 15, estimate: true, source: 'funding', fundingApr: 30, lowTvl: false });
   });
   it('has no value without funding data', () => {
-    expect(vaultApy(undefined, null, 500, 1000)).toEqual({ value: null, estimate: false, source: null });
+    expect(vaultApy(undefined, null, 500, 1000)).toEqual({ value: null, estimate: false, source: null, fundingApr: null, lowTvl: true });
+  });
+  it('flags a NAV under $10K as low TVL', () => {
+    expect(vaultApy(null, 25, 900, 1000).lowTvl).toBe(true);
+    expect(vaultApy(null, 25, 9_000, LOW_TVL_USD).lowTvl).toBe(false);
   });
 });
 
-describe('vaultApy since launch', () => {
-  it('prefers 7D, then since-launch, then the funding estimate', () => {
-    expect(vaultApy(null, 30, 500, 1000, 5.46)).toEqual({ value: 5.46, estimate: false, source: 'launch' });
-    expect(vaultApy(4, 30, 500, 1000, 5.46)).toEqual({ value: 4, estimate: false, source: '7d' });
+describe('since-launch return is never annualised', () => {
+  it('keeps a positive funding estimate as headline while history is under 7 days', () => {
+    // SOL Basis: share price 0.983 after 4 days would annualise to about −79%; funding is +25% APR.
+    const apy = vaultApy(null, 25, 1_000, 1_000);
+    expect(apy.value).toBe(25);
+    expect(apy.source).toBe('funding');
+  });
+  it('labels the raw return with its history length', () => {
+    expect(sinceLaunchLabel(-1.7, 4.2)).toBe('Since launch \u22121.70% · 4 days');
+    expect(sinceLaunchLabel(0.06, 1)).toBe('Since launch +0.06% · 1 day');
+    expect(sinceLaunchLabel(0.06, 0.5)).toBe('Since launch +0.06% · under 1 day');
+    expect(sinceLaunchLabel(null, 4)).toBeNull();
+    expect(sinceLaunchLabel(1, null)).toBeNull();
+    expect(daysText(7.9)).toBe('7 days');
   });
 });

@@ -11,12 +11,21 @@
  * Trades funded in SOL or USDC (the trader's CASH never moves) are priced from the maker's side
  * of the same transaction instead (see recordFills). Everything is
  * in-memory (globalThis, survives dev hot reloads); nothing is persisted.
+ *
+ * Live quotes come first (2026-10-12): JanusFI, the maker World routes its markets to, prices every
+ * swap from a per-market oracle account its keeper rewrites every few minutes (program
+ * `JANUS_ORACLE_PROGRAM`, decoded in decode.ts). Its mid ± spread is the quote world.xyz shows, so
+ * thin markets with no recent fill are priced too. Fills remain the fallback (no oracle, a stale or
+ * paused one, or an RPC failure). World's own markets API and DFlow's quote API both need a
+ * Cloudflare Turnstile token or an API key, so neither is used.
  */
 import { PublicKey, type ParsedTransactionWithMeta, type VersionedTransactionResponse } from "@solana/web3.js";
-import { BISON_TREASURY, CASH_DECIMALS, CASH_MINT, JANUS_MAKER_PROGRAM } from "./constants";
-import { fillPrice, pricesFromFills, type Fill } from "./math";
-import type { MarketPrices } from "./types";
-import { withMainnetHistory } from "./rpc.server";
+import { Buffer } from "buffer";
+import { BISON_TREASURY, CASH_DECIMALS, CASH_MINT, JANUS_MAKER_MARKUP, JANUS_MAKER_PROGRAM, JANUS_ORACLE_PROGRAM, JANUS_ORACLE_SIZE } from "./constants";
+import { decodeJanusOracle } from "./decode";
+import { fillPrice, pricesFromFills, pricesFromQuote, type Fill } from "./math";
+import type { JanusOracle, MarketPrices } from "./types";
+import { scanUrls, withFallback, withMainnet, withMainnetHistory } from "./rpc.server";
 
 interface VolumeFill {
   mint: string;
@@ -191,11 +200,104 @@ export function sweepUnpricedMarkets(targets: Array<{ yesMint: string; noMint: s
   })();
 }
 
-/** Asks and bids for a market (see math.ts `pricesFromFills`). */
+// ---- live quotes (JanusFI oracle) -------------------------------------------------------------
+
+interface QuoteState {
+  /** World market → its JanusFI oracle account. */
+  oracleOf: Map<string, string>;
+  /** YES mint → latest decoded oracle and when this server read it. */
+  byYesMint: Map<string, { oracle: JanusOracle; readAt: number }>;
+  /** World market → YES mint (to file a read under the mint getMarketPrices is called with). */
+  yesMintOf: Map<string, string>;
+  indexedAt: number;
+  pending: Promise<void> | null;
+}
+const gq = globalThis as unknown as { __predictQuotes?: QuoteState };
+const quotes: QuoteState = (gq.__predictQuotes ??= { oracleOf: new Map(), byYesMint: new Map(), yesMintOf: new Map(), indexedAt: 0, pending: null });
+
+/** A quote this young is served as is; older ones are re-read (one getMultipleAccounts per 100). */
+const QUOTE_TTL_MS = 30_000;
+/** The full oracle index (one getProgramAccounts, ~150 KB) is rebuilt at most this often. */
+const ORACLE_INDEX_TTL_MS = 10 * 60_000;
+/** A read older than this is not used (e.g. the RPC has been failing): fills take over. */
+const QUOTE_READ_MAX_AGE_MS = 5 * 60_000;
+const MULTI_BATCH = 100;
+
+function storeOracle(o: JanusOracle | null, now: number) {
+  if (!o) return;
+  const yes = quotes.yesMintOf.get(o.market);
+  if (yes) quotes.byYesMint.set(yes, { oracle: o, readAt: now });
+}
+
+/** Every JanusFI oracle in one program scan: rebuilds the market → oracle index and stores the quotes. */
+async function indexOracles() {
+  const accounts = await withFallback(scanUrls(), (c) =>
+    c.getProgramAccounts(new PublicKey(JANUS_ORACLE_PROGRAM), { filters: [{ dataSize: JANUS_ORACLE_SIZE }] }),
+  );
+  const now = Date.now();
+  const oracleOf = new Map<string, string>();
+  for (const { pubkey, account } of accounts) {
+    const o = decodeJanusOracle(Buffer.from(account.data));
+    if (!o) continue;
+    oracleOf.set(o.market, pubkey.toBase58());
+    storeOracle(o, now);
+  }
+  quotes.oracleOf = oracleOf;
+  quotes.indexedAt = now;
+}
+
+async function readOracles(markets: string[]) {
+  const keys = markets.map((m) => quotes.oracleOf.get(m)).filter((k): k is string => Boolean(k));
+  for (let i = 0; i < keys.length; i += MULTI_BATCH) {
+    const batch = keys.slice(i, i + MULTI_BATCH).map((k) => new PublicKey(k));
+    const infos = await withMainnet((c) => c.getMultipleAccountsInfo(batch));
+    const now = Date.now();
+    infos.forEach((info) => {
+      if (info && info.owner.toBase58() === JANUS_ORACLE_PROGRAM) storeOracle(decodeJanusOracle(Buffer.from(info.data)), now);
+    });
+  }
+}
+
+/**
+ * Re-reads the live quotes of these markets when older than QUOTE_TTL_MS (batched; concurrent
+ * callers share one read). Never throws: on an RPC failure the previous quotes / fills stay in use.
+ */
+export function refreshQuotes(markets: Array<{ id: string; yesMint: string }>): Promise<void> {
+  for (const m of markets) quotes.yesMintOf.set(m.id, m.yesMint);
+  const now = Date.now();
+  const stale = markets.filter((m) => now - (quotes.byYesMint.get(m.yesMint)?.readAt ?? 0) > QUOTE_TTL_MS).map((m) => m.id);
+  if (!stale.length) return quotes.pending ?? Promise.resolve();
+  const run = async () => {
+    try {
+      const unindexed = stale.some((m) => !quotes.oracleOf.has(m));
+      if (quotes.indexedAt === 0 || (unindexed && Date.now() - quotes.indexedAt > ORACLE_INDEX_TTL_MS)) await indexOracles();
+      const due = stale.filter((m) => Date.now() - (quotes.byYesMint.get(quotes.yesMintOf.get(m)!)?.readAt ?? 0) > QUOTE_TTL_MS);
+      await readOracles(due);
+    } catch (error) {
+      console.warn("Predict live quotes unavailable:", error instanceof Error ? error.message : error);
+    }
+  };
+  quotes.pending = (quotes.pending ?? Promise.resolve()).then(run).finally(() => (quotes.pending = null));
+  return quotes.pending;
+}
+
+/** The live quote of a market, when there is a fresh, usable one (see math.ts `pricesFromQuote`). */
+function quoteFor(yesMint: string): MarketPrices | null {
+  const q = quotes.byYesMint.get(yesMint);
+  if (!q || Date.now() - q.readAt > QUOTE_READ_MAX_AGE_MS) return null;
+  return pricesFromQuote(q.oracle, JANUS_MAKER_MARKUP);
+}
+
+/**
+ * Asks and bids for a market: JanusFI's live quote when there is one (World's own price), else the
+ * last mainnet fills (see math.ts `pricesFromFills`). `lastTradeAt` always comes from the fills.
+ */
 export function getMarketPrices(yesMint: string, noMint: string, kind: "updown" | "binary", startMs: number | null): MarketPrices {
-  return pricesFromFills(
+  const fills = pricesFromFills(
     { yesBuy: state.lastBuy.get(yesMint), noBuy: state.lastBuy.get(noMint), yesSell: state.lastSell.get(yesMint), noSell: state.lastSell.get(noMint) },
     kind,
     startMs,
   );
+  const quote = quoteFor(yesMint);
+  return quote ? { ...quote, lastTradeAt: fills.lastTradeAt } : fills;
 }

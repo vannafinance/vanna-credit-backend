@@ -1,25 +1,50 @@
 "use client";
 
 /**
- * Portfolio → Trader → Spot: the margin account's spot positions (`useSpotPositions`: volatile
- * tokens held = long, volatile tokens owed = short; entry prices only where the margin's own swap
- * history proves them) and its swap history (Jupiter / Titan `margin_execute` events).
+ * Portfolio → Trader → Spot: every token balance the margin account holds (the same account
+ * snapshot the Margin page reads: deposits, swapped tokens, Kamino receipts and Basis / Perena
+ * vault receipts; the Phoenix venue line is not a token and stays on the Perps tab), plus its swap
+ * history (Jupiter / Titan `margin_execute` events). The Long · Short split and unrealized P&L
+ * still come from the margin's spot positions (`useSpotPositions`: volatile tokens held = long,
+ * volatile tokens owed = short; entry prices only where the margin's own swap history proves them).
  * The P&L chart shows the current value only: the chain keeps no P&L time series.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Info } from "@/components/v3/ui";
 import { Icon } from "@/components/v3/icons";
-import { price, sUsd, spct, tokFmt, usd } from "@/components/v3/format";
+import { sUsd, tokFmt, usd } from "@/components/v3/format";
 import type { Portfolio } from "./use-portfolio";
-import { ChartCard, Ct, Grid, HistNav, InfoCard, LsTag, Success, TT, TokCell, TxCell, Venue, sign, when } from "./pf-ui";
+import { ChartCard, Ct, Grid, HistNav, InfoCard, Success, TT, TokCell, TxCell, Venue, sign, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
+
+/** Balances worth less than this (USD) are dust and not listed; unpriced balances are kept. */
+const DUST_USD = 0.005;
+
+/** One token the margin account holds, from the account snapshot. */
+interface Holding {
+  sym: string;
+  amt: number;
+  usd: number;
+}
 
 export function TraderSpot({ p }: { p: Portfolio }) {
   const router = useRouter();
   const [view, setView] = useState<"cur" | "hist">("cur");
   const list = p.spot.positions;
-  const size = list.reduce((t, x) => t + x.sizeUsd, 0);
-  const lng = list.filter((x) => x.side === "long").reduce((t, x) => t + x.sizeUsd, 0);
+  // Every token balance in the margin account (amount > 0, above dust), largest first. A receipt
+  // whose rate is unknown is valued at 0 USD by the snapshot, so it is kept on its amount alone.
+  const held = useMemo<Holding[]>(
+    () =>
+      Object.entries(p.snapshot?.collateralBalances ?? {})
+        .map(([sym, b]) => ({ sym, amt: parseFloat(b.amount) || 0, usd: parseFloat(b.usdValue) || 0 }))
+        .filter((h) => h.amt > 0 && (h.usd > DUST_USD || h.usd === 0))
+        .sort((a, b) => b.usd - a.usd),
+    [p.snapshot],
+  );
+  const size = held.reduce((t, x) => t + x.usd, 0);
+  const longUsd = list.filter((x) => x.side === "long").reduce((t, x) => t + x.sizeUsd, 0);
+  const shortUsd = list.filter((x) => x.side === "short").reduce((t, x) => t + x.sizeUsd, 0);
+  const loadingHeld = p.spot.loading || (p.connected && !p.snapshot);
   const pnl = p.totals.spotPnl;
   const unknown = list.filter((x) => x.pnl === null).length;
 
@@ -30,9 +55,9 @@ export function TraderSpot({ p }: { p: Portfolio }) {
           title="Spot Info"
           rows={[
             ["Open Size", usd(size), "", TT.spotSize],
-            ["Long · Short", `${usd(lng)} · ${usd(size - lng)}`, "", TT.spotLS],
+            ["Long · Short", `${usd(longUsd)} · ${usd(shortUsd)}`, "", TT.spotLS],
             ["Unrealized PnL", sUsd(pnl), sign(pnl), TT.spotPnl],
-            ["Open Positions", String(list.length)],
+            ["Assets Held", String(held.length)],
           ]}
         />
         <ChartCard
@@ -54,7 +79,7 @@ export function TraderSpot({ p }: { p: Portfolio }) {
           <Grid
             cols=".9fr .8fr 1.7fr .8fr .7fr 1fr"
             heads={["Date", "Type", "Amount", "Swap via", "Status", "Tx Hash"]}
-            empty={p.margin.isLoading ? "Loading history…" : "No transactions yet"}
+            empty={p.margin.isLoading ? <VannaLoader size="block" /> : "No transactions yet"}
             rows={p.spot.swaps.map((x, i) => ({
               key: `${x.signature}-${i}`,
               cells: [
@@ -74,57 +99,16 @@ export function TraderSpot({ p }: { p: Portfolio }) {
           />
         ) : (
           <Grid
-            cols="1.1fr .9fr 1.1fr 1fr 1fr 1fr 1fr"
-            heads={[
-              "Asset",
-              "Venue",
-              "Balance",
-              "Size (USD)",
-              "Entry / Mark",
-              "PnL",
-              <>
-                Liq. price
-                <Info text={TT.liqPos} />
-              </>,
-            ]}
-            empty={p.spot.loading ? "Loading spot positions…" : "No spot positions"}
-            rows={list.map((x) => ({
-              key: x.id,
+            cols="1.2fr 1fr 1fr"
+            heads={["Asset", "Balance", "Size (USD)"]}
+            empty={loadingHeld ? <VannaLoader size="block" /> : "No tokens in your margin account"}
+            rows={held.map((x) => ({
+              key: x.sym,
               onClick: () => router.push("/trade/spot"),
               cells: [
-                <TokCell key="a" sym={x.symbol} tags={<LsTag side={x.side} />} />,
-                <Ct key="v" desc="Margin account">
-                  {x.via ? <Venue name={x.via} /> : "N/A"}
-                </Ct>,
-                <Ct key="b" desc={x.side === "short" ? "borrowed" : x.source === "deposit" ? "deposited" : "held"}>
-                  {x.side === "short" ? "−" : ""}
-                  {tokFmt(x.qty, x.symbol)}
-                </Ct>,
-                <Ct key="s">{usd(x.sizeUsd)}</Ct>,
-                <Ct key="e" desc={`$${price(x.mark)}`}>
-                  {x.entry === null ? (
-                    <>
-                      {usd(0)}
-                      <Info text={x.note} />
-                    </>
-                  ) : (
-                    `$${price(x.entry)}`
-                  )}
-                </Ct>,
-                x.pnl === null ? (
-                  <Ct key="p">{usd(0)}</Ct>
-                ) : (
-                  <Ct key="p" desc={<span className={sign(x.pnl)}>{spct(x.pnlPct ?? 0, 2)}</span>}>
-                    <span className={sign(x.pnl)}>{sUsd(x.pnl)}</span>
-                  </Ct>
-                ),
-                x.liqPrice === null ? (
-                  <Ct key="l">None</Ct>
-                ) : (
-                  <Ct key="l" desc={x.liqDistancePct === null ? "" : `${spct(x.liqDistancePct, 1)} away`}>
-                    ${price(x.liqPrice)}
-                  </Ct>
-                ),
+                <TokCell key="a" sym={x.sym} />,
+                <Ct key="b">{tokFmt(x.amt, x.sym)}</Ct>,
+                <Ct key="s">{usd(x.usd)}</Ct>,
               ],
             }))}
           />

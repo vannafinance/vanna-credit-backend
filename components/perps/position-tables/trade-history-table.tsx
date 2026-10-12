@@ -4,6 +4,7 @@ import type { PerpHistoryRow } from "@/lib/solana/perps-types";
 import { explorerUrl } from "@/lib/solana/config";
 import { fmtUsd } from "../perps-format";
 import { PerpsColumn, PerpsTable } from "./perps-table";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const ACTION_LABEL: Record<PerpHistoryRow["action"], string> = {
   open: "Open / increase",
@@ -43,7 +44,7 @@ const TradeHistoryTable = ({ rows, loading }: { rows: PerpHistoryRow[]; loading:
       ),
     },
   ];
-  return <PerpsTable columns={columns} data={rows} getRowKey={(r) => `${r.signature}-${r.action}`} emptyText={loading ? "Loading history…" : "No perps activity yet"} />;
+  return <PerpsTable columns={columns} data={rows} getRowKey={(r) => `${r.signature}-${r.action}`} emptyText={loading ? <VannaLoader size="inline" /> : "No perps activity yet"} />;
 };
 
 export default TradeHistoryTable;

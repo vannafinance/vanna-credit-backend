@@ -2,7 +2,7 @@
 
 /**
  * Right column of the V3 Margin screen: Margin Account Info, the Liquidation card (health factor +
- * meter, room before liquidation, a liquidation price per exposed volatile asset) and the
+ * meter; room before liquidation and per-asset liquidation prices were removed) and the
  * "Oracles and LTs" collapsible (each token's real oracle source, price and freshness).
  *
  * Account numbers come from the program-exact model (`useV3Account`); prices / freshness from
@@ -11,12 +11,12 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import { Icon, IC, VMark } from "@/components/v3/icons";
-import { hfFmt, hfLabel, nf, pct, price as pxFmt, roomSub, roomText, roomZone, usd } from "@/components/v3/format";
+import { hfFmt, hfLabel, nf, pct, price as pxFmt, usd } from "@/components/v3/format";
 import { LIQ_HF, hfPos, hfZone } from "@/lib/account-model";
 import { usePriceEntries, type PriceEntry } from "@/hooks/use-token-prices";
 import { TOKENS } from "@/lib/solana/tokens";
 import { ORACLE_PROGRAM_ID, VANNA_PROGRAM_ID, explorerUrl } from "@/lib/solana/config";
-import { exposedVolatile, liqBuffer, noDebt } from "./mg-sim";
+import { liqBuffer, noDebt } from "./mg-sim";
 import { LblTip, MI, TIPS } from "./mg-ui";
 import type { MarginScreen } from "./use-margin-screen";
 
@@ -143,22 +143,14 @@ export function RightColumn({ m }: { m: MarginScreen }) {
   );
 }
 
-/** HF + meter, room before liquidation, and the liquidation price of each exposed volatile asset. */
+/**
+ * HF + meter. Room before liquidation and the per-asset liquidation prices were removed from this
+ * card (product request); the HF, its 1.10 tick and the dollar buffer show the distance to liquidation.
+ */
 function LiquidationCard({ m }: { m: MarginScreen }) {
   const n = m.now;
   const r = m.acct.room;
   const nd = !r || r.state === "nodebt";
-  const room = r && (
-    <div className="mg-ir mg-lqr">
-      <span>
-        <LblTip k="Room before liquidation" tip={TIPS.room} />
-      </span>
-      <span className="mg-lqv">
-        <b className={`num ${roomZone(r)}`}>{roomText(r)}</b>
-        <small>{roomSub(r)}</small>
-      </span>
-    </div>
-  );
   const head = (
     <div className="mg-lq-h">
       <h3>
@@ -171,13 +163,10 @@ function LiquidationCard({ m }: { m: MarginScreen }) {
     return (
       <article className="mg-ic mg-lq">
         {head}
-        {room}
       </article>
     );
   }
   const tick = hfPos(LIQ_HF);
-  // One row per exposed volatile asset (account-level price, every other price held); none when liquidatable now.
-  const lp = r.state === "now" ? [] : exposedVolatile(m.model).map((s) => ({ s, p: m.acct.liqPriceOf(s), now: m.acct.priceOf(s) }));
   return (
     <article className="mg-ic mg-lq">
       {head}
@@ -199,21 +188,6 @@ function LiquidationCard({ m }: { m: MarginScreen }) {
           <span style={{ right: 0 }}>2.50+</span>
         </div>
       </div>
-      {room}
-      {lp.map((x) => (
-        <div key={x.s} className="mg-ir mg-lqr">
-          <span>
-            <Icon sym={x.s} />
-            <span>
-              <LblTip k={`${x.s} liquidation price`} tip={`${x.s} price at which the account reaches health factor 1.10, every other price held. None = no ${x.s} move liquidates it on its own.`} />
-            </span>
-          </span>
-          <span className="mg-lqp num">
-            {x.p !== null ? `$${pxFmt(x.p)}` : "None"}
-            {x.now > 0 && <small>now ${pxFmt(x.now)}</small>}
-          </span>
-        </div>
-      ))}
     </article>
   );
 }

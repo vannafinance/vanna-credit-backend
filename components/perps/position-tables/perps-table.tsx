@@ -17,7 +17,7 @@ interface PerpsTableProps<T> {
   data: T[];
   getRowKey: (row: T) => string;
   getSide?: (row: T) => "long" | "short";
-  emptyText: string;
+  emptyText: ReactNode;
   /** Mobile card header (title + action). */
   mobileHeader?: (row: T) => ReactNode;
 }

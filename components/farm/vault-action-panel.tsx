@@ -15,8 +15,10 @@ import { netYield } from "@/lib/farm/yield";
  * - SOL Basis shares left in the wallet (minted above the deposit's minimum) can be moved into the
  *   margin account with the recovery button.
  *
- * Net APY uses the vault's recorded 7-day APY (0 until enough history exists) minus the Vanna USDC
- * borrow APY on the part of the deposit covered by the margin account's USDC debt.
+ * Net APY uses the vault APY the page passes in (Basis: the realized 7-day APY, or until 7 days of
+ * history exist the Phoenix-funding estimate, labelled "Est."; Perena: its published APY; otherwise the
+ * recorded 7-day APY, 0 until enough history exists) minus the Vanna USDC borrow APY on the part of
+ * the deposit covered by the margin account's USDC debt.
  */
 import { useMemo, useState } from "react";
 import type { LiveVault } from "@/lib/solana/vault-state";
@@ -68,6 +70,8 @@ export function VaultActionPanel({
   account,
   apy7: apyOverride,
   apySource = "The vault's share-price return; deposit-event fallbacks are approximate and missing history has no APY estimate",
+  apyEstimate = false,
+  apyNote,
   initial,
 }: {
   id: string;
@@ -77,6 +81,10 @@ export function VaultActionPanel({
   apy7?: number | null;
   /** Tooltip wording for where that APY comes from. */
   apySource?: string;
+  /** True when that APY is an estimate (funding-based, or a low-TVL vault): Net APY is labelled "Est.". */
+  apyEstimate?: boolean;
+  /** Extra caveat shown under the Net APY (e.g. a low-TVL warning). */
+  apyNote?: string;
   /** Open on deposit or withdraw (from `?action=`). */
   initial?: "deposit" | "withdraw";
 }) {
@@ -100,8 +108,8 @@ export function VaultActionPanel({
   const formula = netApy === null ? "0.00% until the vault has enough share-price history" : !units
     ? ""
     : borrowedShare > 0 && borrow !== null
-      ? `${pct(apy7!, 1)} vault − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
-      : `${pct(apy7!, 1)} vault · own USDC, no borrow cost`;
+      ? `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
+      : `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} · own USDC, no borrow cost`;
   const overMax = deposit && def.kind === "basis" && state?.maxDepositUsd != null && units > state.maxDepositUsd;
   const closed = deposit && def.kind === "basis" && state?.available && (state.paused || !state.depositsOpen);
 
@@ -175,17 +183,18 @@ export function VaultActionPanel({
           <div className="fm-net num">
             <div>
               <div className="lbl">
-                {state?.apy7Source === "deposit-event" && apyOverride === undefined ? "Net APY (event estimate)" : "Net APY"} <Info text={`${apySource}, minus the Vanna USDC borrow APR on the part of this deposit covered by your USDC debt.`} />
+                {state?.apy7Source === "deposit-event" && apyOverride === undefined ? "Net APY (event estimate)" : apyEstimate ? "Est. Net APY" : "Net APY"} <Info text={`${apySource}, minus the Vanna USDC borrow APR on the part of this deposit covered by your USDC debt.${apyNote ? ` ${apyNote}` : ""}`} />
               </div>
               <div className={`big ${units && netApy !== null && netApy < 0 ? "n" : ""}`}>{pct(netApy ?? 0, 1)}</div>
               <div className="f">{formula}</div>
             </div>
             <div className="r">
-              <div className="lbl">Est. earnings</div>
+              <div className="lbl">Est. earnings{apyEstimate ? <Info text="Projected from the estimated APY above (Phoenix funding on the vault's short, before fees and execution), not from realized returns." /> : null}</div>
               <div className="big">{usd((perYear ?? 0) / 12)}</div>
               <div className="f">{units && perYear !== null ? `per month · ${usd(perYear, 0)} a year` : ""}</div>
             </div>
           </div>
+          {apyNote && <p className="fm-note">{apyNote}</p>}
           <div className="fm-kvs num">
             <div className="kv">
               <span>USDC borrow APR</span>

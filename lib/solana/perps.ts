@@ -54,6 +54,7 @@ import {
   usdToTicks,
   WITHDRAW_FUNDS,
   withdrawAccounts,
+  phoenixTraderPda,
 } from "./phoenix";
 import { loadPhoenixVenue, type PhoenixListedMarket, type PhoenixVenueContext } from "./phoenix-state";
 import { getToken } from "./tokens";
@@ -114,8 +115,12 @@ export async function fetchPerpsView(owner: PublicKey | null): Promise<PerpsView
         totalCollateralUsd: snapshot.totalCollateralUsd,
         totalDebtUsd: snapshot.totalDebtUsd,
         healthFactor: snapshot.healthFactor,
-        // The venue's own line is valued from `positions` + `idleUsdc` by the account model.
-        collateralRows: snapshot.collateral.filter((c) => c.active && c.token !== null && c.usd > 0).map((c) => ({ symbol: c.symbol, usd: c.usd })),
+        // The venue's own line is valued from `positions` + `idleUsdc` by the account model, so only
+        // that row is left out (its vault is the margin's Phoenix trader). Kamino receipts (kSOL…) and
+        // vault shares (vbSOL, USD*…) have no registry token but are real collateral and stay in.
+        collateralRows: snapshot.collateral
+          .filter((c) => c.active && c.usd > 0 && !c.vault.equals(phoenixTraderPda(margin)))
+          .map((c) => ({ symbol: c.symbol, usd: c.usd })),
         debtRows: snapshot.debts.filter((d) => d.usd > 0).map((d) => ({ symbol: d.symbol, usd: d.usd })),
         prices: Object.fromEntries(Object.entries(snapshot.prices).flatMap(([k, p]) => (p && p.usd > 0 ? [[k, p.usd]] : []))),
       }

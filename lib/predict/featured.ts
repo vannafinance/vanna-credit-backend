@@ -1,5 +1,5 @@
 /**
- * The Predict page's curated market list: World's Trending events (world.xyz, 2026-10-11). Only these
+ * The Predict page's curated market list: World's Trending events (world.xyz, refreshed 2026-10-12). Only these
  * markets are read, priced and listed, so the catalog loads in a couple of seconds instead of scanning
  * every World market on mainnet. Set PREDICT_ALL_MARKETS=1 to list every live World market instead.
  *
@@ -83,28 +83,27 @@ export const FEATURED_EVENTS: FeaturedEvent[] = [
       "BnQWeUBP9LsVs5erkoXh6dGbXMg1Ed7dMmpZaERUbPX2",
       "CmFuKw78w1TtZ9rhPDJosmkTs1TUH5tYzWhUZGWjKZc9",
       "858H5PLL4rWMqhXJzdr4qrMY48tUHt2BbmbFd9RUvLuS",
+      "H6KPJVTXUaimCe9tDE6Mh7medCqALz4CSXMKm8WAD9BZ",
+      "H9czizCgsq4WeLfA78FXS9tcsYes2V7YtocASNGs7nJ7",
+      "D2A7Ek2Dawg3gbFnpechqBd8aid9EESnm28F7cetTNHb",
     ],
   },
   {
-    title: "Who wins Singapore Grand Prix 2026?",
-    groupId: null,
+    title: "Galatasaray vs Barcelona",
+    groupId: "FzMSs3Df4PfyWyT1uwHZ1iKzZk7B3UnHt5EwLNtQrwxZ",
     markets: [
-      "2BBJjxBrmVY8F8PA5owDbNhFCNSYggNEriJmxomtGhQ9",
-      "2UaFLwe7Wip5TzVv1itmF9JYtBy6M2LNXpUf3r1iS7QM",
-      "3AFZNs1JUXN8r7VPHweKyDjvZVboW4bemhwaKb2yQnAa",
-      "41iaBXYFGegEoEkch8sszd3eG6cTLtPRJ51TWD6pUbEP",
-      "5zfeBDvGhx34FeZB8m2wAAHxGWqT3MCaMUCr8H1baUA6",
-      "7WN6LvzpYbT9kdUZyP2LCHrTv3FaLSTjR3TjY4ze3pDA",
-      "BE53G6ZFhPTbSviawKrRTzJCykM8kByHAfjp9MWiLJpE",
+      "83Y67kStV2dj4MYLLxRPD8e6cS5QLSG1wKHvuFkrcQFi",
+      "6tutZgRrk3GNkaTNpcxaoHdj2CBtVZTe9YqxnipzEBUT",
+      "BBegRHAqyTuEU2szyHhXnwqsFPayVcUM6xs4okfjCBAj",
     ],
   },
   {
-    title: "Liverpool vs Manchester City",
-    groupId: "GsAG6rs9aTwdwA5WeY66YY81sV716LEsAFb5HA2Zq9Q4",
+    title: "Atalanta vs Venezia",
+    groupId: "6gZAspmbwE34XN6tmeZvpkdYVymwtKTbUU9HuuHRDoQS",
     markets: [
-      "DCvZ53wNy9aNc8fuBFP7nbLcZC1K8N7nnL4DxQC9pX1p",
-      "24ynDcYxz8UyowyMnP5gSvYzC6dCYXRXcEDGw9t1FqMS",
-      "9AYA7B87xaVE7D5Ppw8nrcFMh2J5zQ4zGb6bw9SKjzTz",
+      "FVJzqhabn1ruSdEoiuFCzHeokuCWuWMH8kuVcSPugNmv",
+      "DdmqGH6iYtsFPW7rW37YhYc5U7xSpL7rouSYYEPHGy6E",
+      "HYFK9PhPoPyik392FpmSjVhfZWhFnA1x4rwcUqBeXczp",
     ],
   },
   {
@@ -116,21 +115,20 @@ export const FEATURED_EVENTS: FeaturedEvent[] = [
     ],
   },
   {
-    title: "Los Angeles FC vs Vancouver",
-    groupId: "HvNgmAWxknZRRyN5bakXXbuGPwv1K9UJqsPSUG72dtHd",
+    title: "LA Rams vs BUF Bills",
+    groupId: "6bSVyoU85RCcbq8J8cPGVfWBwVQLDC5NPcUHzVFN4pso",
     markets: [
-      "HPYPj8ZMMEt5aGv34mesg4yUnwG4zEtUESq7NSEYrbmt",
-      "GzXKpkvFw4EBJEKPFjD9SRQ3VktYuqCCQehipA1aeLjH",
-      "2uiwzzb3twPSb4BKEpFfyU6m5UTrpCtfcqUnJovVxrW9",
+      "AkXzAKPnY5bByTY9Kdp5eiJ6VPkcMrZhssEXpaG9ao3r",
+      "FZXGA4jqzumhRDG2axDkDk9Zuv6K9s36xePrsWqz7gRP",
     ],
   },
   {
-    title: "Rayo Vallecano vs Athletic Bilbao",
-    groupId: "7hwxq2sL86335ZxK9ft4489g3guymLqVC5B48BM7u5tR",
+    title: "Coventry City vs Newcastle United",
+    groupId: "7yfPMHXonusYDwnW8ZZ66yKEJjMod4dt1YT3sUsCFQbz",
     markets: [
-      "6qTKid4CGhe7pa3bn5ASm7MRGkQ6V6f9Gt6irekZrDqi",
-      "8wgakschvAMHo5kNFJR8AUsn8t3fbzD9C2xq2eVgGXE2",
-      "7jxFcQkT36htX2e5K7CZfx9muXbnhwQ6ACYQsonVHCfz",
+      "F6X4pkCWT3TefbrMuCXV3kMrRzE3uAeNzG4RhzGLK8kG",
+      "5VW59QcW1JhQygRAScPhbz5K77YTiTRekSUi3ZH5FM3N",
+      "ESLtBWPzv9UYDmB4GCo4p5nnZS3LUqt2HRaoz1NrXxEC",
     ],
   },
 ];

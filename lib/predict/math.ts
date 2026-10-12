@@ -56,6 +56,36 @@ export function pricesFromFills(
   return { yesAsk, noAsk, yesBid, noBid, lastTradeAt, source: "trades" };
 }
 
+/** An oracle older than this is not quoted from (World's keeper rewrites live ones every 1–3 min). */
+export const QUOTE_MAX_AGE_MS = 15 * 60_000;
+
+/**
+ * Asks and bids from JanusFI's live oracle (see constants.ts): YES ask = mid + half-spread + the
+ * maker's markup, NO ask = (1 − mid) + the same; bids mirror them. A side that would cost ≥ 1 CASH
+ * (or pay ≤ 0) is not offered (null), like World's own book on near-settled outcomes. Null when the
+ * oracle is paused (flags 3) or stale, so the caller falls back to fills.
+ */
+export function pricesFromQuote(
+  q: { mid: number; halfSpread: number; flags: number; updatedMs: number },
+  markup: number,
+  now = Date.now(),
+): MarketPrices | null {
+  if (q.flags === 3 || now - q.updatedMs > QUOTE_MAX_AGE_MS) return null;
+  const s = q.halfSpread + markup;
+  const side = (p: number) => {
+    const r = Math.round(p * 1e6) / 1e6;
+    return r > 0 && r < 1 ? r : null;
+  };
+  const p = {
+    yesAsk: side(q.mid + s),
+    noAsk: side(1 - q.mid + s),
+    yesBid: side(q.mid - s),
+    noBid: side(1 - q.mid - s),
+  };
+  if (p.yesAsk === null && p.noAsk === null) return null;
+  return { ...p, lastTradeAt: null, source: "quote" };
+}
+
 /**
  * The trader's price of one fill: CASH moved / outcome tokens moved. Null outside (0.001, 1.05)
  * (dust, or a trade funded in another currency). Capped at 0.999.

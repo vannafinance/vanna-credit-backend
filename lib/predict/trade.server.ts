@@ -48,7 +48,7 @@ import { ensureMakerReady } from "./maker.server";
 import { buyShares, fromRawUnits, sellCash, sharesForAssets, toRawUnits } from "./math";
 import { packGroups, type IxGroup } from "./pack";
 import { createPoolIx, depositIxs, readPoolStates, readShareBalances, redeemIxs, type PoolState } from "./pool.server";
-import { getMarketPrices } from "./prices.server";
+import { getMarketPrices, refreshQuotes } from "./prices.server";
 import type { MarketInfo, Side, TradeBuildResponse, TradeQuote, TradeRequest } from "./types";
 
 const WORLD = new PublicKey(WORLD_PROGRAM_ID);
@@ -149,6 +149,8 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
     readPoolStates(ids),
     readShareBalances(owner, ids),
     getPredictLookupTable(),
+    // The same live quotes the event page shows (cached ~30 s), so the fork maker fills at them.
+    refreshQuotes(infos.map((i) => ({ id: i!.id, yesMint: i!.yesMint }))),
   ]);
   const balanceKeys = [ata(CASH, owner), ...ids.flatMap((id) => [ata(markets.get(id)!.yes, owner), ata(markets.get(id)!.no, owner)])];
   const balanceInfos = await conn.getMultipleAccountsInfo(balanceKeys, "confirmed");
@@ -215,7 +217,7 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
 
     if (leg.side === "buy") {
       const price = side === "yes" ? prices.yesAsk : prices.noAsk;
-      if (price === null || !(price > 0 && price < 1)) throw new TradeError(`Price unavailable for "${m.info.question}": no recent mainnet trade.`);
+      if (price === null || !(price > 0 && price < 1)) throw new TradeError(`Price unavailable for "${m.info.question}": no live World quote or recent mainnet trade.`);
       const spend = legCash.get(legIndex) ?? toRawUnits(leg.amount, CASH_DECIMALS);
       const spendUi = fromRawUnits(spend, CASH_DECIMALS);
       if (spendUi < MIN_TRADE_CASH || spendUi > MAX_TRADE_CASH) throw new TradeError(`Trade between ${MIN_TRADE_CASH} and ${MAX_TRADE_CASH} CASH per leg.`);
@@ -249,7 +251,7 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
       }
     } else if (leg.side === "sell") {
       const price = side === "yes" ? prices.yesBid : prices.noBid;
-      if (price === null || !(price > 0 && price < 1)) throw new TradeError(`Price unavailable for "${m.info.question}": no recent mainnet trade.`);
+      if (price === null || !(price > 0 && price < 1)) throw new TradeError(`Price unavailable for "${m.info.question}": no live World quote or recent mainnet trade.`);
       let amount = toRawUnits(leg.amount, OUTCOME_DECIMALS);
       let wallet = held.get(want.toBase58()) ?? 0n;
       const ownShares = shares.get(m.info.id)?.[side] ?? 0n;

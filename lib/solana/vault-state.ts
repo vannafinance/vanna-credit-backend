@@ -51,10 +51,13 @@ export interface LiveVault {
   apy7: number | null;
   apy30: number | null;
   /**
-   * Basis only: realized APY since launch — the share price (it starts at 1.0) annualised by the
-   * seconds since the vault's first transaction, compounded. Null until known.
+   * Basis only: realized share-price return since launch, % — the share price starts at 1.0 —
+   * deliberately NOT annualised (a few days of history would make one rebalance cost read as a huge
+   * APY). Null until known.
    */
-  apySinceLaunch?: number | null;
+  returnSinceLaunchPct?: number | null;
+  /** Basis only: days of history since launch (fork clock), the length behind `returnSinceLaunchPct`. */
+  sinceLaunchDays?: number | null;
   /** Basis only: unix ms of the vault account's first transaction (its launch). */
   launchedAt?: number | null;
 }

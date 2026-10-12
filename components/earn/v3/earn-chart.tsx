@@ -59,7 +59,7 @@ function xFmt(t: number, ts: number[], kind: ChartKind) {
 }
 
 /** The SVG chart itself; `empty` shows when there are fewer than two points. */
-export function EarnChart({ pts, kind, h, empty, tipSub }: { pts: SeriesPoint[]; kind: ChartKind; h: number; empty?: string; tipSub?: (p: SeriesPoint) => string }) {
+export function EarnChart({ pts, kind, h, empty, tipSub }: { pts: SeriesPoint[]; kind: ChartKind; h: number; empty?: ReactNode; tipSub?: (p: SeriesPoint) => string }) {
   const uid = useId().replace(/:/g, "");
   const box = useRef<HTMLDivElement>(null);
   const [cw, setCw] = useState(0);
@@ -185,7 +185,7 @@ export function ChartCard({
   h?: number;
   /** Render the tap-to-open variant below 640 px (list dashboard only). */
   mobile?: boolean;
-  empty?: string;
+  empty?: ReactNode;
   /** Small caveat under the chart (partial history etc.). */
   note?: ReactNode;
   className?: string;

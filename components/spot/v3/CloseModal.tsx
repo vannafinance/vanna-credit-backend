@@ -21,6 +21,7 @@ import { hfFmt, levFmt, price, sUsd, tokFmt, usd } from "@/components/v3/format"
 import { AUTO_SLIPPAGE_PERCENT } from "./swap-modals";
 import { executeClose, planClose, type ClosePlan } from "./close-position";
 import { withSwap } from "./swap-model";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const SLIPPAGE_BPS = Math.round(parseFloat(AUTO_SLIPPAGE_PERCENT) * 100);
 
@@ -168,7 +169,7 @@ export function CloseModal({ position: p, onClose }: { position: SpotPosition; o
           !error && (
             <div className="kv">
               <span>Quote</span>
-              <span>Fetching…</span>
+              <VannaLoader size="inline" label="Fetching quote" />
             </div>
           )
         )}
