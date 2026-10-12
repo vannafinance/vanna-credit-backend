@@ -32,6 +32,9 @@ export const ACCOUNT_SNAPSHOT_KEY = ["margin", "account-snapshot"] as const;
 
 async function fetchSnapshot(userAddress: string): Promise<AccountSnapshot> {
   const res = await fetchWithTimeout(`/api/account/${userAddress}`, { cache: "no-store" });
+  // 401 = the site access cookie expired or the code was rotated: reload so the access gate shows,
+  // instead of the page sitting there with every read failing.
+  if (res.status === 401 && typeof window !== "undefined") window.location.reload();
   if (!res.ok) throw new Error(`account snapshot failed (${res.status})`);
   const api = (await res.json()) as AccountApiResponse;
   const fields = marginFieldsFromSnapshot(api.margin);

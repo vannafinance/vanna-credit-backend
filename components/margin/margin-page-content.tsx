@@ -54,7 +54,6 @@ export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
   const { positions: farm } = useFarmPositions(m.address);
   const [tab, setTab] = useState<Tab>("lev");
   const [prefill, setPrefill] = useState<{ sym: string; n: number } | undefined>(undefined);
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
   const topRef = useRef<HTMLHeadingElement>(null);
 
   const scrollToPanel = useCallback(() => {
@@ -98,7 +97,6 @@ export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
   const exposure = on && (!nd || perps > 0 || m.model.phoenixCollateral > 0.01 || farm.length > 0);
   const flashable = on && (exposure || n.holdings > 0.01);
   const danger = on && !nd && n.hf <= LIQ_HF;
-  const error = m.snapshotError && m.snapshotError !== dismissedError ? m.snapshotError : null;
   const dash = m.loading;
 
   const stats: [React.ReactNode, string, React.ReactNode, string][] = [
@@ -112,14 +110,7 @@ export const MarginPageContent = ({ basePath }: MarginPageContentProps) => {
   return (
     <main className="v3">
       <div className="page mg">
-        {error && (
-          <div className="mg-rd" role="alert">
-            <span style={{ flex: 1 }}>{error}</span>
-            <button type="button" aria-label="Dismiss" onClick={() => setDismissedError(m.snapshotError)}>
-              {MI.dash}
-            </button>
-          </div>
-        )}
+        {/* No snapshot-error banner: a failed read just retries on the next slot tick (product request). */}
         {danger && (
           <div className="mg-dg" role="alert">
             {MI.alert}
