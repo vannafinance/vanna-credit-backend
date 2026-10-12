@@ -1,7 +1,7 @@
 "use client";
 
 /** Top accounts: how concentrated the debt is, the largest borrowers, and a feed of recent activity. */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAnalyticsAccounts, useAnalyticsEvents, useAnalyticsSummary } from "@/hooks/use-analytics";
@@ -37,6 +37,8 @@ export function TopAccountsView() {
   const { data: sum } = useAnalyticsSummary();
   const router = useRouter();
   const [page, setPage] = useState(1);
+  const section = useRef<HTMLElement>(null);
+  const goPage = (n: number) => { setPage(n); section.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
   const [feed, setFeed] = useState("all");
   const { data } = useAnalyticsAccounts({ filter: "withdebt", sort: "debt", dir: "desc", q: "", page, per: 10, band: null, you: null });
   const names = FEED.find((f) => f[0] === feed)![2];
@@ -54,7 +56,7 @@ export function TopAccountsView() {
         <Kpi label="Concentration index" tip="hhi" value={ok && c?.hhi != null ? Math.round(c.hhi).toLocaleString("en-US") : "-"} na={!ok} sub={ok ? "0 = spread out · 10,000 = one borrower" : WAIT} />
       </div>
 
-      <section className="an-panel an-flush" id="borrowers">
+      <section className="an-panel an-flush an-scroll-top" id="borrowers" ref={section}>
         <div className="an-panel-head"><div><h2 className="an-panel-title">Largest borrowers</h2><p className="an-panel-sub">Accounts that could be valued, by debt</p></div></div>
         <div className="an-table-wrap"><table className="an-t">
           <thead><tr><th>#</th><th>Wallet</th><th className="an-r">Debt</th><th className="an-r">Share of debt</th><th className="an-r">Health</th><th className="an-r">Leverage</th><th>Status</th></tr></thead>
@@ -75,7 +77,7 @@ export function TopAccountsView() {
         </table></div>
         {data && data.pages > 1 && (
           <div className="an-table-foot"><span>{(data.page - 1) * data.per + 1}–{Math.min(data.filteredTotal, data.page * data.per)} of {data.filteredTotal}</span>
-            <span className="an-pager"><button className="an-btn an-sm" disabled={page === 1} onClick={() => setPage(page - 1)}>←</button><button className="an-btn an-sm" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>→</button></span></div>
+            <span className="an-pager"><button className="an-btn an-sm" disabled={page === 1} onClick={() => goPage(page - 1)}>←</button><button className="an-btn an-sm" disabled={page >= data.pages} onClick={() => goPage(page + 1)}>→</button></span></div>
         )}
       </section>
 
