@@ -59,9 +59,10 @@ describe("plan rules", () => {
     expect(planWarnings([borrow])).toEqual([]);
   });
 
-  it("swap defaults to the wallet and repay to the wallet unless margin is named", () => {
-    expect(stepFromWrite({ op: "swap", asset: "SOL", to_asset: "USDC", amount: null }, "1").slots.mode).toBe("wallet");
+  it("a swap runs inside the margin account unless the wallet is named (the website's default); repay pays from the wallet", () => {
+    expect(stepFromWrite({ op: "swap", asset: "SOL", to_asset: "USDC", amount: null }, "1").slots.mode).toBe("margin");
     expect(stepFromWrite({ op: "swap", asset: "SOL", to_asset: "USDC", amount: null, source: "margin" }, "1").slots.mode).toBe("margin");
+    expect(stepFromWrite({ op: "swap", asset: "SOL", to_asset: "USDC", amount: null, source: "wallet" }, "1").slots.mode).toBe("wallet");
     expect(stepFromWrite({ op: "repay", asset: "USDC", amount: null }, "1").slots.source).toBe("wallet");
   });
 });

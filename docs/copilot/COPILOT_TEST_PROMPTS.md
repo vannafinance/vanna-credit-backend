@@ -6,10 +6,11 @@ Companion to [`COPILOT_ARCHITECTURE.md`](COPILOT_ARCHITECTURE.md). The automated
 attacks) lives in `vanna-credit-backend/scripts/copilot-prompts/`; this sheet is the human-readable version
 with the rows worth running by hand.
 
-## 1. How to use thisclaude
+## 1. How to use this
 
-Open `https://test.solana.vanna.finance/copilot`, connect a wallet, sign the login message, then type each prompt
-**verbatim** and record the result.
+Open `https://test.solana.vanna.finance/copilot` (or `http://localhost:3000/copilot` for the local stack), enter the
+site's access code once (default 2861; the cookie lasts 30 days), connect a wallet, sign the login message, then type
+each prompt **verbatim** and record the result.
 
 - **Pass** means the answer came from a live read (numbers match the app / chain) AND the lane was right.
 - A **refusal is a pass** when the row says refusal is expected.
@@ -20,8 +21,9 @@ Open `https://test.solana.vanna.finance/copilot`, connect a wallet, sign the log
 
 ## 2. What the Copilot decides
 
-Brain order (it cannot skip steps): **session → rate limit → firewall → keyword router (Gemini only if keywords
-miss) → lane.**
+Brain order (it cannot skip steps): **session → rate limit → firewall → Gemini investigation (reads, then one
+decision; the keyword router only when Gemini is unreachable) → guards and sizing → lane.** Every failure, refusal or
+question the checks produce is worded by Gemini for the message, from the code's facts.
 
 | Lane | When | What you see |
 |---|---|---|
@@ -30,7 +32,7 @@ miss) → lane.**
 | Chain | several actions in one message, up to **8 steps** | One plan card; each step re-checks health (floor **1.15**) and is rebuilt fresh before you sign it |
 | Lever | "lever my SOL 2x" | A plan (deposit → borrow → swap → deposit …), kept at or above the 1.15 floor, capped at 10x |
 | Ask | a detail is missing (asset, amount, which one) | A clarifying question, no transaction |
-| Refuse | out of scope, unsafe, not offered | A short refusal that says what it does handle |
+| Refuse | out of scope, unsafe, not offered | A short refusal in Gemini's words that says what it does handle |
 
 ## 3. Which assets exist where
 
@@ -208,7 +210,9 @@ pays 1 CASH if its outcome wins. Use events that are listed when you test (the w
 | P3 | bet 10 on Barcelona | One Predict trade: buy YES on Barcelona for 10 CASH, the quote (shares, price, pays if it wins, joins Vanna's pool); one wallet approval | 👤 | |
 | P4 | put 5 on a draw and 5 against Galatasaray | ONE trade with two outcomes, one approval (the wallet shows all its transactions together) | 👤 | |
 | P5 | bet on the Rams | Two events name the Rams: asks which one, with options | 🤖 | |
-| P6 | sell all my Barcelona shares | Sells wallet + pooled shares (pooled ones redeemed first) | 👤 | |
+| P6 | sell all my Barcelona shares | Sells wallet + pooled shares (pooled ones redeemed first). Locally the MCP must build through the local app (`PREDICT_API_URL=http://localhost:3000/api/predict`); the deployed app's builder refuses pooled sells until it is redeployed | 👤 | |
+| P6b | sell my share positions | One trade selling all of each position (one sell per outcome), not a question | 👤 | |
+| P6c | sell 50% of my draw yes position | Half of the held Draw YES shares, sized from the live holding | 👤 | |
 | P7 | what are my prediction positions? | Positions (shares, avg / now, value, P&L, pays if it wins), CASH, Vanna pool | 🤖 | |
 | P8 | show my prediction trades | Trade history | 🤖 | |
 | P9 | get me some test CASH | Adds 100 test CASH at once (no signature); "faucet me some SOL" is still refused | 🤖 | |
@@ -216,6 +220,19 @@ pays 1 CASH if its outcome wins. Use events that are listed when you test (the w
 | P11 | bet 10 on Barcelona (a wallet with 3 CASH) | Refused before anything is built: not enough CASH; suggests test CASH | 🤖 | |
 | P12 | who will win the Senate? | Shows the market's own prices; never says who will win | 🤖 | |
 | P13 | move my World shares into Vanna's pool | A pool deposit of the shares the wallet holds (positions list them) | 👤 | |
+
+### 6.4 Approval window and failure wording
+
+| # | Prompt (verbatim) / action | What should happen | Who | Result |
+|---|---|---|---|---|
+| A1 | supply 10 USDC (look at the card) | The single-action card shows "Expires in 4:59" beside Approve, counting down each second | 👤 | |
+| A2 | deposit 10 USDC in margin and borrow 5 USDC | The plan card header shows "expires in 4:59" counting down | 👤 | |
+| A3 | approve either card | The countdown disappears; the run card shows the steps | 👤 | |
+| A4 | leave a card for 5 minutes | The clock reads "Expired" in red; Approve reads "Expired: ask again" and can't be clicked | 👤 | |
+| W1 | bet 10000 on Barcelona | A refusal written by Gemini (a buy is 0.1-5,000 CASH), not fixed text | 🤖 | |
+| W2 | borrow 99999 USDC | Gemini explains the floor / capacity refusal in plain words, with no figure that isn't in the facts | 🤖 | |
+| W3 | mujhe 50 USDC withdraw karna hai (no margin account) | The "no margin account" refusal comes back in the user's language | 🤖 | |
+| W4 | any refusal with Gemini switched off | The code's own wording is shown (the fallback) | 🤖 | |
 
 ## 7. Reasoning and what-ifs
 

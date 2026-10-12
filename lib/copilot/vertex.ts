@@ -172,7 +172,7 @@ const stepProps = {
   asset: { type: "STRING", enum: ASSET_ENUM, description: "The asset acted on (for swap: the asset sold; for farm_redeem: the underlying, not the receipt)." },
   to_asset: { type: "STRING", enum: ASSET_ENUM, description: "swap only: the asset bought." },
   amount: { type: "STRING", description: 'A positive decimal number as text ("1.5"), or "all", or a percentage like "50%". Omit if the user gave none.' },
-  source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays. swap: margin = swap collateral inside the margin account; default wallet." },
+  source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays. swap: inside the margin account by default (as the website); wallet only when the user says so." },
   leverage: { type: "NUMBER", description: 'perp_open: the Phoenix leverage the user gave (amount is then the USDC collateral). borrow: set this INSTEAD of amount when the user asks to borrow "to reach Nx leverage" / "Nx against that deposit" without giving a borrow amount. N is the multiple of equity (3 = collateral three times equity). The server sizes the amount; never compute it.' },
 };
 

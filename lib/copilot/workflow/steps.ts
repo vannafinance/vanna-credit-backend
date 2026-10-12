@@ -192,7 +192,7 @@ function predictAppError(err: unknown): string {
   if (!/simulation failed|Program log/i.test(raw)) return humanizeMcpError(err).message;
   const first = (raw.split("\n")[0] ?? "").replace(/:\s*\{.*$/, "").trim();
   const log = /Program log: Error: ([^\n]+)/.exec(raw)?.[1]?.trim();
-  return `The website's Predict trade builder refused the trade (nothing was built or sent): ${first}${log ? `; program error: ${log}` : ""}`;
+  return `The website's Predict trade builder could not build this trade: its own simulation of the transaction it made failed (${first}${log ? `; program error: ${log}` : ""}). The failure is inside the website's builder, not the user's wallet, request or position, and the user can't fix it from their side; nothing was built or sent.`;
 }
 
 /** The shares of one outcome side the user holds in Predict: in the wallet plus in Vanna's pool (sell), or wallet only (deposit). */

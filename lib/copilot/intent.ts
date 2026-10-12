@@ -311,7 +311,7 @@ export interface WriteIntent {
   /** swap: the asset bought. */
   to_asset?: Asset | null;
   amount: AmountSpec | null;
-  /** repay: which balance pays. swap: wallet swap vs swap of margin collateral. */
+  /** repay: which balance pays (default wallet). swap: inside the margin account (default, as the website) or the wallet. */
   source?: "wallet" | "margin" | null;
   /** swap: the route the user chose or named; unset = ask them, showing both quotes. */
   provider?: SwapProvider | null;

@@ -9,7 +9,7 @@ import { ClarifyOptions } from "./clarify-options";
 import { ExecutionStepper } from "./execution-stepper";
 import { ImpactPanel } from "./impact-panel";
 import { NeedsLoginCard, type NeedsLoginCardProps } from "./needs-login-card";
-import { PlanApprovalCard } from "./plan-approval-card";
+import { PlanApprovalCard, PlanCountdown, usePlanCountdown } from "./plan-approval-card";
 import { PlanRunCard } from "./plan-run-card";
 import { ActionReviewCard, RiskChip } from "./review-card";
 
@@ -33,6 +33,40 @@ export interface AssistantTurnProps {
   login: Omit<NeedsLoginCardProps, "busy"> & { busy: boolean };
 }
 
+/**
+ * A single action's Approve / Cancel, with the 5-minute approval window counting down beside them (4:59 to 0:00).
+ * Approve is closed once it runs out; once approved the run card replaces this, so the clock goes with it.
+ */
+function SingleActionFooter({ expiresAt, approving, blocked, onApprove, onCancel }: { expiresAt: number; approving: boolean; blocked: boolean; onApprove: () => void; onCancel: () => void }) {
+  const { expired } = usePlanCountdown(expiresAt, !approving);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={onApprove}
+        disabled={blocked || approving || expired}
+        className="inline-flex items-center gap-2 rounded-r2 bg-gradient px-4 py-2.5 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+      >
+        {approving && <Loader2 size={14} className="animate-spin" aria-hidden />}
+        {approving ? "Checking…" : expired ? "Expired: ask again" : "Approve and run"}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={approving}
+        className="rounded-r2 border border-vgray-100 px-4 py-2.5 text-[13px] font-semibold text-vgray-700 disabled:opacity-45"
+      >
+        Cancel
+      </button>
+      {!approving && (
+        <span className="ml-auto">
+          <PlanCountdown expiresAt={expiresAt} />
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Plan approval while proposed; the live run card once approved; a one-line note if it was dropped. */
 function PlanArea({ response, run, plan, busy, onModify }: Pick<AssistantTurnProps, "response" | "run" | "plan" | "busy" | "onModify">) {
   if (!run || !response.workflow_id) return null;
@@ -52,25 +86,13 @@ function PlanArea({ response, run, plan, busy, onModify }: Pick<AssistantTurnPro
           preview={response.preview!}
           hfFloor={run.plan.hf_floor}
           footer={
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => plan.approve(id, run.plan.digest)}
-                disabled={busy || run.phase === "approving" || response.preview!.risk.decision === "block"}
-                className="inline-flex items-center gap-2 rounded-r2 bg-gradient px-4 py-2.5 text-[13px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {run.phase === "approving" && <Loader2 size={14} className="animate-spin" aria-hidden />}
-                {run.phase === "approving" ? "Checking…" : "Approve and run"}
-              </button>
-              <button
-                type="button"
-                onClick={() => plan.cancel(id)}
-                disabled={run.phase === "approving"}
-                className="rounded-r2 border border-vgray-100 px-4 py-2.5 text-[13px] font-semibold text-vgray-700 disabled:opacity-45"
-              >
-                Cancel
-              </button>
-            </div>
+            <SingleActionFooter
+              expiresAt={run.plan.expires_at}
+              approving={run.phase === "approving"}
+              blocked={busy || response.preview!.risk.decision === "block"}
+              onApprove={() => plan.approve(id, run.plan.digest)}
+              onCancel={() => plan.cancel(id)}
+            />
           }
         />
       );

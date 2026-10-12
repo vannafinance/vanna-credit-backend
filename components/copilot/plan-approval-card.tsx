@@ -47,9 +47,45 @@ function slotNumber(step: PlanStepView, key: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Remaining time as m:ss, counting whole seconds down (a fresh 5-minute plan reads 4:59, never 5:00). */
 function mmss(ms: number): string {
-  const total = Math.max(0, Math.ceil(ms / 1000));
+  const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The plan's approval window (5 minutes from when it was drawn), ticking every second while `active`. Once the user
+ * approves, the card that shows it is replaced by the run card, so the clock is gone while the plan executes.
+ */
+export function usePlanCountdown(expiresAt: number, active: boolean): { remaining: number; expired: boolean; clock: string } {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const remaining = expiresAt - now;
+  return { remaining, expired: remaining <= 0, clock: mmss(remaining) };
+}
+
+/** "Expires in 4:59" beside a plan's Approve button; red "Expired" once the window has passed. */
+export function PlanCountdown({ expiresAt, active = true }: { expiresAt: number; active?: boolean }) {
+  const { expired, clock } = usePlanCountdown(expiresAt, active);
+  return (
+    <span
+      aria-live="polite"
+      className="inline-flex items-baseline gap-1.5 uppercase"
+      style={{
+        fontFamily: MONO,
+        fontVariantNumeric: "tabular-nums",
+        fontSize: 10.5,
+        letterSpacing: ".16em",
+        color: expired ? "var(--pc-danger-fg)" : "var(--pc-muted)",
+      }}
+    >
+      {expired ? "Expired" : <>Expires in <span style={{ fontSize: 13, letterSpacing: ".04em", color: "var(--pc-heading)" }}>{clock}</span></>}
+    </span>
+  );
 }
 
 export function planExecutionSummary(plan: Pick<PlanView, "steps" | "signature_count">) {
@@ -79,16 +115,9 @@ export interface PlanApprovalCardProps {
 }
 
 export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = false, disabled = false, error = null }: PlanApprovalCardProps) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (plan.state !== "proposed") return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [plan.state]);
-
-  const remaining = plan.expires_at - now;
-  const expired = remaining <= 0 || plan.state === "expired";
-  const clock = mmss(remaining);
+  const countdown = usePlanCountdown(plan.expires_at, plan.state === "proposed");
+  const expired = countdown.expired || plan.state === "expired";
+  const clock = countdown.clock;
 
   const meta = useMemo(() => {
     const stepCount = plan.steps.length;

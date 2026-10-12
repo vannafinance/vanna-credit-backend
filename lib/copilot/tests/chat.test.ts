@@ -548,11 +548,11 @@ describe("swap route: Jupiter or Titan", () => {
     expect(res.plan?.steps[0].slots).toMatchObject({ provider: "jupiter" });
   });
 
-  it("uses the only provider that quotes, saying why when Titan has no route", async () => {
+  it("with one provider quoting, asks nothing and leaves the route to the MCP (not pinned: it may fall back)", async () => {
     vi.spyOn(mcp, "swapQuote").mockImplementation(async () => quote([{ provider: "jupiter", out_amount: "0.831", min_out_amount: "0.822", best: true }], "no-route"));
     const res = await chat("swap 100 USDC to SOL");
     expect(res.kind).not.toBe("clarification");
-    expect(res.plan?.steps[0].slots).toMatchObject({ provider: "jupiter" });
+    expect(res.plan?.steps[0]?.slots?.provider).toBeUndefined();
     expect(JSON.stringify(res)).toMatch(/Titan has no route/);
   });
 });

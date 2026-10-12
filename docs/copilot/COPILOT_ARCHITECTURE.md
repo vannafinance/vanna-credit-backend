@@ -10,11 +10,15 @@ Excalidraw extension, or import at [excalidraw.com](https://excalidraw.com)).
 
 **What it does:** answers about health, positions, collateral, debt, wallet balances, prices, pool rates, earned
 interest, Kamino markets and positions, safe borrow / withdraw capacity, what-if scenarios, leverage capacity,
-liquidation risk, history, swap quotes and protocol settings; and prepares Earn supply / redeem, margin open / close /
-deposit / withdraw / borrow / repay, wallet and margin swaps, Kamino deposit / redeem, leveraged longs, borrows sized to
-a leverage target, exact-output swaps, unwinds ("close everything") and chains of up to 8 steps. It refuses
-conditional or scheduled orders (the rest of the request still goes ahead), liquidating anyone, admin actions,
-perpetuals / options / shorts, other tokens and other wallets.
+liquidation risk, history, swap quotes, Phoenix perps markets and positions, Basis / Perena vaults and yields, Predict
+(World.xyz prediction) markets, positions and quotes, and protocol settings; and prepares Earn supply / redeem, margin
+open / close / deposit / withdraw / borrow / repay, wallet and margin swaps (Jupiter or Titan), Kamino deposit / redeem,
+leveraged longs, borrows sized to a leverage target, exact-output swaps, Phoenix perps open / close / withdraw, vault
+deposit / withdraw, Predict buy / sell / pool deposit (several outcomes in one approval), test CASH on the test
+network, unwinds ("close everything") and chains of up to 8 steps. It refuses conditional or scheduled orders (the rest
+of the request still goes ahead), liquidating anyone, admin actions, options, futures and spot shorts (shorting is a
+Phoenix perp), any faucet other than test CASH, other tokens and other wallets. Every failure, refusal and question the
+server's checks produce is worded by Gemini for the message (§3.1).
 
 ---
 
@@ -47,15 +51,17 @@ flowchart LR
   M --> CH[("Solana fork<br/>vanna_credit_layer")]
   E --> CH
   I -->|language| G["Gemini on Vertex AI"]
+  M -->|"app APIs, behind the access gate<br/>(keeper, Jupiter, Phoenix helpers,<br/>vault APY, faucet, Predict)"| APP["The Vanna app's own /api/*"]
 ```
 
 | Piece | Where | Role |
 |---|---|---|
-| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval, step progress, wallet signing. The left panel has two lists. **Margin Positions** shows the margin account: **Collateral** is what the user deposited or swapped into (the margin vault balance minus the debt of that asset, Kamino receipts included) and **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral. **Earn Positions** shows Earn pool deposits (the amount redeemable now, from the same lender positions the Earn page reads). Rows that would read 0 are hidden |
+| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval (with the 5-minute approval countdown), step progress, wallet signing. The left panel lists **Margin Positions** (the margin account: **Collateral** is what the user deposited or swapped into, the margin vault balance minus the debt of that asset, Kamino receipts included; **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral), **Earn Positions** (Earn pool deposits, the amount redeemable now), **Perps Positions** (Phoenix, from the Perps page's view) and **Predict Positions** (World.xyz shares in the wallet or Vanna's pool, from the Predict page's query), the last two only when there are any. Rows that would read 0 are hidden |
 | Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel |
 | Copilot brain | `lib/copilot/*` | The six stages below |
 | Gemini | Vertex AI, project `solana-mcp`, model `gemini-3.8-flash`, location `global` | Understands, investigates with tools, decides |
-| Vanna Solana MCP | `Vanna_MCP_Solana` repo, Cloud Run `vanna-mcp-solana` | Reads (positions, prices, pools, capacity, history) and unsigned, simulated transaction builds |
+| Vanna Solana MCP | `Vanna_MCP_Solana` repo, Cloud Run `vanna-mcp-solana` | Reads (positions, prices, pools, capacity, history, perps, vaults, Predict) and unsigned, simulated transaction builds. Calls back into the app (`/api/prices/refresh`, `/api/jupiter/*`, `/api/perps/phoenix-*`, `/api/farm/vaults`, `/api/faucet`, `/api/predict/*`), logging in to the app's access gate with `APP_ACCESS_CODE` |
+| Access gate | `proxy.ts`, `app/api/access/route.ts`, `lib/access-gate/*` (website, backend `aaed5cc`) | The whole site needs an access code: pages show the gate, `/api/*` answers 401 without the `vanna_access` cookie (`/api/access` and `/api/copilot/health` stay open). Users enter it once (30-day cookie); the MCP logs in with `APP_ACCESS_CODE` |
 | Plan, conversation and limit store | Firestore in `solana-mcp` (an encrypted local file in development) | Plans and their state, pending choices, per-user counters |
 | App Solana code | `lib/solana/*` | Price keeper, stale-pool healing, history, the website's own reads |
 | Chain | Surfpool mainnet fork `https://rpc-devnet.solana.vanna.finance`; programs `vanna_credit_layer` `H37YVBG3…`, `vanna_oracle` `FXY5DRfe…`, `vanna_validator` `6fND3vht…` | Where everything happens |
@@ -82,8 +88,9 @@ flowchart LR
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
    (last 12 turns).
 4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
-   settings, the faucet, arbitrary programs or transfers to an address, any other wallet address, tokens outside the
-   product, and abuse or prompt-injection attempts. These refusals are final. Whether an ordinary message is on-topic,
+   settings, any faucet other than test CASH for Predict, arbitrary programs or transfers to an address, any other
+   wallet address, tokens outside the product (Predict's CASH and YES / NO shares are in it), and abuse or
+   prompt-injection attempts. These refusals are final. Whether an ordinary message is on-topic,
    which parts are conditional, scheduled or recurring orders, and which ask for something the product does not offer
    (perpetuals / options / shorts, Kamino multi-asset liquidity) is read by the model in stage 2 (see "Timing and
    parts that are not done"). Only when the model is unavailable are conditional orders and those products refused
@@ -114,7 +121,7 @@ function calling required) given:
 - the instructions in `investigation/prompt.ts`: the product, the protocol maths (§5), the rules for amounts, and the
   stages, all generated from the same constants the guards enforce;
 - the conversation, the user's message, the evidence gathered so far and any decision that was rejected;
-- the tools: 18 read tools, `calculate`, and 6 decision tools.
+- the tools: 30 read tools, `calculate`, and 6 decision tools.
 
 **Read tools** (`investigation/catalog.ts`, each backed by the MCP through `mcp-facts.ts` / `mcp-client.ts`):
 
@@ -134,6 +141,10 @@ function calling required) given:
 | `get_liquidation_risk` | Liquidation status and distance |
 | `simulate` | Any scenario on the protocol's health maths: price moves on any assets ("SOL drops 10%") and hypothetical deposits, withdrawals, borrows, repays, swaps and farms, in order. Returns collateral, debt and HF now, after the changes and after the price moves, whether it would be liquidatable or below the floor, and how far each moved asset could fall (or rise) before liquidation (`investigation/simulate.ts`; swaps at oracle prices before slippage) |
 | `get_swap_quote` | Live Jupiter quote and minimum received |
+| `get_perps_markets`, `get_perps_positions`, `preview_perp_order` | Phoenix markets, the user's perps positions and Phoenix balance, an order preview (size, fee, HF and liquidation price after) |
+| `compare_yield` | Every way to earn on an asset side by side (Earn APR, Kamino live APY, vault yields with their sources), for a request naming no product |
+| `get_vaults`, `get_vault_positions`, `preview_vault` | Basis / Perena vaults (share price, TVL, deposits open, APY with its source, Basis since-launch return), the user's shares, a simulated deposit / withdrawal |
+| `get_predict_markets`, `get_predict_market`, `get_predict_positions`, `get_predict_history`, `get_predict_quote` | Predict events with each outcome's `market_id` and YES / NO prices (compact rows with a larger observation budget, `catalog.ts` `OBSERVATION_CHARS`, so no id is cut off), the user's positions and CASH, trades, a quote (`predict-facts.ts`) |
 | `get_history`, `get_protocol_info`, `explain_concept` | History, on-chain configuration, product explanations |
 
 The wallet for every read is the session's wallet; a read cannot be pointed elsewhere.
@@ -195,6 +206,10 @@ the last turn offers only decision tools.
 - a `literal`, `usd` or `receive` amount, a `health_target`, and the base amount of a leverage borrow must be a number
   the user gave in this or an earlier message: typed in digits (`router.ts` `amountsAreTyped`), or written in words in
   any language, which Gemini reads and copies into `as_written`; the copy must appear in the user's message;
+- a Predict action's `market_id` must appear in a Predict read in the evidence: an id the model did not read is
+  rejected with the reason;
+- the whole of something the user holds ("my positions", "everything", "all of it") is sizing `all`; a literal copied
+  from a balance in the evidence is rejected as not typed, with that hint;
 - an `answer`, question or refusal may only contain figures found in a tool result (`vertex.ts` `numbersGrounded`).
   Gemini never computes a figure itself: for a total, a difference, a USD value or a percentage no tool reports, it
   calls `calculate` (`investigation/calculate.ts`) with figures copied from the evidence; the code checks every operand
@@ -263,8 +278,11 @@ borrowing, no health factor.
 `workflow/funding.ts` checks the wallet can pay for every step and `preflightStep` checks the first step against live
 health. `workflow.ts` `createWorkflow` stores the plan with exact amounts, the user's wallet, the health floor and a
 sha256 digest over every executable slot (`plan.ts` `planDigest`). The UI shows a single action as a preview card and a
-plan as a plan card with its steps, warnings and simulated health. The plan is valid for 5 minutes. A question from the
-model is shown as a clarification; the user's reply comes back through the conversation.
+plan as a plan card with its steps, warnings and simulated health. The plan is valid for 5 minutes: both cards show the
+window counting down from 4:59 (`plan-approval-card.tsx` `usePlanCountdown` / `PlanCountdown`, also used by the
+single-action footer in `assistant-turn.tsx`), Approve closes at 0:00 ("Expired: ask again"), and the clock goes away
+once the user approves (the run card replaces the approval card). The server refuses a late approval on its own. A
+question from the model is shown as a clarification; the user's reply comes back through the conversation.
 
 ### 3.5 Stage 5: execute
 
@@ -273,15 +291,21 @@ model is shown as a clarification; the user's reply comes back through the conve
    have moved and re-checks health, limits and spend (`preflightStep`); the MCP builds and simulates the transaction
    (`buildStepTx`). A swap that fails on a stale cloned pool is healed with the app's `healStaleDexPools` and rebuilt
    (`workflow/swap-heal.ts`). A step that would breach the 1.15 floor pauses the plan.
-3. **Sign**: the wallet signs the unsigned transaction in the browser.
-4. **Submit** (`/submit`): the server checks the signed bytes are the transaction it built (`workflow/submit-verify.ts`)
-   and relays it.
+3. **Sign**: the wallet signs the unsigned transaction in the browser. A Predict trade carries all of its transactions
+   (`UnsignedTx.batch`, co-signed by the app's market maker): the wallet signs them together with one
+   `signAllTransactions` (`client/sign.ts` `signUnsignedTxs`; one by one only for a wallet without it).
+4. **Submit** (`/submit`): the server checks the signed bytes are the transaction it built (`workflow/submit-verify.ts`,
+   every required signature verified, the maker's included) and relays it. A Predict batch (`signed_txs`) is checked
+   whole, marked submitted, then sent in order, each confirmed before the next (`workflow.ts` `submitBatch`); a failure
+   after the first stops there and is never rebuilt, since the earlier ones landed.
 
 ### 3.6 Stage 6: complete
 
 **Confirm** (`/confirm`, `confirmWorkflow`) waits for the signature on chain and records the step. An unclear outcome is
-marked uncertain and never retried automatically; a transaction whose blockhash expired is rebuilt. The plan ends
-completed, paused or failed, and the UI shows each step's signature.
+marked uncertain and never retried automatically; a transaction whose blockhash expired is rebuilt (not a Predict batch
+part of which landed: that is marked uncertain). After a Predict trade confirms, the app's keeper merges the pools it
+touched (`workflowDeps.predictMerge`, best effort, noted on the step). The plan ends completed, paused or failed, and
+the UI shows each step's signature. Pauses and failures on the way are worded by Gemini (§3.1).
 
 ### 3.7 Examples
 
@@ -360,9 +384,20 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
   of depositing); the Kamino farm only for listed underlyings (`isFarmListed`: SOL, USDC, USDT; JitoSOL and JupSOL
   are closed to new supply, an existing position can still be redeemed). Tokens outside the registry are refused;
   any existing position in a registered asset still counts in health and can be withdrawn.
-- **Refused always:** liquidating someone, admin and protocol settings, the faucet, arbitrary programs, transfers to
-  an address, Kamino multi-asset liquidity, perpetuals / options / shorts, other wallets, conditional or scheduled
-  orders.
+- **Swaps:** inside the margin account by default, as the website's Spot page (which only swaps there); in the wallet
+  only when the user says so. The Copilot never asks which one (`plan.ts` `stepFromWrite`).
+- **Phoenix perps:** SOL, ETH, BTC, TSLA, META, long or short, with the margin account's USDC as collateral and
+  Phoenix's own leverage (no Vanna loan; the Phoenix balance counts toward health).
+- **Vaults:** Basis (SOL, ETH, BTC, TSLA, META) and Perena (USD*, USD* Junior): USDC from the margin account in, USDC
+  out; the shares stay in the margin account as collateral. SOL Basis deposits margin USDC routed through the wallet in
+  one transaction (health checked while it is out).
+- **Predict:** World.xyz prediction markets on the test network, wallet-only (CASH, no margin, no health factor), as
+  the website's Predict page: buy YES / NO with CASH (0.1-5,000 per outcome, joining Vanna's pool on allowlisted
+  markets), sell (pooled shares redeemed first), move World shares into the pool, up to 8 outcomes per trade, test CASH.
+  No USDC payment, no opting out of the pool (both as the website). It never says which outcome will win.
+- **Refused always:** liquidating someone, admin and protocol settings, any faucet but test CASH, arbitrary programs,
+  transfers to an address, Kamino multi-asset liquidity, options, futures and spot shorts, other wallets, conditional or
+  scheduled orders.
 - **Liquidation:** read-only. The Copilot can say whether an account is at risk, never execute a liquidation.
 - **Health:** liquidation at 1.10; the Copilot keeps actions at or above 1.15, the same as the website's max buttons.
 - **Limits:** no USD limit per action or per day unless `COPILOT_MAX_ACTION_USD` / `COPILOT_MAX_DAILY_USD` is set (a set
@@ -381,6 +416,9 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
   `vanna_plan`, `vanna_risk` and `vanna_portfolio` for other MCP clients. Full list: the MCP's `TOOLS_CATALOGUE.md` §3.
 - **Write result (envelope):** `transactions[0].unsignedTransaction` (base64, v0), `requiredSigners`, `blockhash`,
   `lastValidBlockHeight`, `simulation_success`, `code` / `reason` when rejected, `summary`. Amounts are decimal strings.
+  Two multi-transaction shapes: a prerequisite (`summary.prerequisite`, a wallet lookup-table setup or a perps
+  `phoenix_fund`) is signed first and the step rebuilt; a Predict batch (`summary.batch`) is every transaction of one
+  trade, signed together and sent in order (`mcp-client.ts` `parseBatchEnvelope`).
 - **Errors:** `{"error": "<code>", "message": "..."}`, e.g. `invalid_input`, `asset_not_offered`, `price_unavailable`,
   `insufficient_scope`, `rate_limited` (HTTP 429 with `Retry-After`).
 - **Auth (hosted):** the Copilot holds a WorkOS machine-to-machine credential (`client_credentials`), caches the token
@@ -430,7 +468,11 @@ Local stack for the live suite: the MCP (`python scripts/run_local.py` in `Vanna
 | Lend / borrow | SOL, USDC, USDT |
 | Product assets | The app's token registry: SOL, USDC, USDT, JitoSOL, JupSOL, JupUSD, NVDAx, GOOGLx, AAPLx, TSLAx and the Kamino receipts |
 | Collateral deposits / Kamino farm | Every token except USDT / SOL, USDC, USDT |
-| Liquidation, admin, faucet, perps | Not offered by the Copilot |
+| Liquidation, admin, faucets | Not offered by the Copilot (test CASH for Predict is the one exception) |
+| Phoenix perps, vaults | Offered (§6); perps never borrow from Vanna |
+| Predict (2026-10-12 decisions) | Through the MCP's `vanna_predict`, which calls the app's `/api/predict/*` (the app builds and its maker co-signs); one wallet approval for a multi-transaction trade; no USDC payment; test CASH offered; buys always join the pool where allowlisted, as on the website |
+| Failure wording | Code decides every failure, refusal and question; Gemini words all of them from the code's facts (§3.1), the facts shown only when the model can't be used |
+| Access gate | The website is behind an access code (backend `aaed5cc`); the MCP enters it with `APP_ACCESS_CODE` |
 | AI | Vertex Gemini `gemini-3.8-flash` in `solana-mcp`; service account `vanna-copilot` (`roles/aiplatform.user`); no service-account keys (organization policy), so hosted uses the attached account and local uses a developer's login |
 | Copilot → MCP auth | WorkOS machine-to-machine token plus Cloud Run IAM (§7); the M2M secret lives only in Secret Manager |
 | Limits | Per-user rate and token limits in the Copilot; no USD limit per action or per day unless configured |
@@ -452,7 +494,8 @@ returns 502 until the NAT propagates.
 | Run URL | `https://vanna-credit-solana-test-o3dmfat4aq-uc.a.run.app` |
 | Runtime SA | `vanna-credit-runtime@vanna-credit-solana-test.iam.gserviceaccount.com` |
 | Builder SA | `vanna-credit-builder@vanna-credit-solana-test.iam.gserviceaccount.com` |
-| Current image | `us-central1-docker.pkg.dev/vanna-credit-solana-test/vanna-credit/app:e4c5971`, revision `vanna-credit-solana-test-00016-6fs`. Revision `00005-dt6` (app without the Copilot) is the rollback target |
+| Current image | Check with `gcloud run services describe vanna-credit-solana-test`: the last deploy from this work was `app:19255eb` (revision `00050-zpb`, rollback `00049-69g`); the live site has since gained the access gate (backend `aaed5cc`). Revision `00005-dt6` (app without the Copilot) is the oldest rollback target |
+| Access gate | `ACCESS_CODE` (default 2861) and `ACCESS_COOKIE_SECRET` on the service (docs/ACCESS_GATE.md) |
 | Secrets | Secret Manager: `workos-m2m-client-secret`, `copilot-session-secret`, `copilot-store-secret`, readable by the runtime SA, mounted as env |
 | NAT | `vanna-internal-nat` on router `vanna-internal-router` (subnet `vanna-internal-usc1`) |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.50.0.0/24` (Private Google Access on) |
@@ -464,7 +507,8 @@ returns 502 until the NAT propagates.
 |---|---|
 | Firestore | Native `(default)` in `us-central1` |
 | Vertex | `gemini-3.8-flash`, location `global`; SA `vanna-copilot@solana-mcp.iam.gserviceaccount.com` |
-| Cloud Run | `vanna-mcp-solana`, image `mcp-solana:c751774`, revision `00005-jhg`, `PROTOCOL_LOOKUP_TABLES=Df9ZBRDkqd2ReYWP4HjRdn4V9u9PiQp1AgyWGVEH7H66`, `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1`, Direct VPC `vanna-internal` with `private-ranges-only` egress. URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. Internal ingress is not used because it rejects callers from another project |
+| Cloud Run | `vanna-mcp-solana` (last deployed `mcp-solana:9a68df2`, revision `00011-5p8`; check with `gcloud run services describe`), `PROTOCOL_LOOKUP_TABLES=zEEeoScWGrV1YeVzyUGar6S6KKiWcBLxeuYdwjoX5fg`, `APP_ACCESS_CODE` (the app's access code; needed since backend `aaed5cc`), `TITAN_API_KEY` from Secret Manager, `--ingress=all` with IAM required (no `allUsers` invoker; anonymous calls get 403), `AUTH_ENABLED=true`, `TRUSTED_PROXY_HOPS=1`, Direct VPC `vanna-internal` with `private-ranges-only` egress. URL `https://vanna-mcp-solana-398807408840.us-central1.run.app`. Internal ingress is not used because it rejects callers from another project |
+| Public connector | `vanna-mcp-solana-public` (same image, `PUBLIC_MODE=true`, wallet login, Firestore state, `allUsers` invoker), URL `https://vanna-mcp-solana-public-398807408840.us-central1.run.app/mcp`; deploy steps in the MCP's `docs/DEPLOY_PUBLIC.md` |
 | Builder SA | `vanna-mcp-builder@solana-mcp.iam.gserviceaccount.com`: `storage.objectViewer`, `artifactregistry.writer`, `logging.logWriter`. Build with a build-only config (`logging: CLOUD_LOGGING_ONLY`) |
 | Artifact Registry | `us-central1-docker.pkg.dev/solana-mcp/vanna-credit` |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.40.0.0/24` (Private Google Access on) |
@@ -549,3 +593,8 @@ environment.
 2. Production: repeat WorkOS and hosting in the production environment; decide whether to tighten the MCP (VPC
    Service Controls or hosting it in the app's project) instead of `ingress=all`.
 3. Deploys from `main` by a trigger or a single agreed procedure, so the live site always matches `main`.
+4. The deployed site's Predict trade builder refuses to sell pooled shares ("Redeem pooled YES simulation failed:
+   owner does not match") while the same request built by current `main` works. The hosted Copilot can only trade what
+   the deployed app builds, so the app needs a redeploy (or its Predict settings checked) before hosted Predict sells work.
+5. At the next MCP deploy set `APP_ACCESS_CODE` on both services, and `ENABLE_TEST_FAUCET=true` on the private one for
+   the Copilot's test CASH.

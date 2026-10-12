@@ -377,7 +377,8 @@ async function askSwapRoute(
     const quotes = (Array.isArray(quote.providers) ? quote.providers : []) as Array<Record<string, unknown>>;
     const usable = quotes.filter((p) => p.provider === "jupiter" || p.provider === "titan");
     if (usable.length === 1) {
-      step.slots.provider = String(usable[0]!.provider);
+      // Only one route quotes: nothing to ask. The route is NOT pinned: the user didn't choose it, so the MCP may still
+      // fall back to the other one when it can't build this one (a Titan route too large for a margin transaction).
       if (quote.titan_status === "no-route") extras.push(`Titan has no route for this swap, so it goes through Jupiter.`);
       continue;
     }
@@ -519,7 +520,9 @@ async function resolveAmount(w: WriteIntent, earlier: StepSpec[], t: Turn): Prom
   if (blocking) {
     return { ok: false, message: `${a.pct}% of your ${w.asset} depends on "${labelFor(blocking)}" running first, so I can't size it yet. Give an exact ${w.asset} amount for it, or say "all".` };
   }
-  const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.source === "margin" }, t.ctx);
+  // A swap is inside the margin account unless the user said the wallet (the website's default); a repay pays from
+  // the wallet unless they said the margin balance.
+  const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.op === "swap" ? w.source !== "wallet" : w.source === "margin" }, t.ctx);
   return r.ok ? { ok: true, amount: r.amount } : { ok: false, message: r.message };
 }
 

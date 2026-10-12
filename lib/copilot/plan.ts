@@ -238,10 +238,11 @@ export function predictLegsOf(s: Pick<StepSpec, "slots">): PredictStepLeg[] | nu
 }
 
 function predictLegText(l: PredictStepLeg): string {
-  const what = `${l.side_label || l.outcome.toUpperCase()} on ${l.name || "the outcome"}`;
-  if (l.side === "buy") return `buy ${what} for ${l.amount} CASH`;
-  if (l.side === "sell") return `sell ${l.amount} ${what} shares`;
-  return `move ${l.amount} ${what} shares into Vanna's pool`;
+  const label = l.side_label || l.outcome.toUpperCase();
+  const name = l.name || "the outcome";
+  if (l.side === "buy") return `buy ${label} on ${name} for ${l.amount} CASH`;
+  if (l.side === "sell") return `sell ${l.amount} ${label} shares of ${name}`;
+  return `move ${l.amount} ${label} shares of ${name} into Vanna's pool`;
 }
 
 function predictLabel(legs: PredictStepLeg[]): string {
@@ -319,7 +320,7 @@ export function percentBalance(w: WriteIntent): string | null {
     case "earn_supply":
       return `wallet:${a}`;
     case "swap":
-      return `${w.source === "margin" ? "margin" : "wallet"}:${a}`;
+      return `${w.source === "wallet" ? "wallet" : "margin"}:${a}`;
     case "withdraw":
       return `margin:${a}`;
     case "earn_redeem":
@@ -337,7 +338,8 @@ export function stepFromWrite(w: WriteIntent, amount: string | null): StepSpec {
   const slots: Slots = {};
   if (w.op === "swap") {
     slots.to_asset = w.to_asset ?? null;
-    slots.mode = w.source === "margin" ? "margin" : "wallet";
+    // As the website's Spot page, a swap runs inside the margin account unless the user says the wallet.
+    slots.mode = w.source === "wallet" ? "wallet" : "margin";
     slots.slippage_bps = 100;
     if (w.provider) slots.provider = w.provider;
   }
