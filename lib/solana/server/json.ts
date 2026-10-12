@@ -12,9 +12,15 @@ export function redactSecrets(text: string): string {
     .replace(/((?:api[-_]?key|apikey|token|secret)=)[^&\s"']+/gi, "$1[redacted]");
 }
 
-/** JSON response that serialises bigint as decimal strings; the output is passed through {@link redactSecrets}. */
+/** Keys whose string values carry error text and are passed through {@link redactSecrets}. */
+const ERROR_KEYS = new Set(["error", "message", "detail", "details", "reason"]);
+
+/**
+ * JSON response that serialises bigint as decimal strings. Only error-text fields ({@link ERROR_KEYS})
+ * are redacted: data URLs such as market images must reach the client intact.
+ */
 export function jsonResponse(body: unknown, init?: ResponseInit) {
-  const text = redactSecrets(JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
+  const text = JSON.stringify(body, (k, v) => (typeof v === "bigint" ? v.toString() : typeof v === "string" && ERROR_KEYS.has(k) ? redactSecrets(v) : v));
   return new NextResponse(text, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
 }
 
