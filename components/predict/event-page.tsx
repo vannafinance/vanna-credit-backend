@@ -26,6 +26,7 @@ import type { PredictEvent, PredictOutcome as Outcome, PredictPosition, Side } f
 import { CATN, Cell, catDup, EvLogo, INFO, Kv, Meter, PIC, PoolBar, SideTag, SrcBadge, TeamLogo, Tile, cf, cpair, p2, pc, pp, shf } from "./ui";
 import { TradePanel, type PanelState, heldOf } from "./trade-panel";
 import { LinkedSheet } from "./linked-sheet";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 type Tab = "earning" | "prices" | "rules" | "activity";
 
@@ -212,7 +213,7 @@ function EarnTab({ e, o, rate }: { e: PredictEvent; o: Outcome; rate: number }) 
   );
 }
 
-/** Best prices now (World's latest trades): what the panel fills at. No depth is indexed. */
+/** Best prices now (World's live maker quote, else its latest trades): what the panel fills at. No depth is indexed. */
 function PricesTab({ e, o }: { e: PredictEvent; o: Outcome }) {
   const row = (s: Side) => (
     <div className="pd-bk-r" key={s}>
@@ -233,6 +234,7 @@ function PricesTab({ e, o }: { e: PredictEvent; o: Outcome }) {
       {row("yes")}
       {row("no")}
       <div className="pd-kvs num">
+        <Kv k="Price source" v={o.priceSource === "quote" ? "Live World quote" : o.priceSource === "fill" ? "Latest World trade" : "No price yet"} />
         <Kv k="Last trade" v={e.last || "No trades yet"} />
         <Kv k="Open interest" v={usdC(o.oi)} />
         <Kv k="Volume, 24h" v={usdC(o.vol)} />
@@ -264,7 +266,7 @@ function ActTab({ e, connected }: { e: PredictEvent; connected: boolean }) {
   if (!connected) return <p className="pd-note sm">Connect a wallet to see your trades on this event.</p>;
   const ids = new Set(e.outs.map((o) => o.k));
   const rows = (data ?? []).filter((t) => ids.has(t.marketId));
-  if (isLoading) return <p className="pd-note sm">Loading your trades…</p>;
+  if (isLoading) return <VannaLoader caption="Loading your trades" />;
   if (!rows.length) return <p className="pd-note sm">No trades on this event yet.</p>;
   const ago = (ms: number | null) => timeAgo(ms) || "N/A";
   return (
@@ -480,7 +482,7 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
             )}
             <p className="pd-chart-e">
               {IC.clock}
-              <span>Price history is not available yet. Prices here update live from the latest World trades{e.last ? ` (last trade ${e.last})` : ""}.</span>
+              <span>Price history is not available yet. Prices here update live from World’s maker quotes and trades{e.last ? ` (last trade ${e.last})` : ""}.</span>
             </p>
           </section>
 
@@ -587,7 +589,9 @@ function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string
 /** The event page: loads the event (by event id or any of its market ids), then the view. */
 export function PredictEventPage({ id }: { id: string }) {
   const { ev, mk, sd } = parseRouteId(id);
-  const { data: e, isLoading, error } = usePredictEvent(ev);
+  // Fetched by the market id when the route names one: the server resolves any market id to its
+  // parent event, so the link works even if the event id in it is stale (grouping can change).
+  const { data: e, isLoading, error } = usePredictEvent(mk ?? ev);
   if (!e)
     return (
       <div className="v3 page">
@@ -595,7 +599,7 @@ export function PredictEventPage({ id }: { id: string }) {
           {PIC.back}All markets
         </Link>
         <div className="pd-load" style={{ marginTop: 16 }}>
-          {isLoading ? "Loading the market from World… the first load can take up to a minute." : `This market could not be loaded${error ? `: ${(error as Error).message}` : "."}`}
+          {isLoading ? <VannaLoader className="vl-flush" caption="Loading the market from World. The first load can take up to a minute." /> : `This market could not be loaded${error ? `: ${(error as Error).message}` : "."}`}
         </div>
       </div>
     );

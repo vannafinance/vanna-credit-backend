@@ -157,7 +157,7 @@ export function usePop() {
 }
 
 /** Empty-table placeholder (`.earn-nodata`). */
-export function NoData({ text = "No data available" }: { text?: string }) {
+export function NoData({ text = "No data available" }: { text?: ReactNode }) {
   return (
     <section className="earn-nodata">
       <p>{text}</p>

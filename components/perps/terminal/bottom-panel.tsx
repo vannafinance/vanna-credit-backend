@@ -9,6 +9,7 @@ import type { AccountNumbers, LiqRoom } from "./account-model";
 import { LIQ_HF, hfZone } from "./account-model";
 import { hfFmt, levFmt, nf, price, roomSub, roomText, roomZone, sUsd, spct, tokAmt, upDn, usd } from "./format";
 import { Go, Img, Info, Modal, PHOENIX_ICON, Slider, VANNA_ICON, marketIcon } from "./ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 /** One open position as the terminal shows it. */
 export interface PositionRow {
@@ -380,7 +381,7 @@ function HistoryTable({ rows, loading }: { rows: PerpHistoryRow[]; loading: bool
   if (rows.length === 0)
     return (
       <div className="px-empty">
-        <span className="px-mut">{loading ? "Loading your Phoenix history…" : "No perps activity yet"}</span>
+        {loading ? <VannaLoader caption="Loading your Phoenix history" /> : <span className="px-mut">No perps activity yet</span>}
       </div>
     );
   const t = (unix: number) =>

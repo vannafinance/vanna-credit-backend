@@ -8,7 +8,7 @@
  * All figures come from GET /api/predict/positions/:owner.
  */
 import { useRouter } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { IC } from "@/components/v3/icons";
 import { sUsd, usd } from "@/components/v3/format";
 import { useUserStore } from "@/store/user";
@@ -67,7 +67,7 @@ export function PosTable({
 }: {
   rows: PosRow[];
   events: Map<string, PredictEvent>;
-  empty?: string;
+  empty?: ReactNode;
   onEarn?: (r: PosRow) => void;
   busy?: boolean;
   onOpen?: () => void;

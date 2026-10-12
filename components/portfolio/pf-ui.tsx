@@ -34,7 +34,7 @@ export const TT = {
   perpsSize: "Total size of your open perp positions at the index price.",
   perpsPnl: "Profit or loss on open perp positions at the index price, before fees and funding.",
   perpsReal: "USDC back from Phoenix plus what is idle there, minus what was sent in, for positions already closed (fees and funding included).",
-  spotSize: "Market value of your spot positions, long and short.",
+  spotSize: "Market value of every token your margin account holds (deposits, swapped tokens, Kamino and vault receipts), at today's prices.",
   spotLS: "Value of the tokens you hold long, and of the tokens you borrowed and sold short.",
   spotPnl: "Profit or loss on open spot positions with an on-chain entry price, at today's price, before fees and interest.",
   farmApy: "Kamino supply APY of your farm positions weighted by their value, before the borrow cost of any loan that funds them.",
@@ -83,7 +83,7 @@ export function ChartCard({
   sub: ReactNode;
   series: ChartSeries[] | null;
   labels?: string[];
-  empty?: string;
+  empty?: ReactNode;
   h?: number;
   min?: number;
 }) {
@@ -132,7 +132,7 @@ export interface GridRow {
 }
 
 /** The live Earn "Positions Table" body: header + card rows (labelled cards below 1280 px). */
-export function Grid({ cols, heads, rows, empty }: { cols: string; heads: ReactNode[]; rows: GridRow[]; empty?: string }) {
+export function Grid({ cols, heads, rows, empty }: { cols: string; heads: ReactNode[]; rows: GridRow[]; empty?: ReactNode }) {
   const visible = rows.filter((r) => !r.hidden);
   if (!visible.length) return <div className="pf-none">{empty ?? "No data available"}</div>;
   const label = (h: ReactNode) => (typeof h === "string" ? h : "");

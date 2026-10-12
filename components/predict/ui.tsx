@@ -4,7 +4,7 @@
  * Predict small views and formatters: ports of the V4 design's predict.js helpers (cents format,
  * tiles, cells, key/value rows, event artwork / team logos, source badges, side tags, quick Yes/No
  * buttons, pool-balance bar). Every number comes from the real World data (`/api/predict/*`);
- * an unpriced outcome (no World trade yet) shows "No price" and cannot be bought.
+ * an unpriced outcome (no live World quote and no World trade yet) shows "No price" and cannot be bought.
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -91,7 +91,7 @@ export const INFO = {
   sideApy: "Yearly yield for shares on this side at today’s pool balance.",
   slip: "What each outcome pays if it happens, for the amounts in this slip.",
   notPooled: "This market is not in Vanna’s pool yet, so shares bought here stay in your wallet and do not earn.",
-  prices: "Prices come from the latest trades on World. A buy fills at the ask, a sell at the bid.",
+  prices: "Prices are World’s live maker quotes, or the latest World trades when a market has no quote. A buy fills at the ask, a sell at the bid.",
 };
 
 // ---------------------------------------------------------------------------------------------

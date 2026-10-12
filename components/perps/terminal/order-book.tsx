@@ -4,6 +4,7 @@
 import { nf, price, tokAmt, upDn } from "./format";
 import type { PhoenixBook, PhoenixTrade } from "./use-phoenix-live";
 import { Img, Info, PHOENIX_ICON, SideIcon } from "./ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const ROWS = 10;
 
@@ -99,7 +100,7 @@ function BookRows({ marketKey, book, mark, change, d }: { marketKey: string; boo
         <div className="px-bk-side asks">{ar.slice().reverse().map((l) => row(l, "a"))}</div>
         <div className="px-bk-mid">
           <b className={change === null ? "" : upDn(change)}>{price(mark || 0)}</b>
-          <span>{spread !== null && mid ? `Spread ${nf(spread, d)} · ${nf((spread / mid) * 100, 3)}%` : book ? "No liquidity" : "Loading…"}</span>
+          <span>{spread !== null && mid ? `Spread ${nf(spread, d)} · ${nf((spread / mid) * 100, 3)}%` : book ? "No liquidity" : <VannaLoader size="inline" label="Loading order book" />}</span>
         </div>
         <div className="px-bk-side bids">{br.map((l) => row(l, "b"))}</div>
       </div>
@@ -120,7 +121,7 @@ function TradeRows({ marketKey, trades, d }: { marketKey: string; trades: Phoeni
         <span>Time</span>
       </div>
       <div className="px-tr num">
-        {trades.length === 0 && <div className="px-bk-r"><span className="px-mut">Loading…</span></div>}
+        {trades.length === 0 && <div className="px-bk-r"><VannaLoader size="inline" label="Loading trades" /></div>}
         {trades.slice(0, 23).map((t) => (
           <div key={t.id} className="px-bk-r">
             <span className={t.buy ? "px-up" : "px-dn"}>{nf(t.price, d)}</span>

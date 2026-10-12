@@ -21,9 +21,10 @@ import { CASH_DECIMALS, GROUP_DISCRIMINATOR_HEX, MARKET_ACCOUNT_SIZE, WORLD_PROG
 import { decodeGroup, decodeMarket, parseTokenMetadata, tokenAmountOf } from "./decode";
 import { classify, questionFrom } from "./grouping";
 import type { JsonMeta, MarketInfo, MintMeta, RawGroup, RawMarket } from "./types";
-import { FEATURED_GROUP_IDS, FEATURED_MARKET_IDS, featuredOnly } from "./featured";
+import { FEATURED_EVENTS, FEATURED_GROUP_IDS, FEATURED_MARKET_IDS, featuredOnly } from "./featured";
 import { sweepUnpricedMarkets } from "./prices.server";
 import { scanUrls, withFallback, withMainnet } from "./rpc.server";
+import { getConnection } from "@/lib/solana/connection";
 
 const CATALOG_TTL_MS = 5 * 60_000;
 /** Crypto windows are pre-created for days ahead; list the live one and the next hour only. */
@@ -104,11 +105,29 @@ async function scanProgram(filters: Parameters<import("@solana/web3.js").Connect
   throw lastError instanceof Error ? lastError : new Error("World market scan failed");
 }
 
+/**
+ * Reads accounts on mainnet; any that are gone there are read from the fork instead. World closes a
+ * market's accounts once it resolves (e.g. the losing drivers of a finished F1 race), while the
+ * fork keeps the copy it cloned, and trades / positions on the fork still use it: without this an
+ * event would shrink to its surviving market (a lone "Will X win?" in place of the race).
+ */
 async function readMany(keys: string[]): Promise<(AccountInfo<Buffer> | null)[]> {
   const out: (AccountInfo<Buffer> | null)[] = [];
   for (let i = 0; i < keys.length; i += 100) {
     const batch = keys.slice(i, i + 100).map((k) => new PublicKey(k));
     out.push(...((await withMainnet((c) => c.getMultipleAccountsInfo(batch))) as (AccountInfo<Buffer> | null)[]));
+  }
+  const missing = out.flatMap((info, j) => (info ? [] : [j]));
+  if (missing.length) {
+    try {
+      for (let i = 0; i < missing.length; i += 100) {
+        const idx = missing.slice(i, i + 100);
+        const infos = await getConnection().getMultipleAccountsInfo(idx.map((j) => new PublicKey(keys[j])));
+        idx.forEach((j, n) => (out[j] = (infos[n] as AccountInfo<Buffer> | null) ?? null));
+      }
+    } catch (error) {
+      console.warn("Predict fork account read failed:", error instanceof Error ? error.message : error);
+    }
   }
   return out;
 }
@@ -173,6 +192,16 @@ async function loadCatalog(): Promise<void> {
     if (!grp) continue;
     groups.set(grp.id, grp);
     for (const m of grp.members) groupOf.set(m, grp.id);
+  }
+  if (featured) {
+    // A featured Group World has closed (its match resolved) and the fork never cloned: its members
+    // come from the curated list, so the event keeps its id and outcomes instead of splitting into
+    // one lone market per side.
+    for (const e of FEATURED_EVENTS) {
+      if (!e.groupId || groups.has(e.groupId)) continue;
+      groups.set(e.groupId, { id: e.groupId, members: e.markets });
+      for (const m of e.markets) if (!groupOf.has(m)) groupOf.set(m, e.groupId);
+    }
   }
   state.all = all;
   state.marketByMint = marketByMint;
@@ -289,7 +318,14 @@ export async function getMarketInfo(id: string): Promise<MarketInfo | null> {
   await ensureCatalog();
   let m = state.all.get(id);
   if (!m) {
-    const info = await withMainnet((c) => c.getAccountInfo(new PublicKey(id)));
+    let key: PublicKey;
+    try {
+      key = new PublicKey(id);
+    } catch {
+      return null; // not an account address (e.g. a stale derived event id "f-…")
+    }
+    // Mainnet first, then the fork's copy of a market World has since closed (see readMany).
+    const info = (await withMainnet((c) => c.getAccountInfo(key))) ?? (await getConnection().getAccountInfo(key).catch(() => null));
     const decoded = info && info.owner.toBase58() === WORLD_PROGRAM_ID ? decodeMarket(id, info.data as Buffer) : null;
     if (!decoded) return null;
     m = decoded;

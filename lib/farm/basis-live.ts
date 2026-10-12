@@ -7,7 +7,8 @@
  * - vault state: GET /api/farm/vaults (fork reads, `useVaults`): NAV, share price, cap, legs, Phoenix margin;
  * - share-price history: GET /api/farm/vaults/history (hourly observations recorded by the server);
  * - funding: GET /api/farm/funding (Phoenix mainnet hourly rates, 90 days) and, for "now", Phoenix's
- *   public WebSocket `market` channel (the same feed the Perps terminal uses);
+ *   public WebSocket `market` channel (the same feed the Perps terminal uses), which also gives each
+ *   market's live open interest and mark price;
  * - the wallet's position: its margin account's receipt balance and its on-chain vault history.
  *
  * Figures that need more history than exists come back as null; the pages render those as the zero
@@ -94,13 +95,33 @@ export function useFundingHistory(symbol: string | null) {
   return q.data ?? null;
 }
 
+/** One Phoenix perp market's live figures from the public WebSocket `market` channel. */
+export interface PhoenixMarketNow {
+  /** Current hourly funding, % (positive: longs pay shorts). */
+  funding: number | null;
+  /** Open interest, base units (e.g. SOL for SOL-PERP). */
+  openInterest: number | null;
+  /** Phoenix mark price, USD. */
+  markPx: number | null;
+}
+
+/** Open interest in USD (base units × mark); null until both are known. */
+export function openInterestUsd(m: PhoenixMarketNow | undefined | null): number | null {
+  return m && m.openInterest !== null && m.markPx !== null ? m.openInterest * m.markPx : null;
+}
+
+const finite = (v: unknown): number | null => {
+  const n = typeof v === "number" ? v : Number(v);
+  return v !== null && v !== undefined && Number.isFinite(n) ? n : null;
+};
+
 /**
- * Current hourly funding (%) per Phoenix market from the public WebSocket's `market` channel only
- * (no book / trades / candles). Empty until the first message; callers fall back to the latest
- * published hourly rate from {@link useFundingHistory}.
+ * Live funding, open interest and mark per Phoenix market from the public WebSocket's `market`
+ * channel only (no book / trades / candles), one socket for all `symbols`. Empty until the first
+ * message per market.
  */
-export function usePhoenixFundingNow(symbols: string[]): Record<string, number> {
-  const [now, setNow] = useState<Record<string, number>>({});
+export function usePhoenixMarketNow(symbols: string[]): Record<string, PhoenixMarketNow> {
+  const [now, setNow] = useState<Record<string, PhoenixMarketNow>>({});
   const key = symbols.join(",");
   useEffect(() => {
     if (!key || typeof WebSocket === "undefined") return;
@@ -116,9 +137,19 @@ export function usePhoenixFundingNow(symbols: string[]): Record<string, number> 
       };
       ws.onmessage = (event) => {
         try {
-          const m = JSON.parse(String(event.data)) as { channel?: string; symbol?: string; funding?: unknown };
-          const f = Number(m.funding);
-          if (m.channel === "market" && m.symbol && Number.isFinite(f)) setNow((prev) => (prev[m.symbol!] === f ? prev : { ...prev, [m.symbol!]: f }));
+          const m = JSON.parse(String(event.data)) as { channel?: string; symbol?: string; funding?: unknown; openInterest?: unknown; markPx?: unknown };
+          if (m.channel !== "market" || !m.symbol) return;
+          const sym = m.symbol;
+          setNow((prev) => {
+            const old = prev[sym];
+            // A frame may omit fields; keep the last known value for those.
+            const next: PhoenixMarketNow = {
+              funding: finite(m.funding) ?? old?.funding ?? null,
+              openInterest: finite(m.openInterest) ?? old?.openInterest ?? null,
+              markPx: finite(m.markPx) ?? old?.markPx ?? null,
+            };
+            return old && old.funding === next.funding && old.openInterest === next.openInterest && old.markPx === next.markPx ? prev : { ...prev, [sym]: next };
+          });
         } catch {
           /* ignore malformed frames */
         }
@@ -138,6 +169,23 @@ export function usePhoenixFundingNow(symbols: string[]): Record<string, number> 
     };
   }, [key]);
   return now;
+}
+
+/** Hourly funding (%) per market out of {@link usePhoenixMarketNow}'s live figures. */
+export function fundingOf(markets: Record<string, PhoenixMarketNow>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [sym, m] of Object.entries(markets)) if (m.funding !== null) out[sym] = m.funding;
+  return out;
+}
+
+/**
+ * Current hourly funding (%) per Phoenix market from the public WebSocket's `market` channel only
+ * (no book / trades / candles). Empty until the first message; callers fall back to the latest
+ * published hourly rate from {@link useFundingHistory}. A thin view over {@link usePhoenixMarketNow}.
+ */
+export function usePhoenixFundingNow(symbols: string[]): Record<string, number> {
+  const markets = usePhoenixMarketNow(symbols);
+  return useMemo(() => fundingOf(markets), [markets]);
 }
 
 /** Annualised "Funding Now" (%) for a market: live WebSocket rate, else the latest published hourly rate. */
@@ -211,6 +259,8 @@ export interface VaultView {
   hedgeShare: number | null;
   /** Price rise (%) to the short's liquidation; null without a short. */
   shortLiqRise: number | null;
+  /** Basis only: the Phoenix market's live open interest and mark (public WebSocket); null otherwise. */
+  market: PhoenixMarketNow | null;
 }
 
 export function useVaultView(id: string): VaultView | null {
@@ -219,7 +269,7 @@ export function useVaultView(id: string): VaultView | null {
   const history = useVaultHistory(id);
   const basis = def?.kind === "basis";
   const funding = useFundingHistory(basis ? def!.asset : null);
-  const liveFunding = usePhoenixFundingNow(basis ? [def!.asset] : []);
+  const liveMarkets = usePhoenixMarketNow(basis ? [def!.asset] : []);
   return useMemo(() => {
     if (!def) return null;
     const state = live.data.find((v) => v.id === id) ?? null;
@@ -233,9 +283,10 @@ export function useVaultView(id: string): VaultView | null {
       sharePriceDays: days,
       apyDays: dailyApy(days),
       stats: navStats(history.points),
-      funding: basis ? { now: fundingNowApr(def.asset, liveFunding, funding), days: fundingDaysList, stats: fundingStats(fundingDaysList) } : null,
+      funding: basis ? { now: fundingNowApr(def.asset, fundingOf(liveMarkets), funding), days: fundingDaysList, stats: fundingStats(fundingDaysList) } : null,
       hedgeShare: state?.navUsd && state.navUsd > 0 && state.shortUsd !== null ? state.shortUsd / state.navUsd : null,
       shortLiqRise: shortLiquidationRise(state?.shortUsd ?? null, state?.phoenixEffectiveUsd ?? null, state?.phoenixMaintenanceUsd ?? null),
+      market: basis ? liveMarkets[def.asset] ?? { funding: null, openInterest: null, markPx: null } : null,
     };
-  }, [def, id, live.data, live.isLoading, history.points, funding, liveFunding, basis]);
+  }, [def, id, live.data, live.isLoading, history.points, funding, liveMarkets, basis]);
 }

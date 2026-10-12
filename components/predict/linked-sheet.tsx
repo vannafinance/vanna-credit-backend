@@ -15,6 +15,7 @@ import { useWallet } from "@/hooks/use-wallet";
 import { importOf, rowsOf, useEventMap, usePredictAccount, useStartEarning, PosTable } from "./positions";
 import { PIC } from "./ui";
 import "./predict-v3.css";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 export const useLinkedSheet = create<{ open: boolean }>(() => ({ open: false }));
 export const openLinkedSheet = () => useLinkedSheet.setState({ open: true });
@@ -84,7 +85,7 @@ function SheetBody() {
           const x = importOf(acct.data, r);
           if (x) earn.start([x]);
         }}
-        empty={acct.loading ? "Loading your positions…" : "No World positions in your wallet. Shares you buy on Vanna go straight into the pool."}
+        empty={acct.loading ? <VannaLoader size="block" caption="Loading your positions" /> : "No World positions in your wallet. Shares you buy on Vanna go straight into the pool."}
       />
       {idle.length > 0 && (
         <div className="pd-ifoot num">

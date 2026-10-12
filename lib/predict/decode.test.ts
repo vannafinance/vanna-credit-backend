@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Buffer } from "buffer";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { CASH_MINT, GROUP_DISCRIMINATOR_HEX, MARKET_DISCRIMINATOR_HEX } from "./constants";
-import { decodeGroup, decodeMarket, mintSupplyOf, parseTokenMetadata, tokenAmountOf } from "./decode";
+import { decodeGroup, decodeJanusOracle, decodeMarket, mintSupplyOf, parseTokenMetadata, tokenAmountOf } from "./decode";
 
 const key = () => Keypair.generate().publicKey;
 
@@ -87,5 +87,37 @@ describe("token account helpers", () => {
     mint.writeBigUInt64LE(9n, 36);
     expect(mintSupplyOf(mint)).toBe(9n);
     expect(tokenAmountOf(null)).toBe(0n);
+  });
+});
+
+describe("decodeJanusOracle", () => {
+  // Real mainnet bytes (2026-10-12) of the oracle 6LMTMvvyuJLvtQxz5tF6AeU7JumwsYAinoyev4vkBrHx
+  // (Atalanta vs Venezia, market FVJzqhab…): mid 63.5¢, half-spread 0.55¢.
+  const real = Buffer.from(
+    "010000000000000057212d1b00000000609f47b445b3dd184a4d0100000000000000000000000000480e010000000000" +
+      "000000000000000078b00900000000000000000000000000" +
+      "7c15000000ffd7443aaa5a9cea186f24ef822d9a932f6bac" +
+      "e90fc7c3ff4319e8c0b1cdc8d0f90003",
+    "hex",
+  );
+  it("reads mid, half-spread, flags, slot, write time and market", () => {
+    expect(real.length).toBe(112);
+    const o = decodeJanusOracle(real)!;
+    expect(o.market).toBe("FVJzqhabn1ruSdEoiuFCzHeokuCWuWMH8kuVcSPugNmv");
+    expect(o.mid).toBeCloseTo(0.635, 9);
+    expect(o.halfSpread).toBeCloseTo(0.0055, 9);
+    expect(o.flags).toBe(0);
+    expect(o.slot).toBe(455_942_487);
+    expect(o.updatedMs).toBeGreaterThan(1.79e12);
+    expect(o.updatedMs).toBeLessThan(1.8e12);
+  });
+  it("rejects other sizes, versions and out-of-range mids", () => {
+    expect(decodeJanusOracle(real.subarray(0, 111))).toBeNull();
+    const v2 = Buffer.from(real);
+    v2[0] = 2;
+    expect(decodeJanusOracle(v2)).toBeNull();
+    const bad = Buffer.from(real);
+    bad.writeBigUInt64LE(2_000_000n, 56);
+    expect(decodeJanusOracle(bad)).toBeNull();
   });
 });

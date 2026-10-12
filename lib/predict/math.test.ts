@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buyShares, countdown, fillPrice, maxSharesForAssets, poolBar, previewRedeemValue, pricesFromFills, redeemSwapSlack, sellCash, sharesForAssets, sizeRedeem, timeAgo, toCents } from "./math";
+import { buyShares, countdown, fillPrice, maxSharesForAssets, poolBar, previewRedeemValue, pricesFromFills, pricesFromQuote, redeemSwapSlack, sellCash, sharesForAssets, sizeRedeem, timeAgo, toCents } from "./math";
 
 describe("pricesFromFills", () => {
   it("has no price without fills; windows open at 50/50", () => {
@@ -22,6 +22,35 @@ describe("pricesFromFills", () => {
   it("never crosses bid over ask", () => {
     const p = pricesFromFills({ yesBuy: { price: 0.5, ts: 1 }, yesSell: { price: 0.55, ts: 1 } }, "binary", null);
     expect(p.yesBid!).toBeLessThan(p.yesAsk!);
+  });
+});
+
+describe("pricesFromQuote", () => {
+  const now = 1_790_000_000_000;
+  const q = (mid: number, extra: Partial<{ halfSpread: number; flags: number; updatedMs: number }> = {}) => ({ mid, halfSpread: 0.0055, flags: 0, updatedMs: now - 60_000, ...extra });
+  it("matches world.xyz on the NFL champion market (mid 12.5¢ → Yes 14¢ / No 89¢ on World)", () => {
+    const p = pricesFromQuote(q(0.125), 0.003, now)!;
+    expect(p.source).toBe("quote");
+    expect(p.yesAsk).toBeCloseTo(0.1335, 9);
+    expect(p.noAsk).toBeCloseTo(0.8835, 9);
+    expect(Math.ceil(p.yesAsk! * 100)).toBe(14);
+    expect(Math.ceil(p.noAsk! * 100)).toBe(89);
+    expect(p.yesBid).toBeCloseTo(0.1165, 9);
+    expect(p.noBid).toBeCloseTo(0.8665, 9);
+  });
+  it("matches a real JanusFI fill (mid 63.5¢ filled a YES buy at 64.35¢)", () => {
+    expect(pricesFromQuote(q(0.635), 0.003, now)!.yesAsk).toBeCloseTo(0.6435, 9);
+  });
+  it("does not offer a side that would cost 1 CASH or more", () => {
+    const p = pricesFromQuote(q(0.005, { flags: 2 }), 0.003, now)!;
+    expect(p.yesAsk).toBeCloseTo(0.0135, 9);
+    expect(p.noAsk).toBeNull();
+    expect(p.yesBid).toBeNull();
+    expect(p.noBid).toBeCloseTo(0.9865, 9);
+  });
+  it("ignores paused and stale oracles", () => {
+    expect(pricesFromQuote(q(0.5, { flags: 3 }), 0.003, now)).toBeNull();
+    expect(pricesFromQuote(q(0.5, { updatedMs: now - 16 * 60_000 }), 0.003, now)).toBeNull();
   });
 });
 

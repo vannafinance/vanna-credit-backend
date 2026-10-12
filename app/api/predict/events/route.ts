@@ -11,7 +11,7 @@ const within = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => 
 
 /**
  * GET /api/predict/events?cat=sports&q=nfl — every listed World event (grouped, priced from
- * mainnet fills, with live yield-pool balances from the fork). The first call after a cold start
+ * JanusFI's live on-chain quotes or else mainnet fills, with live yield-pool balances from the fork). The first call after a cold start
  * waits for the mainnet scan (~10–40 s); later calls are served from memory.
  */
 export async function GET(req: NextRequest) {

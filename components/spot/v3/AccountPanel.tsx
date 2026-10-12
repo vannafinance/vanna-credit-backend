@@ -17,6 +17,7 @@ import { Info } from "@/components/v3/ui";
 import { IC } from "@/components/v3/icons";
 import { hfFmt, hfLabel, levFmt, nf, price, roomSub, roomText, roomZone, tokFmt, usd } from "@/components/v3/format";
 import { viewOf, withSwap, type SwapPreview } from "./swap-model";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const TIPS = {
   hf: "Everything the margin account holds ÷ everything it owes, at on-chain prices. At 1.10 or below the account can be liquidated.",
@@ -73,9 +74,13 @@ export function AccountPanel({ preview }: { preview: SwapPreview | null }) {
         <div className="sp-ah">
           <span>Margin account</span>
         </div>
-        <p className="mut" style={{ fontSize: 13 }}>
-          {acct.loading ? "Loading your margin account…" : "Swaps run inside a Vanna margin account. Create one and deposit collateral to start."}
-        </p>
+        {acct.loading ? (
+          <VannaLoader caption="Loading your margin account" />
+        ) : (
+          <p className="mut" style={{ fontSize: 13 }}>
+            Swaps run inside a Vanna margin account. Create one and deposit collateral to start.
+          </p>
+        )}
         {!acct.loading && (
           <div className="sp-afoot">
             <Link className="btn-s" href="/margin">

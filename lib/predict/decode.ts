@@ -8,11 +8,13 @@ import {
   GROUP_DISCRIMINATOR_HEX,
   GROUP_MEMBER_SIZE,
   GROUP_OFFSETS,
+  JANUS_ORACLE_OFFSETS,
+  JANUS_ORACLE_SIZE,
   MARKET_ACCOUNT_SIZE,
   MARKET_DISCRIMINATOR_HEX,
   MARKET_OFFSETS,
 } from "./constants";
-import type { MintMeta, RawGroup, RawMarket } from "./types";
+import type { JanusOracle, MintMeta, RawGroup, RawMarket } from "./types";
 
 const readKey = (data: Buffer, offset: number) => new PublicKey(data.subarray(offset, offset + 32)).toBase58();
 /** Plausible epoch-millisecond window (2020 … 2049); anything else is "not set". */
@@ -87,4 +89,23 @@ export function tokenAmountOf(data: Buffer | null | undefined): bigint {
 export function mintSupplyOf(data: Buffer | null | undefined): bigint {
   if (!data || data.length < 44) return 0n;
   return data.readBigUInt64LE(36);
+}
+
+/**
+ * Decodes one JanusFI oracle account (layout in constants.ts `JANUS_ORACLE_OFFSETS`); null for any
+ * other account (wrong size / version, or a mid outside 0 … 1 CASH). The caller checks the owner.
+ */
+export function decodeJanusOracle(data: Buffer): JanusOracle | null {
+  if (data.length !== JANUS_ORACLE_SIZE || data[0] !== 1) return null;
+  const O = JANUS_ORACLE_OFFSETS;
+  const mid = Number(data.readBigUInt64LE(O.mid)) / 1e6;
+  if (!(mid >= 0 && mid <= 1)) return null;
+  return {
+    market: readKey(data, O.market),
+    flags: data[O.flags],
+    slot: Number(data.readBigUInt64LE(O.slot)),
+    updatedMs: Math.floor(Number(data.readBigUInt64LE(O.updatedNs) / 1_000_000n)),
+    mid,
+    halfSpread: data.readUInt32LE(O.halfSpread) / 1e6,
+  };
 }
