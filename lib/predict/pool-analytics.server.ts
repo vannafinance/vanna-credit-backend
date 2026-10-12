@@ -66,6 +66,8 @@ const TTL_MS = 20_000;
 const g = globalThis as unknown as { __predictPoolAnalytics?: { at: number; data: PredictPoolsResponse | null; pending: Promise<PredictPoolsResponse> | null } };
 const cache = (g.__predictPoolAnalytics ??= { at: 0, data: null, pending: null });
 
+const STATUS_ORDER: Record<PredictPoolStatus, number> = { earning: 0, "merge-pending": 1, "cannot-merge": 2, "one-sided": 3, empty: 4 };
+
 const ui = (raw: bigint) => Number(raw) / 10 ** CASH_DECIMALS;
 
 function statusOf(r: Pick<PredictPoolRow, "yes" | "no" | "pairs" | "usdcInVanna" | "mergeable">): PredictPoolStatus {
@@ -127,7 +129,10 @@ async function build(): Promise<PredictPoolsResponse> {
     };
     pools.push({ ...row, status: statusOf(row) });
   }
-  pools.sort((a, b) => b.usdcInVanna + b.pairs + (b.yes + b.no) / 1e6 - (a.usdcInVanna + a.pairs + (a.yes + a.no) / 1e6));
+  // Earning pools first, then pairs waiting (merge pending, then can't merge yet), then one-sided and
+  // empty pools; within a status, the most money first.
+  const size = (r: PredictPoolRow) => r.usdcInVanna + r.pairs + (r.yes + r.no) / 1e6;
+  pools.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || size(b) - size(a));
 
   const sum = (f: (r: PredictPoolRow) => number) => pools.reduce((t, r) => t + f(r), 0);
   return {
