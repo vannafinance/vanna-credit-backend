@@ -325,7 +325,7 @@ export function FarmList() {
             )}
             <Cell
               v={apyText(apy)}
-              mini={basis ? basisApyMinis(basisApy, st?.apy7Source, st?.returnSinceLaunchPct, st?.sinceLaunchDays) : "Perena 7D"}
+              mini={basis ? basisApyMinis(basisApy, st?.apy7Source, st?.returnSinceLaunchPct, st?.sinceLaunchDays) : undefined}
             />
           </Link>
         ),

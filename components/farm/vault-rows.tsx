@@ -79,7 +79,10 @@ function useMarketsNow(): { funding: Record<string, number>; markets: Record<str
 export function basisApyMinis(apy: VaultApy | undefined, apy7Source: string | null | undefined, returnSinceLaunchPct?: number | null, sinceLaunchDays?: number | null): string[] {
   void returnSinceLaunchPct;
   void sinceLaunchDays;
-  return [apy?.estimate ? "Est." : apy7Source === "deposit-event" ? "Event estimate" : "7D realized"];
+  // No sub-label under the APY (product request: keep the cell to the number only).
+  void apy;
+  void apy7Source;
+  return [];
 }
 
 export function VaultTable({
@@ -158,7 +161,7 @@ export function VaultTable({
           ["Protocol", "prot"],
           ["Total Deposits", "dep", "Vault shares outstanding, and their value (the vault's net asset value) on chain."],
           ["Capacity", "cap", "The most total exposure the vault accepts, and how much of it is used."],
-          ["Vault APY", "apy", "Realized 7-day share-price APY once a vault has 7 days of history. Until then \"Est.\": the last 7 days of Phoenix funding on the vault's short share, before fees (a few days of share price are too short to annualise; the real since-launch return is on the vault page). While TVL is small, one rebalance or entry cost can move the share price more than days of funding."],
+          ["Vault APY", "apy", "Realized 7-day share-price APY once a vault has 7 days of history. Until then \"7D funding\": the last 7 days of Phoenix funding on the vault's short share, before fees (a few days of share price are too short to annualise; the real since-launch return is on the vault page). While TVL is small, one rebalance or entry cost can move the share price more than days of funding."],
           ["Funding Now", "fund", "Phoenix's current hourly funding, annualised; when positive, shorts get paid."],
           ["Open Interest", "oi", "Open interest of the vault's Phoenix perp market: the total size of open positions, counted on one side (every long has a matching short), live from Phoenix. Shown in USD at the mark price, with the size in the base asset below. A larger market absorbs the vault's short more easily."],
           ["Holding", "hold"],
