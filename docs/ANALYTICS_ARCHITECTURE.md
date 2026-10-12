@@ -40,8 +40,9 @@ so accounts are found from the program's own transactions and then **verified** 
 
 `lib/analytics/server/persistence.ts` saves the scan state - account registry, first-seen times, scan
 cursors, the queue of transactions not yet inspected, the decoded event ring and the server-measured
-health readings - and reloads it before the first scan. Balances, prices and valuations are never saved;
-they are always re-read from the chain.
+health readings - and reloads it before the first scan. The last snapshot of account rows is saved too (with the time it was measured) and shown immediately after a
+restart or on a new instance, then replaced by the first fresh read; it is always labelled with its own "updated"
+time. Nothing else derived (prices, pool state) is saved - those are re-read from the chain.
 
 | Backend | Chosen when | Notes |
 | --- | --- | --- |
@@ -98,8 +99,12 @@ components/analytics/*          presentation only (no fetching, no financial mat
 
 ## Wording: no jargon
 
-"stale" / "unavailable" are not shown to users. An account that depends on a price that has not been
-updated recently is **Price not updated**; the hover explains which asset and why.
+"stale" / "unavailable" are not shown to users. Accounts are valued at the **last on-chain price**, as the
+Margin page does: the fork keeper refreshes prices in bursts, and dropping every account whose price is a few
+seconds past its allowed age made the whole dashboard empty and refill. The account detail notes which prices
+had not been updated (`stalePrices`); the Prices page shows each age; the alert for old prices only fires beyond
+3x the allowed age. An account is *not valued* only when a price is missing altogether, or it refers to an
+asset the protocol has no configuration for (e.g. asset #13, which is not registered on the fork).
 
 ## Theme
 
