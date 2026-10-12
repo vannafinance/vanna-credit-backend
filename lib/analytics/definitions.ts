@@ -1,0 +1,42 @@
+/**
+ * Plain-language definitions shown in hover/focus tooltips. Static explanatory copy only: no
+ * figures, thresholds or product values live here (those come from the API).
+ */
+export const definitions = {
+  supplied: ["Supplied by lenders", "Assets lenders have put into the pool, including what is currently lent out, valued at the oracle price."],
+  borrowed: ["Borrowed", "What borrowers owe the pool, with interest accrued up to now."],
+  cash: ["Available to withdraw", "Cash sitting in the pool that lenders can withdraw right now. It is smaller than supply whenever assets are lent out."],
+  utilization: ["Utilization", "Borrowed ÷ (cash + borrowed) for one pool. The higher it is, the less cash is left to withdraw."],
+  ratio: ["Borrowed share", "Total borrowed ÷ total supplied across all pools, in dollars."],
+  borrowApr: ["Borrow APR", "The yearly rate borrowers pay at the pool's current utilization, from the on-chain rate curve."],
+  supplyApr: ["Supply APR", "The yearly rate lenders earn: borrow rate × utilization × (1 − reserve factor)."],
+  health: ["Health factor", "Account value ÷ debt. Higher is safer. At or below the liquidation line the account can be liquidated."],
+  status: ["Account status", "Safe - well above the liquidation line\nAt risk - a price drop could make it liquidatable\nLiquidatable - at or below the line\nNo debt - owes nothing\nNot valued - no dollar value yet; hover its badge for why"],
+  liquidatable: ["Can be liquidated", "Health is at or below the liquidation line, so a liquidator may close the account. It has not necessarily been liquidated."],
+  countedCollateral: ["Held in accounts", "Tokens sitting in margin-account vaults. Every allowed token an account holds counts as collateral."],
+  allowedCollateral: ["Allowed as collateral", "Whether the protocol accepts this asset. Any allowed token an account holds counts as collateral."],
+  accountValue: ["Account value", "Everything in the account before debt: deposited collateral, idle borrowed funds and the Phoenix perps account."],
+  eligibleDebt: ["Debt that can be liquidated", "Debt of the accounts a liquidator can act on now. It is exposure, not realised loss."],
+  collateralAtRisk: ["Collateral at risk", "Collateral in accounts below the display line, including those already liquidatable."],
+  averageLeverage: ["Average leverage", "Collateral ÷ equity, weighted by debt, across accounts with debt and positive equity."],
+  totalDebt: ["Total debt", "What all accounts that could be valued owe, accrued to now."],
+  accountsAtRisk: ["Accounts at risk / active", "Left: accounts with health under 1.50. Right: active accounts (holding collateral or owing money). Empty and not-valued accounts are not counted."],
+  averageHealth: ["Average health", "Total collateral ÷ total debt across accounts that owe money."],
+  shortfall: ["Bad debt (estimated)", "Debt that collateral no longer covers, added up across accounts. An estimate, not a realised loss."],
+  coverage: ["Account coverage", "Accounts are found from recent program transactions and checked on-chain. Accounts with no recent activity can be missing."],
+  composition: ["What collateral is made of", "Collateral by how it is held: tokens in the account, Kamino deposits, and the Phoenix perps account."],
+  buffer: ["Room before liquidation", "How much collateral value could disappear, with debt unchanged, before the liquidation line."],
+  hfDistribution: ["Accounts by health", "Debt at each health level. Bars left of the red line can be liquidated. Click a bar to filter the table."],
+  leverageDistribution: ["Debt by leverage", "Debt grouped by leverage (collateral ÷ equity). Groups are display ranges, not protocol limits."],
+  oracleFresh: ["Price freshness", "Age of the on-chain price compared with the longest age the protocol allows for it."],
+  ltv: ["Loan-to-value", "Per-asset value stored in the asset's on-chain configuration. Shown as configured data."],
+  liqBonus: ["Liquidation bonus", "The extra a liquidator receives, set per asset on-chain."],
+  maxCollateral: ["Max collateral per account", "Per-asset deposit limit for one margin account. 0 means no limit is set."],
+  reserveFactor: ["Reserve factor", "The share of borrower interest kept by the protocol. Different from the borrower APR and the lender APR."],
+  caps: ["Pool limits", "Supply and borrow limits stored on the pool. No limit is shown when none is set."],
+  hhi: ["Concentration index", "From 0 (debt spread across many borrowers) to 10,000 (one borrower). Higher means more concentrated."],
+  forkClock: ["Fork clock", "The test network keeps its own clock, which can differ from this device's."],
+  simulation: ["What-if calculation", "Your assumptions are applied to a saved baseline, on demand. Results are estimates, never transactions."],
+  eligibility: ["Liquidatable vs loss", "Liquidatable: a liquidator may close it. Bad debt: collateral no longer covers what is owed. They are different states."],
+} as const;
+export type DefinitionKey = keyof typeof definitions;
