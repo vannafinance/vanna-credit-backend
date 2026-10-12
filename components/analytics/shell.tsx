@@ -26,6 +26,9 @@ export const SECTIONS: Array<{ group: string; items: Array<{ href: string; label
     { href: "/analytics/collateral", label: "Collateral", icon: "collateral", title: "Collateral", blurb: "" },
     { href: "/analytics/prices", label: "Prices", icon: "prices", title: "Prices", blurb: "" },
   ] },
+  { group: "Prediction", items: [
+    { href: "/analytics/prediction-vaults", label: "Prediction Vaults", icon: "pools", title: "Prediction Vaults", blurb: "" },
+  ] },
   { group: "Tools", items: [
     { href: "/analytics/what-if", label: "What-if Calculator", icon: "calculator", title: "What-if Calculator", blurb: "" },
   ] },

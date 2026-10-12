@@ -191,6 +191,19 @@ async function usdcValueOf() {
 }
 
 /**
+ * Every market the outcome pool program has created a pool for (one getProgramAccounts over the
+ * program's `Pool` accounts), whether or not it is listed on the Predict page today.
+ */
+export async function listPoolMarketIds(): Promise<string[]> {
+  const filter = coder.accounts.memcmp("Pool");
+  const accounts = await getConnection().getProgramAccounts(POOL_PROGRAM, {
+    commitment: "confirmed",
+    filters: [{ memcmp: { offset: filter.offset ?? 0, bytes: filter.bytes } }],
+  });
+  return [...new Set(accounts.map((a) => decodePool(a.account as AccountInfo<Buffer>)?.market.toBase58()).filter((m): m is string => Boolean(m)))];
+}
+
+/**
  * Live pool figures for many markets in a few batched reads: allowlist, Pool accounts, then their
  * YES / NO token accounts, Vanna share accounts, share-mint supplies and idle USDC accounts.
  */

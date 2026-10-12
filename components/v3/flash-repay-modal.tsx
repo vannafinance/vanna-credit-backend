@@ -12,6 +12,7 @@
 import "./flash-repay.css";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFlashRepayStore } from "@/store/flash-repay-store";
@@ -60,6 +61,9 @@ export type Phase = "review" | "run" | "done" | "failed";
 
 export default function FlashRepayModal() {
   const close = useFlashRepayStore((s) => s.close);
+  const minimized = useFlashRepayStore((s) => s.minimized);
+  const minimize = useFlashRepayStore((s) => s.minimize);
+  const restore = useFlashRepayStore((s) => s.restore);
   const initialTransfer = useFlashRepayStore((s) => s.transfer);
   const address = useUserStore((s) => s.address);
   const { connectWallet } = useWallet();
@@ -154,8 +158,14 @@ export default function FlashRepayModal() {
   }, [phase, address]);
 
   const running = phase === "run";
+  // Put away (×, Escape or a click outside): a running Flash repay is minimized to the bottom-right
+  // card and keeps going (this component stays mounted, so its steps and state live on); otherwise
+  // the modal closes.
+  if (minimized) {
+    return <FlashMini phase={phase} steps={steps} plan={runPlan} error={runError} onView={restore} onClose={close} />;
+  }
   return (
-    <Modal onClose={close} wide className="mg-frm" noClose={running}>
+    <Modal onClose={running ? minimize : close} wide className="mg-frm">
       {!address ? (
         <>
           <Head title="Flash repay" sub="Close every position and repay every loan in one go." />
@@ -547,6 +557,71 @@ export function Review({
     </>
   );
 }
+
+/**
+ * Minimized Flash repay: a small card at the bottom right with the live step, a progress bar and
+ * "View" to open the full modal again. Closable once the run has finished (done or failed).
+ */
+function FlashMini({
+  phase,
+  steps,
+  plan,
+  error,
+  onView,
+  onClose,
+}: {
+  phase: Phase;
+  steps: FlashStepState[];
+  plan: FlashPlan | null;
+  error: string | null;
+  onView: () => void;
+  onClose: () => void;
+}) {
+  const n = steps.length;
+  const doneN = steps.filter((s) => s.status === "done").length;
+  const curIdx = steps.findIndex((s) => s.status === "run");
+  const cur = curIdx >= 0 ? steps[curIdx] : null;
+  const title = plan?.transferOnly ? "Flash transfer" : "Flash repay";
+  const running = phase === "run";
+  const line = running
+    ? cur
+      ? `Step ${curIdx + 1} of ${n} · ${cur.title}`
+      : n
+        ? `Step ${Math.min(doneN + 1, n)} of ${n}`
+        : "Reading your account"
+    : phase === "done"
+      ? "Done: every position closed and loan repaid"
+      : `Stopped: ${error ?? "a step failed"}`;
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div className="v3">
+      <div className={`fr-mini ${phase}`} role="status" aria-live="polite">
+        <span className="fr-mini-ic">{IC.bolt}</span>
+        <div className="fr-mini-b">
+          <b>{title}</b>
+          <span title={line}>{line}</span>
+          {running && note(cur) && <small>{note(cur)}</small>}
+          {n > 0 && (
+            <i className="fr-mini-bar">
+              <i style={{ width: `${(doneN / n) * 100}%` }} />
+            </i>
+          )}
+        </div>
+        <button type="button" className="fr-mini-v" onClick={onView}>
+          View
+        </button>
+        {!running && (
+          <button type="button" className="fr-mini-x" onClick={onClose} aria-label="Close">
+            {IC.x}
+          </button>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+const note = (s: FlashStepState | null) => s?.note ?? "";
 
 export function Progress({
   phase,

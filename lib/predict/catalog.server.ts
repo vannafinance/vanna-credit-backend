@@ -300,6 +300,12 @@ function toInfo(m: RawMarket): MarketInfo {
   };
 }
 
+/** Every market id in the catalog (listed or not), for callers that look markets up by id. */
+export async function allCatalogMarketIds(): Promise<string[]> {
+  await ensureCatalog();
+  return [...state.all.keys()];
+}
+
 /** Every listed market (with metadata), plus the Group membership needed to group them. */
 export async function listMarketInfos(): Promise<{ markets: MarketInfo[]; groups: Map<string, string[]> }> {
   await ensureCatalog();

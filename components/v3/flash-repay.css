@@ -137,3 +137,25 @@ html.dark .v3{
 .v3 .mg-fr-from .mini .ico{width:12px;height:12px}
 .v3 .mg-fr-gt{display:inline-flex;align-items:center;gap:8px}
 .v3 .mg-fr-gt .mg-gi{width:18px;height:18px}
+
+/* Minimized Flash repay: bottom-right progress card (FlashMini), above the toasts' corner. */
+.v3 .fr-mini{position:fixed;right:24px;bottom:24px;z-index:90;display:flex;align-items:center;gap:12px;width:min(380px,calc(100vw - 32px));padding:14px 14px 14px 16px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 16px 40px var(--shadow)}
+@media (prefers-reduced-motion:no-preference){.v3 .fr-mini{animation:frIn .18s ease-out}@keyframes frIn{from{transform:translateY(8px);opacity:0}}}
+.v3 .fr-mini-ic{flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--violet-soft);color:var(--violet)}
+.v3 .fr-mini-ic svg{width:18px;height:18px}
+.v3 .fr-mini.run .fr-mini-ic svg{animation:frPulse 1.2s ease-in-out infinite}
+@keyframes frPulse{50%{opacity:.45}}
+.v3 .fr-mini.done .fr-mini-ic{background:var(--yes-bg);color:var(--yes-fg)}
+.v3 .fr-mini.failed .fr-mini-ic{background:var(--rose-soft);color:var(--rose)}
+.v3 .fr-mini-b{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+.v3 .fr-mini-b b{font-size:14px;font-weight:700;color:var(--title)}
+.v3 .fr-mini-b span{font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v3 .fr-mini.failed .fr-mini-b span{color:var(--rose)}
+.v3 .fr-mini-b small{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v3 .fr-mini-bar{display:block;height:4px;margin-top:5px;border-radius:4px;background:var(--track);overflow:hidden}
+.v3 .fr-mini-bar i{display:block;height:100%;border-radius:4px;background:var(--grad);transition:width .3s ease}
+.v3 .fr-mini-v{flex:0 0 auto;padding:7px 12px;border-radius:10px;border:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--title);background:transparent}
+.v3 .fr-mini-v:hover{border-color:var(--violet);color:var(--violet)}
+.v3 .fr-mini-x{flex:0 0 auto;display:grid;place-items:center;width:26px;height:26px;border-radius:8px;color:var(--muted);background:transparent}
+.v3 .fr-mini-x:hover{color:var(--title)}
+.v3 .fr-mini-x svg{width:14px;height:14px}

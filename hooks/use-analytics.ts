@@ -10,6 +10,7 @@ import { fetchWithTimeout } from "@/lib/async";
 import type { AccountFilter, AccountSortKey, AccountsSummary, AccountView, Coverage } from "@/lib/analytics/types";
 import type { Standing } from "@/lib/analytics/risk";
 import type { ActivityResponse } from "@/app/api/analytics/accounts/[owner]/activity/route";
+import type { PredictPoolsResponse } from "@/lib/predict/pool-analytics.server";
 import type { ProtocolOverview, StoreState } from "@/lib/analytics/server/store";
 import type { ProgramEvent } from "@/lib/analytics/server/events";
 
@@ -85,6 +86,16 @@ export function useAnalyticsProtocol() {
   return useQuery({
     queryKey: ["analytics", "protocol"],
     queryFn: () => getJson<ProtocolOverview>("/api/analytics/protocol"),
+    refetchInterval: POLL_MS,
+    staleTime: 5_000,
+  });
+}
+
+/** Every Predict outcome pool: YES / NO held, pairs waiting to merge, USDC supplied to Vanna. */
+export function useAnalyticsPredictPools() {
+  return useQuery({
+    queryKey: ["analytics", "predict-pools"],
+    queryFn: () => getJson<PredictPoolsResponse>("/api/analytics/predict-pools"),
     refetchInterval: POLL_MS,
     staleTime: 5_000,
   });
