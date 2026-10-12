@@ -126,6 +126,7 @@ export function CopilotRailBody({
   positions,
   earnPositions = [],
   perpsPositions = [],
+  predictPositions = [],
   conversations,
   activeId,
   onOpen,
@@ -143,6 +144,8 @@ export function CopilotRailBody({
   earnPositions?: RailPosition[];
   /** Phoenix perps positions (the margin's USDC on Phoenix, no Vanna loan). Shown only when there are any. */
   perpsPositions?: RailPosition[];
+  /** Predict (prediction market) positions, from the wallet: never margin collateral. Shown only when there are any. */
+  predictPositions?: RailPosition[];
   conversations: ConversationSummary[];
   activeId: string | null;
   onOpen: (id: string) => void;
@@ -152,6 +155,7 @@ export function CopilotRailBody({
   const [positionsOpen, setPositionsOpen] = useState(true);
   const [earnOpen, setEarnOpen] = useState(true);
   const [perpsOpen, setPerpsOpen] = useState(true);
+  const [predictOpen, setPredictOpen] = useState(true);
   const [recentsOpen, setRecentsOpen] = useState(true);
 
   if (!hasWallet) {
@@ -195,6 +199,9 @@ export function CopilotRailBody({
       <PositionsSection title="Earn Positions" open={earnOpen} onToggle={() => setEarnOpen((v) => !v)} positions={earnPositions} empty="Nothing supplied to the Earn pool." />
       {perpsPositions.length > 0 && (
         <PositionsSection title="Perps Positions" open={perpsOpen} onToggle={() => setPerpsOpen((v) => !v)} positions={perpsPositions} />
+      )}
+      {predictPositions.length > 0 && (
+        <PositionsSection title="Predict Positions" open={predictOpen} onToggle={() => setPredictOpen((v) => !v)} positions={predictPositions} />
       )}
 
       <RecentsList

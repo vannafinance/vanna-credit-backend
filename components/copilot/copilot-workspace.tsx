@@ -9,6 +9,7 @@ import { useCopilot } from "@/lib/copilot/client/use-copilot";
 import { useUserPositions } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { usePerpsView } from "@/hooks/use-perps";
+import { usePredictPositions } from "@/hooks/use-predict";
 import { PERP_MARKETS } from "@/lib/solana/phoenix";
 import type { BrainHealth } from "@/lib/copilot/types";
 import { CopilotShell } from "./copilot-shell";
@@ -149,6 +150,22 @@ export function CopilotWorkspace() {
     [perpsView],
   );
 
+  // Predict positions (World.xyz prediction markets): the same read the Predict page polls; wallet-only, so they sit
+  // apart from the margin account and never touch the health factor.
+  const { data: predictData } = usePredictPositions(address);
+  const predictPositions: RailPosition[] = useMemo(
+    () =>
+      (predictData?.positions ?? [])
+        .filter((p) => p.shares > 0)
+        .map((p) => ({
+          symbol: `${p.outcome} ${p.label}`,
+          role: `Predict · ${p.event}`,
+          amount: `${p.shares.toLocaleString(undefined, { maximumFractionDigits: 2 })} shares`,
+          usd: `${usd(p.value)} · ${p.pnl < 0 ? "-" : "+"}${usd(Math.abs(p.pnl))}`,
+        })),
+    [predictData],
+  );
+
   const chips: RailStatusChip[] = useMemo(() => {
     const list: RailStatusChip[] = [{ label: NETWORK_LABEL, tone: "muted" }];
     if (server === "unreachable") list.push({ label: "Server unreachable", tone: "bad", title: "The Copilot API did not answer." });
@@ -218,6 +235,7 @@ export function CopilotWorkspace() {
             positions={positions}
             earnPositions={earnPositions}
             perpsPositions={perpsPositions}
+            predictPositions={predictPositions}
             conversations={copilot.conversations}
             activeId={copilot.activeId}
             onOpen={copilot.open}

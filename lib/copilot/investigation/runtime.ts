@@ -13,7 +13,7 @@ import { debugMcp } from "../debug";
 import { getLlm, LlmUnavailable } from "../vertex";
 import type { ReadCtx } from "../mcp-facts";
 import { calculate, CALCULATE_TOOL } from "./calculate";
-import { executeRead, READ_TOOL_NAMES, READ_TOOLS, SLOW_READS, type ReadOutput } from "./catalog";
+import { executeRead, OBSERVATION_CHARS, READ_TOOL_NAMES, READ_TOOLS, SLOW_READS, type ReadOutput } from "./catalog";
 import { DECISION_NAMES, DECISION_TOOLS, parseDecision } from "./decision";
 import { systemPrompt, turnPrompt } from "./prompt";
 import type { InvestigationLimits, InvestigationResult, InvestigationTrace, Observation, Rejection } from "./types";
@@ -193,7 +193,7 @@ export async function investigate(args: {
           const out = await startRead(c.name, a);
           // Dev-only trace (no-op otherwise): the figures the model saw, including those computed by code.
           debugMcp(`investigate:${c.name}`, a, out.ok, out.result);
-          return { tool: c.name, args: a, ok: out.ok, result: compact(out.result, limits.maxObservationChars), ms: investigationDeps.now() - t0 };
+          return { tool: c.name, args: a, ok: out.ok, result: compact(out.result, OBSERVATION_CHARS[c.name] ?? limits.maxObservationChars), ms: investigationDeps.now() - t0 };
         } catch (err) {
           return { tool: c.name, args: a, ok: false, result: compact({ error: err instanceof Error ? err.message : "read failed" }, 300), ms: investigationDeps.now() - t0 };
         }

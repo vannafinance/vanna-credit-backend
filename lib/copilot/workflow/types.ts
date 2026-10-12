@@ -17,6 +17,8 @@ export interface StoredTx {
   /** A one-time setup signed before the step itself (see UnsignedTx.prerequisite); the step is rebuilt after it. */
   prerequisite?: boolean;
   prerequisite_kind?: string;
+  /** A Predict trade: every transaction (co-signed by the app's maker), signed in one approval, sent in order. */
+  batch?: { transactions: string[]; labels: string[]; merge_markets: string[] };
 }
 
 export interface StoredStep extends StepSpec {
@@ -41,6 +43,8 @@ export interface StoredStep extends StepSpec {
   answer?: StructuredAnswer | null;
   /** perp_open: its USDC already moved into Phoenix in a confirmed "phoenix_fund" prerequisite; the order moves nothing more. */
   funded?: boolean;
+  /** A Predict trade: the signature of each of its transactions, in order (`signature` is the last one). */
+  batch_signatures?: string[];
 }
 
 export type WorkflowState = PlanView["state"];

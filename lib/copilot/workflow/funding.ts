@@ -30,7 +30,7 @@ const spentAsset = (s: StepSpec): string | null => s.asset ?? (s.op === "vault_d
 /** Ops that may bring funds into the wallet or margin balance; later steps are checked when they run. */
 const CREATES_FUNDS = new Set(["borrow", "withdraw", "earn_redeem", "farm_redeem", "vault_withdraw"]);
 /** Ops whose transaction can create accounts (token accounts, the margin account) and so pay rent. */
-const PAYS_RENT = new Set(["create_account", "deposit", "earn_supply", "swap", "farm_deposit", "vault_deposit", "vault_withdraw", "vault_move_shares"]);
+const PAYS_RENT = new Set(["create_account", "deposit", "earn_supply", "swap", "farm_deposit", "vault_deposit", "vault_withdraw", "vault_move_shares", "predict_trade"]);
 
 export async function checkFunding(steps: StepSpec[], ctx: ReadCtx): Promise<string | null> {
   const writes = steps.filter((s) => s.kind === "write");

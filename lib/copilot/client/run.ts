@@ -15,7 +15,7 @@
 
 import type { PlanStepView, PlanView, StructuredAnswer, UnsignedTx } from "@/lib/copilot/types";
 import { advancePlan, approvePlan, cancelPlan, confirmStep, CopilotApiError, getWorkflow, submitStep } from "./api";
-import { signUnsignedTx, WalletRejectedError, type SignTransaction } from "./sign";
+import { signUnsignedTx, signUnsignedTxs, WalletRejectedError, type SignAllTransactions, type SignTransaction } from "./sign";
 
 export type RunPhase =
   | "proposed" // plan shown, not approved
@@ -99,6 +99,8 @@ export interface RunOptions {
   /** Called after a step is confirmed on chain, so balances and health can be re-read. */
   onSettled?: (plan: PlanView) => void;
   signTransaction?: SignTransaction;
+  /** A Predict trade's transactions, all in one wallet approval. */
+  signAllTransactions?: SignAllTransactions;
 }
 
 function describe(error: unknown): string {
@@ -225,8 +227,15 @@ export function createRunController(opts: RunOptions): RunController {
     if (!pending) return false;
     set({ phase: "signing", message: null, rejected: false });
     let signed: string;
+    let signedAll: string[] | undefined;
     try {
-      signed = await signUnsignedTx(pending.tx.transaction, opts.signTransaction);
+      if (pending.tx.batch) {
+        // A Predict trade: one approval for all of its transactions; the server sends them in order.
+        signedAll = await signUnsignedTxs(pending.tx.batch.transactions, opts.signAllTransactions, opts.signTransaction);
+        signed = signedAll[0]!;
+      } else {
+        signed = await signUnsignedTx(pending.tx.transaction, opts.signTransaction);
+      }
     } catch (error) {
       if (error instanceof WalletRejectedError) {
         // Nothing is reported to the server; the same transaction can be signed again.
@@ -238,7 +247,7 @@ export function createRunController(opts: RunOptions): RunController {
     }
     set({ phase: "submitting" });
     try {
-      const res = await submitStep(current.workflowId, { step_n: pending.step.n, signed_tx: signed });
+      const res = await submitStep(current.workflowId, { step_n: pending.step.n, signed_tx: signed, ...(signedAll ? { signed_txs: signedAll } : {}) });
       setPlan(res.plan);
       if (res.status === "failed" || res.status === "expired") {
         set({ phase: res.status === "failed" ? "failed" : "paused", pending: null, message: res.message ?? "The server did not send the transaction." });

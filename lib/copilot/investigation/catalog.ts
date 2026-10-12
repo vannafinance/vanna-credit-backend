@@ -8,7 +8,7 @@
  */
 
 import { copilotConfig } from "../config";
-import { LEND_BORROW_ASSETS, PERP_MARKETS, PRODUCT_ASSETS, VAULT_IDS, normalizeAsset, parseDecimalString, perpMarketOf, vaultOf, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
+import { LEND_BORROW_ASSETS, PERP_MARKETS, PREDICT_CATEGORIES, PREDICT_MAX_LEGS, PRODUCT_ASSETS, VAULT_IDS, isMarketId, normalizeAsset, parseDecimalString, perpMarketOf, vaultOf, type Asset, type ConceptTopic, type PredictCategory, type ReadIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts";
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
@@ -116,6 +116,33 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
       ["vault", "call", "amount"],
     ),
   },
+  {
+    name: "get_predict_markets",
+    description: "Predict (World.xyz prediction markets, on the test network): listed events with every outcome's market_id and its YES / NO buy and sell prices in cents (a share pays 1 CASH if that outcome wins), whether it is tradable, and whether a buy joins Vanna's pool. Search with query (team, candidate, asset, league) and/or a category. The only source of market_ids for a Predict trade.",
+    parameters: obj({ category: { type: "STRING", enum: [...PREDICT_CATEGORIES] }, query: { type: "STRING", description: "Search words from the user's message, e.g. \"barcelona\", \"senate\", \"nfl\"." } }),
+  },
+  {
+    name: "get_predict_market",
+    description: "One Predict event with every outcome (market_id, YES / NO buy and sell prices in cents, tradable), its pool figures and its rules. id = an event_id or market_id from get_predict_markets.",
+    parameters: obj({ id: { type: "STRING", description: "event_id or market_id from get_predict_markets." } }, ["id"]),
+  },
+  { name: "get_predict_positions", description: "The user's Predict positions (shares in the wallet and in Vanna's pool, average and current price, value, P&L, what each pays if it wins), the wallet's CASH, Vanna pool figures, and World shares in the wallet that can move into Vanna's pool. Predict is wallet-only: it never affects the health factor." },
+  { name: "get_predict_history", description: "The user's Predict trades (buys and sells), optionally for one market_id.", parameters: obj({ market: { type: "STRING", description: "Optional market_id." } }) },
+  {
+    name: "get_predict_quote",
+    description: "What a Predict trade would do at the live price, nothing built: for each leg the shares or CASH out, price in cents, what it pays if it wins, and shares that join Vanna's pool. buy amount = CASH; sell / deposit amount = shares.",
+    parameters: obj({
+      legs: {
+        type: "ARRAY",
+        items: obj({
+          market: { type: "STRING", description: "market_id from get_predict_markets." },
+          outcome: { type: "STRING", enum: ["yes", "no"] },
+          side: { type: "STRING", enum: ["buy", "sell", "deposit"] },
+          amount: { type: "STRING", description: "The user's exact decimal: CASH for a buy, shares for a sell / deposit." },
+        }, ["market", "outcome", "side", "amount"]),
+      },
+    }, ["legs"]),
+  },
   { name: "get_protocol_info", description: "On-chain protocol configuration: operating mode, which assets can be lent, borrowed or used as collateral, integrations." },
   { name: "explain_concept", description: "The product's own explanation of a concept, for questions about how something works.", parameters: obj({ topic: { type: "STRING", enum: TOPICS } }, ["topic"]) },
 ];
@@ -123,7 +150,22 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
 export const READ_TOOL_NAMES = new Set(READ_TOOLS.map((t) => t.name));
 
 /** Reads that scan on-chain history get more time than the default. */
-export const SLOW_READS: Record<string, number> = { get_earn_interest: 30_000, get_history: 25_000, get_vaults: 25_000 };
+export const SLOW_READS: Record<string, number> = { get_earn_interest: 30_000, get_history: 25_000, get_vaults: 25_000, get_predict_markets: 45_000, get_predict_market: 45_000, get_predict_positions: 45_000, get_predict_history: 30_000, get_predict_quote: 45_000 };
+
+/** A Predict quote's legs from model arguments, or null when any is unusable. */
+function predictLegsArg(v: unknown): Array<{ market: string; outcome: "yes" | "no"; side: "buy" | "sell" | "deposit"; amount: string }> | null {
+  if (!Array.isArray(v) || !v.length || v.length > PREDICT_MAX_LEGS) return null;
+  const out = [];
+  for (const l of v) {
+    if (!l || typeof l !== "object") return null;
+    const o = l as Record<string, unknown>;
+    const amount = typeof o.amount === "string" ? parseDecimalString(o.amount.trim()) : typeof o.amount === "number" ? parseDecimalString(String(o.amount)) : null;
+    const side = o.side === "sell" || o.side === "deposit" ? o.side : o.side === "buy" || o.side === undefined ? "buy" : null;
+    if (!isMarketId(o.market) || (o.outcome !== "yes" && o.outcome !== "no") || !side || !amount) return null;
+    out.push({ market: o.market, outcome: o.outcome, side, amount } as const);
+  }
+  return out;
+}
 
 const assetsArg = (v: unknown, allowed: readonly string[]): Asset[] =>
   (Array.isArray(v) ? v : []).map((x) => (typeof x === "string" ? normalizeAsset(x) : null)).filter((a): a is Asset => !!a && allowed.includes(a));
@@ -131,6 +173,45 @@ const assetArg = (v: unknown): Asset | null => (typeof v === "string" ? normaliz
 const decimalArg = (v: unknown): string | null => (typeof v === "string" ? parseDecimalString(v.trim()) : typeof v === "number" ? parseDecimalString(String(v)) : null);
 
 export type ReadOutput = { ok: boolean; result: unknown };
+
+/**
+ * Larger observation budgets for reads whose rows the model must be able to quote exactly: a Predict market list carries
+ * every outcome's market_id, which a trade has to use as written (a truncated list would hide some).
+ */
+export const OBSERVATION_CHARS: Record<string, number> = { get_predict_markets: 14_000, get_predict_market: 10_000, get_predict_positions: 10_000 };
+
+/** Predict events as the model reads them: one row per outcome, the market_id first, prices in cents per share. */
+function predictEventsForModel(events: unknown): unknown {
+  return (Array.isArray(events) ? events : []).map((e: Record<string, unknown>) => ({
+    event_id: e.event_id,
+    title: e.title,
+    ...(e.league ? { league: e.league } : {}),
+    ...(e.ends ? { ends: e.ends } : {}),
+    ...(e.one_outcome_wins === true ? { one_outcome_wins: true } : {}),
+    outcomes: (Array.isArray(e.outcomes) ? e.outcomes : []).map((o: Record<string, unknown>) => [
+      o.market_id,
+      o.name,
+      o.yes_label && o.yes_label !== "Yes" ? `${o.yes_label}/${o.no_label}` : undefined,
+      o.yes_buy_cents ?? null,
+      o.yes_sell_cents ?? null,
+      o.no_buy_cents ?? null,
+      o.no_sell_cents ?? null,
+      o.tradable === true ? 1 : 0,
+      o.joins_vanna_pool === true ? 1 : 0,
+    ].filter((x) => x !== undefined)),
+  }));
+}
+
+const PREDICT_COLUMNS = "outcomes rows: [market_id, name, (custom YES/NO labels when not Yes/No), yes_buy_cents, yes_sell_cents, no_buy_cents, no_sell_cents, tradable 1/0, joins_vanna_pool 1/0]. A share pays 1 CASH if its outcome wins.";
+
+async function predictRead(read: ReadIntent, key: string, ctx: ReadCtx): Promise<ReadOutput> {
+  const out = await runRead(read, ctx);
+  if (!out.ok) return { ok: false, result: { summary: out.answer.headline, note: out.answer.note } };
+  const raw = (out.data[key] ?? {}) as Record<string, unknown>;
+  if (key === "predict_markets") return { ok: true, result: { summary: out.answer.headline, columns: PREDICT_COLUMNS, events: predictEventsForModel(raw.events), note: out.answer.note } };
+  const e = (raw.event ?? {}) as Record<string, unknown>;
+  return { ok: true, result: { summary: out.answer.headline, columns: PREDICT_COLUMNS, event: { ...(predictEventsForModel([e]) as unknown[])[0] as object, rules: e.rules }, facts: out.answer.facts, note: out.answer.note } };
+}
 
 /**
  * Why these arguments can't run this read tool, or null when they can. The same checks `executeRead` applies, done up
@@ -152,6 +233,10 @@ export function readArgsProblem(tool: string, args: Record<string, unknown>): st
     }
     case "simulate":
       return simulateArgsProblem(args);
+    case "get_predict_market":
+      return typeof args.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(args.id.trim()) ? null : "get_predict_market needs an event_id or market_id";
+    case "get_predict_quote":
+      return predictLegsArg(args.legs) ? null : "get_predict_quote needs 1-8 legs, each with a market_id, yes or no, buy / sell / deposit and a decimal amount";
     default:
       return null;
   }
@@ -250,6 +335,25 @@ export async function executeRead(tool: string, args: Record<string, unknown>, c
     }
     case "get_kamino_positions":
       return viaRead({ kind: "farm_positions" }, ctx);
+    case "get_predict_markets": {
+      const category = (PREDICT_CATEGORIES as readonly string[]).includes(String(args.category)) ? (args.category as PredictCategory) : null;
+      const query = typeof args.query === "string" && args.query.trim() ? args.query.trim().slice(0, 80) : null;
+      return predictRead({ kind: "predict_markets", category, query }, "predict_markets", ctx);
+    }
+    case "get_predict_market": {
+      const id = typeof args.id === "string" ? args.id.trim() : "";
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { ok: false, result: { error: "give an event_id or market_id from get_predict_markets" } };
+      return predictRead({ kind: "predict_market", id }, "predict_market", ctx);
+    }
+    case "get_predict_positions":
+      return viaRead({ kind: "predict_positions" }, ctx);
+    case "get_predict_history":
+      return viaRead({ kind: "predict_history", market: isMarketId(args.market) ? args.market : null }, ctx);
+    case "get_predict_quote": {
+      const legs = predictLegsArg(args.legs);
+      if (!legs) return { ok: false, result: { error: "a quote needs 1-8 legs, each with a market_id, yes or no, buy / sell / deposit and a decimal amount" } };
+      return viaRead({ kind: "predict_quote", legs }, ctx);
+    }
     case "get_capacity":
       return viaRead({ kind: "capacity", what: args.what === "withdraw" ? "withdraw" : "borrow", asset: assetArg(args.asset) }, ctx);
     case "what_if": {

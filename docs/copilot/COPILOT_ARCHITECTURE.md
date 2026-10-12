@@ -222,6 +222,33 @@ wording). `vault_move_shares` is now only a recovery step for vbSOL left in the 
 its yield shows Phoenix funding plus the raw share-price return since launch (`return_since_launch_pct` over
 `since_launch_days`), never annualised, as the website shows it (backend `aaed5cc`).
 
+#### Predict (World.xyz prediction markets, website `1a9cb3c`)
+
+Everything the website's Predict page does, through the MCP's `vanna_predict` (which calls the app's `/api/predict/*`;
+the app builds each trade and its market maker co-signs it). Wallet-only: CASH from the wallet, no margin account, no
+borrowing, no health factor.
+
+- **Reads** (`investigation/catalog.ts`, answers in `predict-facts.ts`): `get_predict_markets` (category / search),
+  `get_predict_market`, `get_predict_positions`, `get_predict_history`, `get_predict_quote`. The market reads reach
+  the model as compact rows (`[market_id, name, yes buy/sell, no buy/sell, tradable, joins pool]`, prices in cents) with a
+  larger observation budget, so no market id is cut off. The left panel lists Predict positions (the website's
+  `usePredictPositions`).
+- **Writes**: the model names `predict_buy` (CASH: literal 0.1-5,000, usd = CASH at $1, all / fraction of the wallet's
+  CASH), `predict_sell` (shares; all / fraction of wallet + pooled shares) and `predict_deposit` (World shares in the
+  wallet into Vanna's pool), each with a `market_id` that must appear in a Predict read in the evidence (decision.ts
+  refuses one it did not read) and `outcome` yes / no. `handleWrite` reads each market (name, YES / NO labels, live
+  price: an untradable outcome is refused), sizes all / fractions from the positions read, and merges the outcomes of
+  one request into ONE `predict_trade` step (max 8; one approval). `predict_faucet` (test CASH, up to 1,000) runs at
+  once, since it is a cheatcode, not a transaction. As on the website: CASH only (no USDC payment) and a buy on an
+  allowlisted market always joins the pool. The fallback router has no Predict ops (it reads nothing, so it has no ids).
+- **Checks** (`workflow/steps.ts` `preflightPredict`): the wallet's CASH covers the buys, the shares are held for a sell or
+  deposit, the spend caps (CASH at $1), and the app's live quote for the card.
+- **Signing**: the envelope carries every transaction (`UnsignedTx.batch`). The browser signs them with ONE
+  `signAllTransactions`; `submitWorkflow` verifies each against what was built (the maker's signature included), marks the
+  step submitted, then sends them in order, each confirmed before the next. A failure after the first one stops there and
+  is never rebuilt (that would trade again). After the last confirms, the app's keeper merges the touched pools
+  (`predictMerge`), noted on the step.
+
 ### 3.4 Stage 4: review
 
 `workflow/funding.ts` checks the wallet can pay for every step and `preflightStep` checks the first step against live
@@ -340,7 +367,8 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
   means the session was lost on another instance; the client re-initializes and retries.
 - **Tools used:** `vanna_protocol_info`, `vanna_oracle`, `vanna_earn_market`, `vanna_earn_position`, `vanna_earn_write`,
   `vanna_account`, `vanna_margin_status`, `vanna_margin_trade`, `vanna_wallet`, `vanna_history`,
-  `vanna_farm_overview`, `vanna_farm_kamino`, `vanna_swap`, `vanna_sign` (`tx_status`). The MCP also exposes
+  `vanna_farm_overview`, `vanna_farm_kamino`, `vanna_swap`, `vanna_sign` (`tx_status`), `vanna_perps`, `vanna_vaults`,
+  `vanna_predict` (a trade's envelope has `summary.batch`: several transactions, one approval, sent in order). The MCP also exposes
   `vanna_plan`, `vanna_risk` and `vanna_portfolio` for other MCP clients. Full list: the MCP's `TOOLS_CATALOGUE.md` §3.
 - **Write result (envelope):** `transactions[0].unsignedTransaction` (base64, v0), `requiredSigners`, `blockhash`,
   `lastValidBlockHeight`, `simulation_success`, `code` / `reason` when rejected, `summary`. Amounts are decimal strings.

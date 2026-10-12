@@ -500,6 +500,7 @@ export function parseWriteEnvelope(result: Record<string, unknown>): WriteEnvelo
   }
 
   const txs = Array.isArray(result.transactions) ? result.transactions : [];
+  if (summary.batch === true) return parseBatchEnvelope(txs, summary, preview);
   if (txs.length !== 1) {
     return {
       ok: false,
@@ -534,6 +535,46 @@ export function parseWriteEnvelope(result: Record<string, unknown>): WriteEnvelo
       ...(typeof summary.action === "string" ? { summary: summary.action } : {}),
       ...(summary.prerequisite === true ? { prerequisite: true } : {}),
       ...(summary.prerequisite === true && typeof summary.prerequisite_kind === "string" ? { prerequisite_kind: summary.prerequisite_kind } : {}),
+    },
+    summary,
+    preview,
+  };
+}
+
+/**
+ * A Predict trade (`summary.batch`): 1..8 transactions the app's market maker already co-signed, signed together in ONE
+ * wallet approval and sent in order. The MCP checked each one (paid by the wallet, only the maker co-signs, Predict
+ * programs only) and simulated the first; the later ones spend what the earlier ones create, so they are checked by the
+ * network when sent.
+ */
+function parseBatchEnvelope(txs: unknown[], summary: Record<string, unknown>, preview: Record<string, unknown> | null): WriteEnvelopeResult {
+  if (!txs.length || txs.length > 8) return { ok: false, code: "malformed_envelope", reason: "The trade came back with no transactions, or too many." };
+  const out: string[] = [];
+  const labels: string[] = [];
+  let blockhash = "";
+  let lastValid = NaN;
+  for (const [i, t] of txs.entries()) {
+    if (!isObject(t) || typeof t.unsignedTransaction !== "string" || !t.unsignedTransaction) return { ok: false, code: "malformed_envelope", reason: "A transaction of the trade is malformed." };
+    const sim = isObject(t.simulation) ? t.simulation : null;
+    if (i === 0 && sim?.status !== "success") return { ok: false, code: "simulation_failed", reason: typeof sim?.err === "string" && sim.err ? sim.err : "The trade's first transaction did not simulate." };
+    if (i === 0) {
+      blockhash = typeof t.blockhash === "string" ? t.blockhash : "";
+      lastValid = Number(t.lastValidBlockHeight);
+    }
+    out.push(t.unsignedTransaction);
+    labels.push(typeof t.purpose === "string" ? t.purpose : `Transaction ${i + 1}`);
+  }
+  if (!blockhash || !Number.isSafeInteger(lastValid)) return { ok: false, code: "malformed_envelope", reason: "The trade is missing its blockhash or expiry." };
+  const merge = Array.isArray(summary.merge_markets) ? summary.merge_markets.filter((m): m is string => typeof m === "string") : [];
+  return {
+    ok: true,
+    tx: {
+      transaction: out[0]!,
+      blockhash,
+      lastValidBlockHeight: lastValid,
+      simulation_success: true,
+      ...(typeof summary.action === "string" ? { summary: summary.action } : {}),
+      batch: { transactions: out, labels, merge_markets: merge },
     },
     summary,
     preview,
@@ -600,4 +641,22 @@ export const mcp = {
     args: { authority: string; market: string; side: "long" | "short"; collateral_usdc: string; leverage: number; slippage_bps?: number; funded?: boolean },
     ctx: McpCtx = {},
   ) => mcpCall("vanna_perps", { action: "preview", ...args }, ctx),
+  /** Predict (World.xyz prediction markets, the app's /api/predict through the MCP). Wallet-only: no margin account. */
+  predictMarkets: (args: { category?: string; query?: string }, ctx: McpCtx = {}) => mcpCall("vanna_predict", { action: "markets", ...args }, ctx),
+  predictMarket: (id: string, ctx: McpCtx = {}) => mcpCall("vanna_predict", { action: "market", id }, ctx),
+  predictPositions: (owner: string, ctx: McpCtx = {}) => mcpCall("vanna_predict", { action: "positions", authority: owner }, ctx),
+  predictHistory: (owner: string, market: string | null, ctx: McpCtx = {}) =>
+    mcpCall("vanna_predict", { action: "history", authority: owner, ...(market ? { market } : {}) }, ctx),
+  predictQuote: (owner: string, legs: PredictLeg[], ctx: McpCtx = {}) => mcpCall("vanna_predict", { action: "quote", authority: owner, legs }, ctx),
+  predictMerge: (marketIds: string[], ctx: McpCtx = {}) => mcpCall("vanna_predict", { action: "merge", market_ids: marketIds }, ctx),
+  predictFaucet: (owner: string, amount: string | null, ctx: McpCtx = {}) =>
+    mcpCall("vanna_predict", { action: "faucet", authority: owner, ...(amount ? { amount } : {}) }, ctx),
 };
+
+/** One leg of a Predict trade, as `vanna_predict` takes it: buy = CASH to spend, sell / deposit = shares. */
+export interface PredictLeg {
+  market: string;
+  outcome: "yes" | "no";
+  side: "buy" | "sell" | "deposit";
+  amount: string;
+}

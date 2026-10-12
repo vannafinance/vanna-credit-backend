@@ -21,6 +21,7 @@ import { copilotConfig } from "./config";
 import { answerToText, type StructuredAnswer } from "./answer-schema";
 import { humanizeFailure } from "./explain";
 import { recordSpend } from "./limits";
+import { mcp } from "./mcp-client";
 import type { ReadCtx } from "./mcp-facts";
 import { MAX_PLAN_STEPS, PLAN_TTL_MS, RUN_WINDOW_MS, VENUE_BY_OP, labelFor, planDigest, signatureCount, validateSteps, type StepSpec } from "./plan";
 import { workflowStore, type RecordStore } from "./store";
@@ -61,6 +62,9 @@ export interface WorkflowDeps {
   build: typeof buildStepTx;
   readStep: typeof runReadStep;
   recordSpend: typeof recordSpend;
+  sleep(ms: number): Promise<void>;
+  /** After a Predict trade confirms: the app's keeper merges the pools it touched (best effort). */
+  predictMerge(marketIds: string[], user: CopilotUser): Promise<number | null>;
 }
 
 let cachedStore: RecordStore<WorkflowRecord> | null = null;
@@ -83,7 +87,16 @@ export const workflowDeps: WorkflowDeps = {
   build: buildStepTx,
   readStep: runReadStep,
   recordSpend,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  predictMerge: async (marketIds, user) => {
+    const r = await mcp.predictMerge(marketIds, { user });
+    const results = Array.isArray(r.results) ? (r.results as Array<Record<string, unknown>>) : [];
+    return results.reduce((sum, x) => sum + (typeof x.merged_usdc === "number" ? x.merged_usdc : 0), 0);
+  },
 };
+
+/** How long a Predict trade's transaction may take to confirm before the next one is sent. */
+const BATCH_CONFIRM_MS = 25_000;
 
 /** A build that has not delivered a transaction within this window is presumed dead and may be re-claimed. */
 export const STALE_BUILD_MS = 90_000;
@@ -192,6 +205,7 @@ const toUnsigned = (tx: NonNullable<StoredStep["tx"]>): UnsignedTx => ({
   lastValidBlockHeight: tx.lastValidBlockHeight,
   simulation_success: true,
   ...(tx.summary ? { summary: tx.summary } : {}),
+  ...(tx.batch ? { batch: tx.batch } : {}),
 });
 
 // ── Store access with compare-and-set ───────────────────────────────────────
@@ -432,6 +446,7 @@ export async function advanceWorkflow(id: string, user: CopilotUser, ctx: Omit<R
               ...(built.tx.summary ? { summary: built.tx.summary } : {}),
               ...(built.tx.prerequisite ? { prerequisite: true } : {}),
               ...(built.tx.prerequisite_kind ? { prerequisite_kind: built.tx.prerequisite_kind } : {}),
+              ...(built.tx.batch ? { batch: built.tx.batch } : {}),
             },
             // A prerequisite moves no funds: nothing counts toward the spend caps until the step itself is signed.
             usd: built.tx.prerequisite ? 0 : pre.prepared.usd,
@@ -512,6 +527,7 @@ export async function submitWorkflow(id: string, req: SubmitRequest, user: Copil
     throw new WorkflowError("expired", "That transaction expired before it was signed. Continue the plan to get a fresh one.", 410);
   }
 
+  if (step.tx.batch) return submitBatch(id, step, req, user);
   const verified = verifySignedTx({ unsignedB64: step.tx.transaction, signedB64: req.signed_tx, wallet: user.wallet });
 
   // Mark submitted BEFORE broadcasting: a second request now finds `submitted` and does not send.
@@ -556,6 +572,77 @@ export async function submitWorkflow(id: string, req: SubmitRequest, user: Copil
   return { plan: toPlanView(latest), signature: verified.signature, status: "submitted" };
 }
 
+/** Polls one signature until it is confirmed, failed, or `ms` passed (pending). */
+async function waitLanded(signature: string, ms: number): Promise<SignatureState> {
+  const deadline = workflowDeps.now() + ms;
+  for (;;) {
+    const s = await workflowDeps.signatureState(signature).catch(() => ({ state: "pending" }) as SignatureState);
+    if (s.state !== "pending" || workflowDeps.now() > deadline) return s;
+    await workflowDeps.sleep(1_000);
+  }
+}
+
+/**
+ * A Predict trade: every transaction, signed in ONE wallet approval, checked against what was built, then sent in order,
+ * each confirmed before the next (a later one spends what the one before created). Marked submitted before anything is
+ * sent, so a repeat never sends twice. When a transaction after the first fails or doesn't confirm, the ones before it
+ * already landed: the step is never rebuilt (that would trade again); it stops and says what happened.
+ */
+async function submitBatch(id: string, step: StoredStep, req: SubmitRequest, user: CopilotUser): Promise<SubmitResponse> {
+  const batch = step.tx!.batch!;
+  const signed = Array.isArray(req.signed_txs) ? req.signed_txs : [];
+  if (signed.length !== batch.transactions.length) throw new WorkflowError("bad_request", "Every transaction of this trade must be signed together.", 400);
+  const verified = batch.transactions.map((unsignedB64, i) => verifySignedTx({ unsignedB64, signedB64: String(signed[i] ?? ""), wallet: user.wallet }));
+  const sigs = verified.map((v) => v.signature);
+  const last = sigs[sigs.length - 1]!;
+  const builtAt = step.tx!.built_at;
+  const marked = await update<boolean>(id, user, (r, t) => {
+    const s = r.steps.find((x) => x.n === step.n);
+    if (!s || s.status !== "awaiting_signature" || s.tx?.built_at !== builtAt) return { next: null, out: false };
+    return { next: { ...withStep(r, step.n, { status: "submitted", signature: last, batch_signatures: sigs, submitted_at: t, note: null }), log: logEvent(r, t, `submitted:${step.n}`) }, out: true };
+  });
+  if (!marked.out) {
+    const s = marked.rec.steps.find((x) => x.n === step.n);
+    return { plan: toPlanView(marked.rec), signature: s?.signature ?? null, status: s?.status ?? "pending", message: "This step was already sent." };
+  }
+  const stop = async (status: StepStatus, message: string, clearTx: boolean): Promise<SubmitResponse> => {
+    const { rec: after } = await update<null>(id, user, (r, t) => {
+      const s = r.steps.find((x) => x.n === step.n);
+      if (!s || s.status !== "submitted" || s.signature !== last) return { next: null, out: null };
+      return { next: { ...withStep(r, step.n, { status, ...(clearTx ? { tx: null } : {}), note: message }), log: logEvent(r, t, `batch_${status}:${step.n}`) }, out: null };
+    });
+    return { plan: toPlanView(after), signature: last, status, message };
+  };
+  const n = verified.length;
+  for (let i = 0; i < n; i++) {
+    const which = n > 1 ? `Transaction ${i + 1} of ${n} (${batch.labels[i] ?? "trade"})` : "The transaction";
+    try {
+      await workflowDeps.send(verified[i]!.raw);
+    } catch (e) {
+      const kind = classifySendError(e);
+      if (i === 0) {
+        // Nothing of the trade landed: an expired one can be rebuilt, a rejected one is reported.
+        if (kind === "expired") return stop("expired", "The trade expired before the network accepted it. Continue the plan to get a fresh one.", true);
+        if (kind === "rejected") return stop("failed", `The network rejected the trade: ${humanizeFailure(e instanceof Error ? e.message : String(e))}`, false);
+        return stop("uncertain", "I couldn't confirm the network received this trade. I won't send it again; check your Predict positions.", false);
+      }
+      return stop(kind === "rejected" ? "failed" : "uncertain", `${which} was not accepted (${humanizeFailure(e instanceof Error ? e.message : String(e))}); the ${i} before it landed. Nothing more was sent; check your Predict positions.`, false);
+    }
+    if (i < n - 1) {
+      const landed = await waitLanded(verified[i]!.signature, BATCH_CONFIRM_MS);
+      if (landed.state === "failed") return stop("failed", `${which} failed on chain: ${humanizeFailure(landed.err)}. Nothing after it was sent.`, false);
+      if (landed.state === "pending") return stop("uncertain", `${which} did not confirm in time, so nothing after it was sent. Check your Predict positions before trying again.`, false);
+    }
+  }
+  try {
+    if (step.usd) await workflowDeps.recordSpend(user, step.usd);
+  } catch {
+    /* best-effort, as for a single transaction */
+  }
+  const { rec: latest } = await load(id, user);
+  return { plan: toPlanView(latest), signature: last, status: "submitted" };
+}
+
 // ── Confirm ─────────────────────────────────────────────────────────────────
 
 export async function confirmWorkflow(id: string, req: ConfirmRequest, user: CopilotUser): Promise<ConfirmResponse> {
@@ -581,6 +668,15 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
     // Only a never-seen signature whose blockhash has expired can be declared dead.
     if (step.tx && (await isExpired(step.tx.lastValidBlockHeight))) {
       const again = await workflowDeps.signatureState(signature).catch(() => ({ state: "pending" }) as SignatureState);
+      if (again.state === "pending" && (step.batch_signatures?.length ?? 0) > 1) {
+        // Part of a Predict trade landed: rebuilding would trade again.
+        const { rec: next } = await update<null>(id, user, (r, t) => {
+          const s = r.steps.find((x) => x.n === step.n);
+          if (!s || s.signature !== signature || (s.status !== "submitted" && s.status !== "uncertain")) return { next: null, out: null };
+          return { next: { ...withStep(r, step.n, { status: "uncertain", note: "The last transaction of this trade never landed; the ones before it did. Check your Predict positions." }), log: logEvent(r, t, `batch_tail_expired:${step.n}`) }, out: null };
+        });
+        return { plan: toPlanView(next), status: "uncertain", signature, explorer_url: sigLink(signature), message: "The last transaction of this trade never landed; the ones before it did." };
+      }
       if (again.state === "pending") {
         const { rec: next } = await update<null>(id, user, (r, t) => {
           const s = r.steps.find((x) => x.n === step.n);
@@ -617,9 +713,24 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
     }
     return { next: { ...withStep(r, step.n, { status: confirmed ? "confirmed" : "failed", note }), state: r.state === "paused" && confirmed ? "running" : r.state, pause_reason: confirmed ? null : r.pause_reason, log: logEvent(r, t, `${confirmed ? "confirmed" : "failed_onchain"}:${step.n}`) }, out: null };
   });
-  const s2 = next.steps.find((x) => x.n === step.n);
+  let s2 = next.steps.find((x) => x.n === step.n);
+  let latest = next;
+  const merge = s2?.status === "confirmed" ? s2.tx?.batch?.merge_markets ?? [] : [];
+  if (merge.length) {
+    // As on the website: once the trade lands, the app's keeper merges matched YES+NO in those pools into USDC lent to
+    // Vanna. Best effort: the pool keeps the shares (still sellable) if it doesn't run now.
+    const merged = await workflowDeps.predictMerge(merge, user).catch(() => null);
+    const note = merged === null ? "Your shares are in Vanna's pool; its merge didn't run just now (they can still be sold)." : merged > 0 ? `Vanna's pool merged ${merged} USDC of matched shares.` : "Your shares are in Vanna's pool.";
+    const { rec: noted } = await update<null>(id, user, (r) => {
+      const s = r.steps.find((x) => x.n === step.n);
+      if (!s || s.status !== "confirmed") return { next: null, out: null };
+      return { next: withStep(r, step.n, { note }), out: null };
+    });
+    latest = noted;
+    s2 = noted.steps.find((x) => x.n === step.n);
+  }
   return {
-    plan: toPlanView(next),
+    plan: toPlanView(latest),
     status: s2?.status ?? (confirmed ? "confirmed" : "failed"),
     signature,
     explorer_url: sigLink(signature),

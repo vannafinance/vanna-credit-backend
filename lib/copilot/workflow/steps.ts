@@ -13,7 +13,7 @@ import { checkAndConsume, checkSpend, type LimitDenied } from "../limits";
 import { mcp, MCPError, parseWriteEnvelope } from "../mcp-client";
 import type { Asset } from "../intent";
 import { loadFreshPrice, loadHealth, priceDeps, resetPriceRefresh, runRead, sizeSafeBorrow, sizeSafeWithdraw, sizeToHealth, type ReadCtx, type ReadOutcome } from "../mcp-facts";
-import { hfTarget, MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, providerName, readLegOf, RISK_INCREASING } from "../plan";
+import { hfTarget, MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, outTarget, predictLegsOf, providerName, readLegOf, RISK_INCREASING, type PredictStepLeg } from "../plan";
 import { answerReadLeg } from "../investigation/plan-reads";
 import { floorDecimals, hfAfter as ratio, num, readCan, riskGate, simulationFrom, tokenDecimals } from "../risk";
 import type { RiskResult, Simulation, UnsignedTx } from "../types";
@@ -183,6 +183,83 @@ async function preflightVault(step: StoredStep, ctx: ReadCtx, notes: string[]): 
   return done({ action: "withdraw", amount }, 0, amount);
 }
 
+/** The shares of one outcome side the user holds in Predict: in the wallet plus in Vanna's pool (sell), or wallet only (deposit). */
+function predictHeld(pos: Record<string, unknown>, leg: PredictStepLeg): number {
+  const rows = Array.isArray(pos.positions) ? (pos.positions as Array<Record<string, unknown>>) : [];
+  const row = rows.find((p) => p.market_id === leg.market && String(p.side ?? "").toLowerCase() === leg.outcome);
+  if (leg.side === "sell") return num(row?.shares) ?? 0;
+  const movable = Array.isArray(pos.can_move_to_pool) ? (pos.can_move_to_pool as Array<Record<string, unknown>>) : [];
+  const wallet = movable.find((x) => x.market_id === leg.market && String(x.outcome ?? "").toLowerCase() === leg.outcome);
+  return num(wallet?.shares) ?? num(row?.wallet_shares) ?? 0;
+}
+
+/**
+ * A Predict trade (World.xyz prediction markets): wallet-only, so no health check and no margin account. Fresh figures:
+ * the wallet's CASH covers the buys, the shares are there for a sell or pool deposit, the spend caps (CASH at $1), and
+ * the app's live quote for the card. The trade itself is built by the app through the MCP when the wallet is asked.
+ */
+async function preflightPredict(step: StoredStep, ctx: ReadCtx, notes: string[]): Promise<PreflightResult> {
+  const wallet = ctx.user.wallet;
+  const legs = predictLegsOf(step);
+  if (!legs) return fail("invalid", "This Predict trade is malformed.");
+  let pos: Record<string, unknown>;
+  try {
+    pos = await mcp.predictPositions(wallet, ctx);
+  } catch (err) {
+    return fail("unavailable", humanizeMcpError(err).message);
+  }
+  const cashIn = legs.reduce((sum, l) => sum + (l.side === "buy" ? Number(l.amount) : 0), 0);
+  const cash = num((pos.wallet as Record<string, unknown> | undefined)?.cash) ?? 0;
+  if (cashIn > cash + 1e-9) {
+    return fail("invalid", `Your wallet holds ${cash} CASH and this trade spends ${floorDecimals(cashIn, 6)} CASH. On the test network you can ask me for test CASH first.`);
+  }
+  for (const l of legs) {
+    if (l.side === "buy") continue;
+    const held = predictHeld(pos, l);
+    if (Number(l.amount) > held + 1e-9) {
+      const where = l.side === "sell" ? "in your wallet and Vanna's pool" : "in your wallet";
+      return fail("invalid", `You hold ${held} ${l.side_label || l.outcome.toUpperCase()} shares of ${l.name || "that outcome"} ${where}, fewer than the ${l.amount} asked for.`);
+    }
+  }
+  if (cashIn > 0) {
+    const spend = await checkSpend(ctx.user, cashIn);
+    if (!spend.ok) return { ok: false, code: "limit", message: spend.message, limit: spend };
+  }
+  const args = legs.map((l) => ({ market: l.market, outcome: l.outcome, side: l.side, amount: l.amount }));
+  try {
+    const q = await mcp.predictQuote(wallet, args, ctx);
+    const quotes = Array.isArray(q.quotes) ? (q.quotes as Array<Record<string, unknown>>) : [];
+    quotes.forEach((x, i) => {
+      const l = legs[i];
+      const who = l ? `${l.side_label || l.outcome.toUpperCase()} shares of ${l.name || "the outcome"}` : `${String(x.outcome ?? "").toUpperCase()} shares`;
+      const price = num(x.price_cents);
+      if (x.side === "buy") {
+        const pooled = num(x.shares_into_vanna_pool) ?? 0;
+        notes.push(`About ${String(x.shares_out)} ${who} at ${price === null ? "the live price" : `${price}¢`}; they pay ${String(x.payout_if_win_cash)} CASH if it wins${pooled > 0 ? ", and join Vanna's pool" : ""}.`);
+      } else if (x.side === "sell") {
+        notes.push(`About ${String(x.cash_out)} CASH for ${String(x.shares_in)} ${who} at ${price === null ? "the live price" : `${price}¢`}${num(x.pool_shares_redeemed) ? " (redeemed from Vanna's pool first)" : ""}.`);
+      } else {
+        notes.push(`${String(x.shares_in)} ${who} move into Vanna's pool.`);
+      }
+    });
+    for (const w of Array.isArray(q.warnings) ? q.warnings : []) notes.push(String(w));
+  } catch (err) {
+    return fail("invalid", humanizeMcpError(err).message);
+  }
+  notes.push("Predict uses your wallet, not your margin account: your health factor doesn't change.");
+  return {
+    ok: true,
+    prepared: {
+      usd: cashIn,
+      call: { tool: "vanna_predict", args: { action: "trade", authority: wallet, legs: args } },
+      risk: { decision: "allow", reasons: [] },
+      simulation: null,
+      resolvedAmount: cashIn > 0 ? floorDecimals(cashIn, 6) : null,
+      notes,
+    },
+  };
+}
+
 async function preflightPerp(step: StoredStep, ctx: ReadCtx, notes: string[]): Promise<PreflightResult> {
   const wallet = ctx.user.wallet;
   const allow = { decision: "allow" as const, reasons: [] as string[] };
@@ -277,6 +354,9 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   if (op === "perp_register" || op === "perp_open" || op === "perp_close" || op === "perp_withdraw") {
     return preflightPerp(step, ctx, notes);
   }
+
+  // ── Predict: wallet-only, built by the app through the MCP (one batch, one approval) ──
+  if (op === "predict_trade") return preflightPredict(step, ctx, notes);
 
   // ── Basis / Perena vaults (the MCP simulates each call; the program checks health) ──
   if (op === "vault_deposit" || op === "vault_withdraw" || op === "vault_move_shares") {

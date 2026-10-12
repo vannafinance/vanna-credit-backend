@@ -56,7 +56,7 @@ export type ResponseKind =
   | "needs_login" // no valid session: show Sign-In-With-Solana
   | "plan_preview"; // a multi-step plan waiting for approval
 
-export type Venue = "earn" | "margin" | "farm" | "swap" | "wallet" | "perps" | "other";
+export type Venue = "earn" | "margin" | "farm" | "swap" | "wallet" | "perps" | "predict" | "other";
 
 export interface ClarifyOption {
   id: string;
@@ -104,6 +104,12 @@ export interface UnsignedTx {
    * USDC moves into Phoenix first; the order is then built with `funded` (workflow/steps.ts).
    */
   prerequisite_kind?: string;
+  /**
+   * A Predict trade: every transaction of it (the first is `transaction`), co-signed by the app's market maker. The
+   * wallet signs them all in ONE approval (signAllTransactions) and the server sends them in order, each confirmed before
+   * the next. `merge_markets`: pools the app's keeper merges once the last one confirms.
+   */
+  batch?: { transactions: string[]; labels: string[]; merge_markets: string[] };
 }
 
 export interface Preview {
@@ -219,6 +225,8 @@ export interface SubmitRequest {
   step_n: number;
   /** base64 signed v0 transaction. Must match the unsigned tx the server built for this step. */
   signed_tx: string;
+  /** A Predict trade (UnsignedTx.batch): every transaction, signed in one approval, in the order built. */
+  signed_txs?: string[];
 }
 export interface SubmitResponse {
   plan: PlanView;

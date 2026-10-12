@@ -221,13 +221,36 @@ export type WriteOp =
    */
   | "vault_deposit"
   | "vault_withdraw"
-  | "vault_move_shares";
+  | "vault_move_shares"
+  /**
+   * Predict (World.xyz prediction markets, the app's Predict page). Wallet-only: CASH from the wallet, no margin account,
+   * no borrowing, no health factor. predict_buy spends CASH on YES or NO of one outcome (the shares join Vanna's pool on
+   * an allowlisted market, as on the website); predict_sell sells shares; predict_deposit moves World shares already in
+   * the wallet into Vanna's pool. The server merges the legs of one request into ONE trade (`predict_trade`: one wallet
+   * approval for all its transactions). predict_faucet adds test CASH on the test fork (not a transaction).
+   */
+  | "predict_buy"
+  | "predict_sell"
+  | "predict_deposit"
+  | "predict_faucet"
+  /** The merged Predict trade a plan step carries (built by the server from predict_buy / sell / deposit legs). */
+  | "predict_trade";
 
 /** The ops a model may name in a plan (the server adds perp_register itself). */
-export const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw", "vault_deposit", "vault_withdraw"];
+export const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw", "vault_deposit", "vault_withdraw", "predict_buy", "predict_sell", "predict_deposit", "predict_faucet"];
 
 export const PERP_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["perp_open", "perp_close", "perp_withdraw", "perp_register"]);
 export const VAULT_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["vault_deposit", "vault_withdraw", "vault_move_shares"]);
+/** The Predict legs a model may name; the server merges them into one `predict_trade` step. */
+export const PREDICT_LEG_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["predict_buy", "predict_sell", "predict_deposit"]);
+export const PREDICT_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["predict_buy", "predict_sell", "predict_deposit", "predict_faucet", "predict_trade"]);
+/** The app's Predict limits (lib/predict/constants.ts): CASH per buy, outcomes per trade, faucet top-up. */
+export const PREDICT_MIN_BUY_CASH = 0.1;
+export const PREDICT_MAX_BUY_CASH = 5000;
+export const PREDICT_MAX_LEGS = 8;
+export const PREDICT_FAUCET_MAX_CASH = 1000;
+/** A World market id (base58 account address). */
+export const isMarketId = (x: unknown): x is string => typeof x === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(x);
 
 /** The vaults Vanna lists (the app's VAULTS, `lib/solana/vault-catalogue.ts`). */
 export const VAULT_IDS = ["basis-sol", "basis-eth", "basis-btc", "basis-tsla", "basis-meta", "perena-usdstar", "perena-junior"] as const;
@@ -300,6 +323,9 @@ export interface WriteIntent {
   leverage?: number | null;
   /** vault_deposit / vault_withdraw / vault_move_shares: which vault. A deposit's amount is USDC, a withdrawal's shares. */
   vault?: VaultId | null;
+  /** predict_buy / sell / deposit: the outcome's World market id (from the Predict read tools, never typed) and the side. */
+  market_id?: string | null;
+  outcome?: "yes" | "no" | null;
 }
 
 /** "via Titan", "using Jupiter", "on titan": the swap route named in the user's own words, if exactly one is. */
@@ -348,8 +374,17 @@ export type ReadIntent =
   | { kind: "vault_preview"; vault: VaultId; call: "deposit" | "withdraw"; amount: string }
   /** Every way to earn on an asset side by side (Earn, Kamino farm, Perena and Basis vaults), for a request naming none. */
   | { kind: "yield_options"; asset: Asset | null }
+  /** Predict (World.xyz prediction markets): listed events with prices, one event, the user's positions / trades, a quote. */
+  | { kind: "predict_markets"; category: PredictCategory | null; query: string | null }
+  | { kind: "predict_market"; id: string }
+  | { kind: "predict_positions" }
+  | { kind: "predict_history"; market: string | null }
+  | { kind: "predict_quote"; legs: Array<{ market: string; outcome: "yes" | "no"; side: "buy" | "sell" | "deposit"; amount: string }> }
   | { kind: "concept"; topic: ConceptTopic }
   | { kind: "help" };
+
+export const PREDICT_CATEGORIES = ["crypto", "sports", "politics", "economics", "other"] as const;
+export type PredictCategory = (typeof PREDICT_CATEGORIES)[number];
 
 /** The Phoenix perps markets Vanna lists (the app's PERP_MARKETS). */
 export const PERP_MARKETS = ["SOL", "ETH", "BTC", "TSLA", "META"] as const;
@@ -448,6 +483,11 @@ const OP_ASSETS: Record<WriteOp, "none" | "lend" | "any"> = {
   vault_deposit: "none",
   vault_withdraw: "none",
   vault_move_shares: "none",
+  predict_buy: "none",
+  predict_sell: "none",
+  predict_deposit: "none",
+  predict_faucet: "none",
+  predict_trade: "none",
 };
 
 export function unofferedMessage(asset: string): string {
@@ -507,6 +547,27 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
     if (w.op === "vault_withdraw" && w.amount && w.amount.kind !== "all" && w.amount.kind !== "exact" && w.amount.kind !== "pct") {
       return fail("How many shares should come out (an amount, a percentage, or all)?");
     }
+  }
+  if (w.op === "predict_trade") return fail("That action is not supported.");
+  if (PREDICT_LEG_OPS.has(w.op)) {
+    if (!isMarketId(w.market_id)) return fail("Which market? Pick the outcome from the Predict markets so I have its exact market.");
+    if (w.outcome !== "yes" && w.outcome !== "no") return fail("YES or NO?");
+    const kinds = w.op === "predict_buy" ? ["exact", "usd", "all", "pct"] : ["exact", "all", "pct"];
+    if (!w.amount || !kinds.includes(w.amount.kind)) {
+      return fail(w.op === "predict_buy" ? "How much CASH should go into it (an amount, a percentage of your CASH, or all)?" : "How many shares (an amount, a percentage, or all)?");
+    }
+    const value = w.amount.kind === "exact" || w.amount.kind === "usd" ? w.amount.value : null;
+    if (value !== null) {
+      if (parseDecimalString(value) === null) return fail("That amount is not valid.");
+      if ((value.split(".")[1] ?? "").length > 6) return fail(`CASH and outcome shares have 6 decimal places, and ${value} has more. I won't round your amount.`);
+      if (w.op === "predict_buy" && !(Number(value) >= PREDICT_MIN_BUY_CASH && Number(value) <= PREDICT_MAX_BUY_CASH)) {
+        return fail(`A Predict buy is between ${PREDICT_MIN_BUY_CASH} and ${PREDICT_MAX_BUY_CASH.toLocaleString("en-US")} CASH per outcome.`);
+      }
+    }
+  }
+  if (w.op === "predict_faucet" && w.amount) {
+    if (w.amount.kind !== "exact" || parseDecimalString(w.amount.value) === null) return fail("How much test CASH (up to 1,000)?");
+    if (Number(w.amount.value) > PREDICT_FAUCET_MAX_CASH) return fail(`The test CASH faucet adds at most ${PREDICT_FAUCET_MAX_CASH.toLocaleString("en-US")} CASH at a time.`);
   }
   if (w.op === "swap") {
     if (!w.to_asset) return fail("Which asset do you want to swap into?");
@@ -592,6 +653,15 @@ export function validateRead(r: ReadIntent): GuardResult<ReadIntent> {
     if (r.amount === null && r.target_hf === null) return fail("Give me an amount or a health factor target.");
   }
   if (r.kind === "yield_options" && r.asset && !(PRODUCT_ASSETS as readonly string[]).includes(r.asset)) return fail(unofferedMessage(r.asset));
+  if (r.kind === "predict_markets" && r.category !== null && !(PREDICT_CATEGORIES as readonly string[]).includes(r.category)) return fail(`Predict categories: ${PREDICT_CATEGORIES.join(", ")}.`);
+  if (r.kind === "predict_market" && !(r.id && r.id.length <= 64 && /^[A-Za-z0-9_-]+$/.test(r.id))) return fail("Which event? Use an event or market id from the Predict markets.");
+  if (r.kind === "predict_history" && r.market !== null && !isMarketId(r.market)) return fail("That is not a market id from the Predict markets.");
+  if (r.kind === "predict_quote") {
+    if (!r.legs.length || r.legs.length > PREDICT_MAX_LEGS) return fail(`A Predict trade has 1 to ${PREDICT_MAX_LEGS} outcomes.`);
+    if (!r.legs.every((l) => isMarketId(l.market) && (l.outcome === "yes" || l.outcome === "no") && ["buy", "sell", "deposit"].includes(l.side) && parseDecimalString(l.amount) !== null)) {
+      return fail("Each outcome needs its market id, yes or no, buy / sell / deposit, and an amount.");
+    }
+  }
   if (r.kind === "vault_preview") {
     if (!(VAULT_IDS as readonly string[]).includes(r.vault)) return fail(`Vaults: ${VAULT_IDS.map((v) => VAULT_NAMES[v].name).join(", ")}.`);
     if (r.call !== "deposit" && r.call !== "withdraw") return fail("A deposit or a withdrawal?");

@@ -31,6 +31,7 @@ import {
 import type { AnswerFact, StructuredAnswer } from "./answer-schema";
 import { LIQUIDATION_HF_TEXT } from "./protocol-constants";
 import type { CopilotUser } from "./types";
+import { readPredictHistory, readPredictMarket, readPredictMarkets, readPredictPositions, readPredictQuote } from "./predict-facts";
 
 export interface ReadOutcome {
   answer: StructuredAnswer;
@@ -324,6 +325,16 @@ export async function runRead(intent: ReadIntent, ctx: ReadCtx): Promise<ReadOut
       return readVaultPreview(intent, ctx);
     case "yield_options":
       return readYieldOptions(intent.asset, ctx);
+    case "predict_markets":
+      return readPredictMarkets(intent.category, intent.query, ctx);
+    case "predict_market":
+      return readPredictMarket(intent.id, ctx);
+    case "predict_positions":
+      return readPredictPositions(ctx);
+    case "predict_history":
+      return readPredictHistory(intent.market, ctx);
+    case "predict_quote":
+      return readPredictQuote(intent.legs, ctx);
     case "concept":
       return concept(intent.topic);
     case "help":

@@ -26,7 +26,7 @@ const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 
 function venueTokens(venue: Venue) {
   // Swaps settle through Jupiter into a venue position, so they share the farm palette.
-  const key = venue === "swap" ? "farm" : venue === "other" ? "wallet" : venue === "perps" ? "margin" : venue;
+  const key = venue === "swap" ? "farm" : venue === "other" || venue === "predict" ? "wallet" : venue === "perps" ? "margin" : venue;
   return {
     fg: `var(--pc-${key}-fg)`,
     bg: `var(--pc-${key}-bg)`,

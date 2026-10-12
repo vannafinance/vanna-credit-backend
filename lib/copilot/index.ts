@@ -25,12 +25,12 @@ import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount, fmtUsd, humanizeMcpError } from "./explain";
 import type { AmountSpec, AskOption, Asset, ChainStep, Intent, SwapProvider, WriteIntent } from "./intent";
-import { isDepositable, PERP_OPS, VAULT_OPS, withNamedProvider } from "./intent";
+import { isDepositable, PERP_OPS, PREDICT_LEG_OPS, PREDICT_MAX_LEGS, PREDICT_MIN_BUY_CASH, VAULT_OPS, withNamedProvider } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
 import { mcp } from "./mcp-client";
 import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
-import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, balancesTouched, labelFor, percentBalance, planWarnings, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
+import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, balancesTouched, labelFor, percentBalance, planWarnings, predictCashSpent, predictLegsOf, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type PredictStepLeg, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
 import { productRefusal } from "./domain-firewall";
 import { composeDecline } from "./decline";
@@ -374,6 +374,97 @@ async function askSwapRoute(
   return null;
 }
 
+/** Reads one request's Predict legs share: the wallet's positions and each named market, read once. */
+interface PredictReads {
+  positions: Record<string, unknown> | null;
+  markets: Map<string, Record<string, unknown>>;
+}
+
+/**
+ * One Predict outcome of the request, sized and named: the market is read (so its name, YES / NO labels and whether it
+ * has a live price are the app's), and "all" / a percentage is taken from the wallet's CASH (buy) or the shares held
+ * (sell: wallet + Vanna's pool; pool deposit: wallet) as they are now.
+ */
+async function predictLeg(w: WriteIntent, earlier: StepSpec[], reads: PredictReads, t: Turn): Promise<{ ok: true; leg: PredictStepLeg; note: string | null } | { ok: false; message: string }> {
+  const id = String(w.market_id ?? "");
+  const side: PredictStepLeg["side"] = w.op === "predict_buy" ? "buy" : w.op === "predict_sell" ? "sell" : "deposit";
+  const outcome = w.outcome === "no" ? "no" : "yes";
+  let event = reads.markets.get(id);
+  if (!event) {
+    try {
+      const r = await mcp.predictMarket(id, t.ctx);
+      event = (r.event ?? {}) as Record<string, unknown>;
+      reads.markets.set(id, event);
+    } catch (err) {
+      return { ok: false, message: `I couldn't read that Predict market just now (${humanizeMcpError(err).message}), so I won't plan the trade.` };
+    }
+  }
+  const outs = Array.isArray(event.outcomes) ? (event.outcomes as Array<Record<string, unknown>>) : [];
+  const o = outs.find((x) => x.market_id === id);
+  if (!o) return { ok: false, message: "I couldn't find that Predict market. Ask me to list the markets again and pick the outcome." };
+  const name = String(o.name ?? "");
+  const sideLabel = String(outcome === "yes" ? (o.yes_label ?? "Yes") : (o.no_label ?? "No"));
+  if (side !== "deposit" && o.tradable !== true) return { ok: false, message: `${name} (${String(event.title ?? "")}) has no live price right now, so it can't be ${side === "buy" ? "bought" : "sold"}.` };
+
+  const a = w.amount;
+  let amount: string | null = a && (a.kind === "exact" || a.kind === "usd") ? a.value : null;
+  let note: string | null = a?.kind === "usd" ? `$${a.value} is ${a.value} CASH (CASH is World's dollar).` : null;
+  if (amount === null && (a?.kind === "all" || a?.kind === "pct")) {
+    if (earlier.some((s) => s.op === "predict_trade")) {
+      return { ok: false, message: "That share depends on the Predict trade before it in this request. Give an exact amount for it." };
+    }
+    if (!reads.positions) {
+      try {
+        reads.positions = await mcp.predictPositions(t.user.wallet, t.ctx);
+      } catch (err) {
+        return { ok: false, message: `I couldn't read your Predict balances just now (${humanizeMcpError(err).message}).` };
+      }
+    }
+    const pos = reads.positions;
+    let base = 0;
+    if (side === "buy") base = Number((pos.wallet as Record<string, unknown> | undefined)?.cash ?? 0) || 0;
+    else {
+      const rows = Array.isArray(pos.positions) ? (pos.positions as Array<Record<string, unknown>>) : [];
+      const row = rows.find((p) => p.market_id === id && String(p.side ?? "").toLowerCase() === outcome);
+      const movable = (Array.isArray(pos.can_move_to_pool) ? (pos.can_move_to_pool as Array<Record<string, unknown>>) : []).find((x) => x.market_id === id && String(x.outcome ?? "").toLowerCase() === outcome);
+      base = side === "sell" ? Number(row?.shares ?? 0) || 0 : Number(movable?.shares ?? row?.wallet_shares ?? 0) || 0;
+    }
+    const pct = a.kind === "pct" ? a.pct : 100;
+    if (!(base > 0)) return { ok: false, message: side === "buy" ? "Your wallet holds no CASH. On the test network you can ask me for test CASH." : `You hold no ${sideLabel} shares of ${name}${side === "deposit" ? " in your wallet" : ""}.` };
+    amount = floorDecimals((base * pct) / 100, 6);
+    note = `${pct === 100 ? "All" : `${pct}% of`} your ${side === "buy" ? `${base} CASH` : `${base} ${sideLabel} shares of ${name}`} is ${amount}.`;
+  }
+  if (!amount || !(Number(amount) > 0)) return { ok: false, message: side === "buy" ? "How much CASH should go into it?" : "How many shares?" };
+  if (side === "buy" && Number(amount) < PREDICT_MIN_BUY_CASH) return { ok: false, message: `A Predict buy is at least ${PREDICT_MIN_BUY_CASH} CASH.` };
+  return { ok: true, leg: { market: id, outcome, side, amount, name, side_label: sideLabel, event: String(event.title ?? "") }, note };
+}
+
+/** Adds a leg to the Predict trade right before it in the plan (one trade = one approval), or starts one. */
+function addPredictLeg(steps: StepSpec[], leg: PredictStepLeg): string | null {
+  const last = steps[steps.length - 1];
+  const legs = last?.op === "predict_trade" ? predictLegsOf(last) : null;
+  if (last && legs) {
+    if (legs.length >= PREDICT_MAX_LEGS) return `One Predict trade takes at most ${PREDICT_MAX_LEGS} outcomes. Ask for fewer at a time.`;
+    last.slots.legs = JSON.stringify([...legs, leg]);
+    const spent = predictCashSpent(last);
+    last.amount = spent > 0 ? floorDecimals(spent, 6) : null;
+    return null;
+  }
+  steps.push({ kind: "write", op: "predict_trade", asset: null, amount: leg.side === "buy" ? leg.amount : null, slots: { legs: JSON.stringify([leg]) } });
+  return null;
+}
+
+/** The test network's CASH faucet (the Predict page's "Get test CASH"): a cheatcode, not a transaction, so it runs now. */
+async function predictFaucet(w: WriteIntent, t: Turn): Promise<{ ok: true; note: string } | { ok: false; message: string }> {
+  const amount = w.amount?.kind === "exact" ? w.amount.value : null;
+  try {
+    const r = await mcp.predictFaucet(t.user.wallet, amount, t.ctx);
+    return { ok: true, note: `Added ${String(r.added_cash ?? amount ?? 100)} test CASH to your wallet; it now holds ${String(r.cash)} CASH.` };
+  } catch (err) {
+    return { ok: false, message: `I couldn't add test CASH: ${humanizeMcpError(err).message}` };
+  }
+}
+
 async function resolveAmount(w: WriteIntent, earlier: StepSpec[], t: Turn): Promise<{ ok: true; amount: string | null } | { ok: false; message: string }> {
   const a: AmountSpec | null = w.amount;
   if (!a) return { ok: true, amount: null };
@@ -425,8 +516,25 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
   const steps: StepSpec[] = [];
   // Parts of the request that can't be done lead the plan's notes, so the user sees them before approving.
   const extras: string[] = [...notes];
+  const predictReads: PredictReads = { positions: null, markets: new Map() };
+  const faucetNotes: string[] = [];
   for (let i = 0; i < items.length; i++) {
     const w = writes[i];
+    if (w?.op === "predict_faucet") {
+      const r = await predictFaucet(w, t);
+      if (!r.ok) return { kind: "unavailable", message: r.message, ...base };
+      faucetNotes.push(r.note);
+      extras.push(r.note);
+      continue;
+    }
+    if (w && PREDICT_LEG_OPS.has(w.op)) {
+      const r = await predictLeg(w, steps, predictReads, t);
+      if (!r.ok) return { kind: "clarification", message: r.message, ...base };
+      if (r.note) extras.push(r.note);
+      const tooMany = addPredictLeg(steps, r.leg);
+      if (tooMany) return { kind: "blocked", message: tooMany, ...base };
+      continue;
+    }
     if (!w) {
       const item = items[i];
       // Something the user asked to see at this point: it runs when the plan reaches it.
@@ -526,6 +634,9 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
   const vaultPrep = await prepareVaults(steps, t, extras);
   if (vaultPrep) return vaultPrep;
 
+  if (faucetNotes.length && !steps.some((s) => s.kind === "write")) {
+    return { kind: "answer", message: faucetNotes.join(" "), answer: { headline: faucetNotes.join(" "), facts: [], note: "Test CASH exists only on this test network.", venue: "predict" }, ...base };
+  }
   if (!steps.some((s) => s.kind === "write")) {
     const out = await runRead({ kind: "health" }, t.ctx);
     return { kind: out.ok ? "answer" : "unavailable", message: answerToText(out.answer), answer: out.answer, ...base };
@@ -653,6 +764,13 @@ async function planSpendProblem(steps: StepSpec[], t: Turn): Promise<string | nu
   let total = 0;
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
+    if (s.op === "predict_trade") {
+      // CASH is World's dollar: a Predict trade's buys count at $1 per CASH.
+      const usd = predictCashSpent(s);
+      total += usd;
+      if (usd > perAction) return `Step ${i + 1} (${labelFor(s)}) spends ${fmtUsd(usd)} of CASH, above the per-action limit of ${fmtUsd(perAction)}, so I haven't prepared this plan. Ask for a smaller amount.`;
+      continue;
+    }
     if (s.kind !== "write" || !s.asset || !s.amount || !/^\d+(?:\.\d+)?$/.test(s.amount)) continue; // "all" / receive-sized: checked when built
     const p = await loadFreshPrice(s.asset, t.ctx);
     if (!p) continue;

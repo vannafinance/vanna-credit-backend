@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWallet as useAdapterWallet } from "@solana/wallet-adapter-react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ChatResponse, PlanStepView, PlanView } from "@/lib/copilot/types";
 import { cancelPlan, getSession, getStatusLines, logout, sendChat } from "./api";
 import {
@@ -96,6 +97,7 @@ const DECLINED_MESSAGE = "You declined this in your wallet, so the plan stopped.
 
 export function useCopilot() {
   const adapter = useAdapterWallet();
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<SessionStatus>({ state: "loading" });
   const [items, setItems] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -180,7 +182,9 @@ export function useCopilot() {
     if (!wallet) return;
     void refreshWalletBalancesOnChain(wallet).catch(() => {});
     void refreshMarginAccount(wallet).catch(() => {});
-  }, []);
+    // Predict positions and CASH (the rail's Predict list and the Predict page share this query).
+    void queryClient.invalidateQueries({ queryKey: ["predict"] }).catch(() => {});
+  }, [queryClient]);
 
   /**
    * Writes how a plan ended into the turn that proposed it (and the plan as last seen, so its steps read right), so
@@ -228,6 +232,14 @@ export function useCopilot() {
             throw new Error("The connected wallet is not the wallet you signed in with. Switch back to it or sign in again.");
           }
           return signer.signTransaction(tx);
+        },
+        signAllTransactions: async (txs) => {
+          const signer = getActiveSigner();
+          const signedIn = sessionRef.current.state === "signed_in" ? sessionRef.current.wallet : null;
+          if (signedIn && signer.publicKey.toBase58() !== signedIn) {
+            throw new Error("The connected wallet is not the wallet you signed in with. Switch back to it or sign in again.");
+          }
+          return signer.signAllTransactions(txs);
         },
       });
       controllers.current.set(workflowId, controller);

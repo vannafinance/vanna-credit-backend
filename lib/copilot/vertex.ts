@@ -30,6 +30,7 @@ import {
   PERP_MARKETS,
   VAULT_IDS,
   WRITE_OPS,
+  PREDICT_OPS,
   perpMarketOf,
   vaultOf,
   productWordsGuide,
@@ -159,10 +160,12 @@ export async function vertexPing(): Promise<{ ok: boolean; model: string; error?
 // ── Routing by function calling ─────────────────────────────────────────────
 
 const ASSET_ENUM = [...PRODUCT_ASSETS];
+/** The fallback router reads nothing, so it can't name a Predict market (its id comes from a read): Predict is the investigation's only. */
+const ROUTER_WRITE_OPS = WRITE_OPS.filter((op) => !PREDICT_OPS.has(op));
 const READ_KINDS = ["health", "positions", "debt", "collateral", "wallet", "price", "pool", "earn_position", "farm_markets", "farm_positions", "capacity", "liquidation_risk", "history", "protocol", "quote", "perps_markets", "perps_positions", "perps_preview", "vaults_list", "vaults_positions", "vault_preview", "yield_options", "concept", "help"];
 
 const stepProps = {
-  op: { type: "STRING", enum: WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino. perp_open/perp_close/perp_withdraw = Phoenix perps (not a Vanna loan). vault_deposit (USDC) / vault_withdraw (shares) = Basis or Perena vault." },
+  op: { type: "STRING", enum: ROUTER_WRITE_OPS, description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino. perp_open/perp_close/perp_withdraw = Phoenix perps (not a Vanna loan). vault_deposit (USDC) / vault_withdraw (shares) = Basis or Perena vault." },
   vault: { type: "STRING", enum: [...VAULT_IDS], description: "vault_deposit / vault_withdraw: which vault." },
   market: { type: "STRING", enum: [...PERP_MARKETS], description: "perp_open / perp_close: the Phoenix perps market." },
   side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
@@ -297,7 +300,7 @@ function guardOutcome(message: string): Intent {
 
 function writeFromArgs(a: Record<string, unknown>): WriteIntent | null {
   const op = a.op;
-  if (typeof op !== "string" || !(WRITE_OPS as string[]).includes(op)) return null;
+  if (typeof op !== "string" || !(ROUTER_WRITE_OPS as string[]).includes(op)) return null;
   const lev = typeof a.leverage === "number" ? a.leverage : typeof a.leverage === "string" ? Number(a.leverage) : null;
   const sizedToLeverage = op === "borrow" && lev !== null && Number.isFinite(lev) && !amountSpecOf(a.amount);
   if (op === "vault_deposit" || op === "vault_withdraw") {

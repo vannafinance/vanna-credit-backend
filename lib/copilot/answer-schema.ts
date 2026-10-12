@@ -28,6 +28,7 @@ export type AnswerVenue =
   | "oracle"
   | "phoenix"
   | "vaults"
+  | "predict"
   | "none";
 
 export type FactTone = "neutral" | "good" | "warn" | "bad";
@@ -123,7 +124,7 @@ export const ANSWER_RESPONSE_SCHEMA = {
     },
     venue: {
       type: "STRING",
-      enum: ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "vaults", "none"],
+      enum: ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "vaults", "predict", "none"],
       description:
         "Which product these numbers came from. 'earn' for Vanna lending pools, 'kamino' " +
         "for Kamino farm positions, 'jupiter' for swaps, 'margin' for the margin account, 'oracle' " +
@@ -290,6 +291,7 @@ export function normalizeAnswer(raw: unknown): StructuredAnswer | null {
     "oracle",
     "phoenix",
     "vaults",
+    "predict",
     "none",
   ];
   const venue = venues.includes(o.venue as AnswerVenue) ? (o.venue as AnswerVenue) : undefined;

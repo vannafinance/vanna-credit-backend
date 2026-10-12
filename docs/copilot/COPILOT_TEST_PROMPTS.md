@@ -196,6 +196,27 @@ then builds the action itself. TSLA/META Basis need the stock market open (Phoen
 | Y5 | withdraw my SOL from the kamino vault | Kamino redeem (asks the amount if none) | 🤖 | |
 | Y6 | what's the APY of the ETH basis vault? | Vaults list; APY "—" until there is history, never estimated | 🤖 | |
 
+### 6.3 Predict (World.xyz prediction markets, test network)
+
+Wallet-only: CASH from the wallet, never the margin account or the health factor. Prices are cents per share; a share
+pays 1 CASH if its outcome wins. Use events that are listed when you test (the website's Predict page shows them).
+
+| # | Prompt (verbatim) | What should happen | Who | Result |
+|---|---|---|---|---|
+| P1 | what prediction markets are there? | The listed events with each outcome's YES / NO prices; nothing built | 🤖 | |
+| P2 | what are the odds for Galatasaray vs Barcelona? | That event's outcomes, buy / sell prices in cents, rules; no opinion on who wins | 🤖 | |
+| P3 | bet 10 on Barcelona | One Predict trade: buy YES on Barcelona for 10 CASH, the quote (shares, price, pays if it wins, joins Vanna's pool); one wallet approval | 👤 | |
+| P4 | put 5 on a draw and 5 against Galatasaray | ONE trade with two outcomes, one approval (the wallet shows all its transactions together) | 👤 | |
+| P5 | bet on the Rams | Two events name the Rams: asks which one, with options | 🤖 | |
+| P6 | sell all my Barcelona shares | Sells wallet + pooled shares (pooled ones redeemed first) | 👤 | |
+| P7 | what are my prediction positions? | Positions (shares, avg / now, value, P&L, pays if it wins), CASH, Vanna pool | 🤖 | |
+| P8 | show my prediction trades | Trade history | 🤖 | |
+| P9 | get me some test CASH | Adds 100 test CASH at once (no signature); "faucet me some SOL" is still refused | 🤖 | |
+| P10 | bet 10000 on Barcelona | Refused: a buy is 0.1-5,000 CASH | 🤖 | |
+| P11 | bet 10 on Barcelona (a wallet with 3 CASH) | Refused before anything is built: not enough CASH; suggests test CASH | 🤖 | |
+| P12 | who will win the Senate? | Shows the market's own prices; never says who will win | 🤖 | |
+| P13 | move my World shares into Vanna's pool | A pool deposit of the shares the wallet holds (positions list them) | 👤 | |
+
 ## 7. Reasoning and what-ifs
 
 Any number must be derivable from your live facts. A figure the Copilot cannot trace to a read is a failure.

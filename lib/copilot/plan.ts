@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import type { Venue } from "./types";
 import type { ReadCall, ReadLeg, WriteIntent, WriteOp } from "./intent";
-import { PERP_OPS, VAULT_NAMES, VAULT_OPS, type VaultId } from "./intent";
+import { PERP_OPS, PREDICT_LEG_OPS, VAULT_NAMES, VAULT_OPS, isMarketId, type VaultId } from "./intent";
 
 export type Op = WriteOp | "report";
 export type SlotValue = string | number | boolean | null;
@@ -56,6 +56,12 @@ export const VENUE_BY_OP: Record<Op, Venue> = {
   vault_deposit: "farm",
   vault_withdraw: "farm",
   vault_move_shares: "farm",
+  // Predict trades from the wallet (the app's Predict page).
+  predict_buy: "predict",
+  predict_sell: "predict",
+  predict_deposit: "predict",
+  predict_faucet: "predict",
+  predict_trade: "predict",
   report: "other",
 };
 
@@ -130,6 +136,14 @@ export function labelFor(s: StepSpec): string {
     if (s.op === "deposit") return `Deposit ${s.asset} as margin collateral up to a health factor of ${t}`;
   }
   switch (s.op) {
+    case "predict_trade":
+      return predictLabel(predictLegsOf(s) ?? []);
+    case "predict_faucet":
+      return `Add ${s.amount ?? "100"} test CASH to your wallet (test network)`;
+    case "predict_buy":
+    case "predict_sell":
+    case "predict_deposit":
+      return "Predict trade";
     case "perp_register":
       return "Create your Phoenix trading account (first perps trade only)";
     case "perp_open":
@@ -194,6 +208,55 @@ export function labelFor(s: StepSpec): string {
 }
 
 /** Steps that ask the wallet for a signature. */
+/**
+ * One outcome of a Predict trade as a plan step carries it (the step's `legs` slot, JSON): what the MCP's
+ * `vanna_predict trade` takes, plus the outcome and event names for the card.
+ */
+export interface PredictStepLeg {
+  market: string;
+  outcome: "yes" | "no";
+  side: "buy" | "sell" | "deposit";
+  /** buy: CASH; sell / deposit: shares. An exact decimal. */
+  amount: string;
+  /** The outcome's name ("Barcelona") and its YES / NO labels ("Yes" / "Up"). */
+  name: string;
+  side_label: string;
+  event: string;
+}
+
+/** The legs a predict_trade step carries, or null when malformed. */
+export function predictLegsOf(s: Pick<StepSpec, "slots">): PredictStepLeg[] | null {
+  if (typeof s.slots.legs !== "string") return null;
+  try {
+    const legs = JSON.parse(s.slots.legs) as PredictStepLeg[];
+    if (!Array.isArray(legs) || !legs.length || legs.length > 8) return null;
+    const ok = legs.every((l) => l && isMarketId(l.market) && (l.outcome === "yes" || l.outcome === "no") && ["buy", "sell", "deposit"].includes(l.side) && /^\d+(?:\.\d{1,6})?$/.test(String(l.amount)));
+    return ok ? legs : null;
+  } catch {
+    return null;
+  }
+}
+
+function predictLegText(l: PredictStepLeg): string {
+  const what = `${l.side_label || l.outcome.toUpperCase()} on ${l.name || "the outcome"}`;
+  if (l.side === "buy") return `buy ${what} for ${l.amount} CASH`;
+  if (l.side === "sell") return `sell ${l.amount} ${what} shares`;
+  return `move ${l.amount} ${what} shares into Vanna's pool`;
+}
+
+function predictLabel(legs: PredictStepLeg[]): string {
+  if (!legs.length) return "Predict trade";
+  const events = [...new Set(legs.map((l) => l.event).filter(Boolean))];
+  const where = events.length === 1 ? ` (${events[0]})` : "";
+  const text = legs.map(predictLegText).join(", ");
+  return `Predict: ${text.charAt(0).toUpperCase()}${text.slice(1)}${where}`;
+}
+
+/** CASH a Predict step's buys spend (CASH is World's dollar, so this is also its USD value for the limits). */
+export function predictCashSpent(s: Pick<StepSpec, "slots">): number {
+  return (predictLegsOf(s) ?? []).reduce((sum, l) => sum + (l.side === "buy" ? Number(l.amount) : 0), 0);
+}
+
 export function signatureCount(steps: StepSpec[]): number {
   return steps.filter((s) => s.kind === "write").length;
 }
@@ -237,6 +300,9 @@ export function balancesTouched(s: StepSpec): string[] {
       const place = s.slots.mode === "margin" ? "margin" : "wallet";
       return [`${place}:${a}`, `${place}:${String(s.slots.to_asset ?? "")}`];
     }
+    case "predict_trade":
+      // Wallet CASH (and a little SOL for fees) and the Predict positions; never the margin account.
+      return ["wallet:CASH", "predict", "wallet:SOL"];
     default:
       return ["*"];
   }
@@ -287,6 +353,13 @@ export function stepFromWrite(w: WriteIntent, amount: string | null): StepSpec {
     return { kind: "write", op: w.op, asset: null, amount: null, slots };
   }
   if (w.op === "perp_register") return { kind: "write", op: w.op, asset: null, amount: null, slots };
+  if (PREDICT_LEG_OPS.has(w.op)) {
+    // One outcome; handleWrite merges the outcomes of one request into one trade (one approval) and names them.
+    const side = w.op === "predict_buy" ? "buy" : w.op === "predict_sell" ? "sell" : "deposit";
+    const leg: PredictStepLeg = { market: String(w.market_id ?? ""), outcome: w.outcome === "no" ? "no" : "yes", side, amount: amount ?? "", name: "", side_label: "", event: "" };
+    slots.legs = JSON.stringify([leg]);
+    return { kind: "write", op: "predict_trade", asset: null, amount: side === "buy" ? amount : null, slots };
+  }
   if (VAULT_OPS.has(w.op)) {
     slots.vault = w.vault ?? null;
     return { kind: "write", op: w.op, asset: null, amount: w.op === "vault_move_shares" ? (amount ?? "all") : amount, slots };
@@ -329,6 +402,11 @@ export function validateSteps(steps: StepSpec[]): string | null {
       // Vaults name a vault, not an asset: a deposit is USDC, a withdrawal shares (or all).
       if (!s.slots.vault) return "A vault step is missing its vault.";
       if (s.op === "vault_deposit" && !s.amount) return "A vault deposit is missing its USDC amount.";
+      continue;
+    }
+    if (s.kind === "write" && (s.op === "predict_buy" || s.op === "predict_sell" || s.op === "predict_deposit" || s.op === "predict_faucet")) return "A Predict step must be a merged trade.";
+    if (s.kind === "write" && s.op === "predict_trade") {
+      if (!predictLegsOf(s)) return "A Predict trade step is malformed.";
       continue;
     }
     if (s.kind === "write" && PERP_OPS.has(s.op as WriteOp)) {

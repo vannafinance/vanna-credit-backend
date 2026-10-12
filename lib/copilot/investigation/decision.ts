@@ -22,6 +22,8 @@ import {
   validateWrite,
   PERP_MARKETS,
   PERP_OPS,
+  PREDICT_LEG_OPS,
+  PREDICT_OPS,
   VAULT_IDS,
   VAULT_OPS,
   WRITE_OPS,
@@ -45,7 +47,7 @@ import type { InvestigationOutcome, Observation } from "./types";
 const ASSETS = [...PRODUCT_ASSETS] as string[];
 export const SIZING_KINDS = ["literal", "usd", "fraction", "all", "max_safe", "health_target", "previous_leg", "leverage", "receive"] as const;
 type SizingKind = (typeof SIZING_KINDS)[number];
-const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "vaults", "none"];
+const VENUES: AnswerVenue[] = ["earn", "kamino", "jupiter", "margin", "wallet", "oracle", "phoenix", "vaults", "predict", "none"];
 
 /** A leg that is not a transaction: something the user asked to see at that point of the plan. */
 const REPORT_OP = "report";
@@ -53,7 +55,7 @@ const REPORT_OP = "report";
 const leg = {
   type: "OBJECT",
   properties: {
-    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. perp_open/perp_close/perp_withdraw = Phoenix perps (market, side, leverage; collateral is USDC from the margin account; NOT a Vanna loan; the server adds any USDC deposit and the first-trade registration itself). vault_deposit/vault_withdraw = Basis or Perena vault (vault; a deposit is USDC from the margin account - SOL Basis from the wallet - and a withdrawal is shares, paying USDC; the server adds any USDC deposit and SOL Basis's share move itself). report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
+    op: { type: "STRING", enum: [...WRITE_OPS, REPORT_OP], description: "earn_supply/earn_redeem = Vanna Earn pool. deposit/withdraw = margin collateral. borrow/repay = margin debt. swap = Jupiter or Titan (the route is chosen separately). farm_deposit/farm_redeem = Kamino lend from the margin balance. create_account/close_account = the margin account itself. perp_open/perp_close/perp_withdraw = Phoenix perps (market, side, leverage; collateral is USDC from the margin account; NOT a Vanna loan; the server adds any USDC deposit and the first-trade registration itself). vault_deposit/vault_withdraw = Basis or Perena vault (vault; a deposit is USDC from the margin account and a withdrawal is shares, paying USDC; the server adds any USDC deposit itself). predict_buy/predict_sell/predict_deposit = Predict (World.xyz prediction markets): market_id + outcome; a buy is CASH from the wallet (0.1-5,000), a sell is shares, a deposit moves World shares already in the wallet into Vanna's pool; several outcomes in one request become ONE trade with one approval (max 8). predict_faucet = test CASH for the wallet on the test network (sizing literal up to 1000, or omit for 100). report = not a transaction: show the user what they asked to see at this point of the plan (fill reads and label; no asset or sizing)." },
     asset: { type: "STRING", enum: ASSETS, description: "Asset acted on. swap: the asset sold. farm ops: the underlying (SOL, not kSOL)." },
     to_asset: { type: "STRING", enum: ASSETS, description: "swap only: the asset bought." },
     source: { type: "STRING", enum: ["wallet", "margin"], description: "repay: which balance pays (default wallet). swap: margin = swap collateral inside the margin account." },
@@ -61,6 +63,8 @@ const leg = {
     side: { type: "STRING", enum: ["long", "short"], description: "perp_open only." },
     leverage: { type: "NUMBER", description: "perp_open only: Phoenix leverage the user gave (1 up to the market's cap). Never invent it; ask_user if missing." },
     vault: { type: "STRING", enum: [...VAULT_IDS], description: "vault_deposit / vault_withdraw: which vault." },
+    market_id: { type: "STRING", description: "predict_buy / predict_sell / predict_deposit: the outcome's market_id copied exactly from get_predict_markets or get_predict_market in the evidence. Never type or guess one; when several outcomes could match the user's words, ask_user which." },
+    outcome: { type: "STRING", enum: ["yes", "no"], description: "predict_buy / predict_sell / predict_deposit: the YES or NO side of that outcome (\"bet on Barcelona\" = yes on Barcelona's market; \"bet against\" = no)." },
     sizing: {
       type: "OBJECT",
       description: "How much. Never compute a number yourself.",
@@ -249,6 +253,12 @@ function sizingToAmount(s: unknown, op: WriteOp, index: number): { ok: true; amo
   if (op === "create_account" || op === "close_account" || op === "perp_register") return { ok: true, amount: null };
   if ((op === "perp_close" || op === "perp_withdraw") && (!s || typeof s !== "object")) return { ok: true, amount: { kind: "all" } };
   if (op === "vault_withdraw" && (!s || typeof s !== "object")) return { ok: true, amount: { kind: "all" } };
+  if (op === "predict_faucet" && (!s || typeof s !== "object")) return { ok: true, amount: null };
+  if (op === "predict_buy" || op === "predict_sell" || op === "predict_deposit" || op === "predict_faucet") {
+    const kind = (s as Record<string, unknown> | null)?.kind;
+    const allowed = op === "predict_buy" ? ["literal", "usd", "all", "fraction"] : op === "predict_faucet" ? ["literal"] : ["literal", "all", "fraction"];
+    if (!allowed.includes(String(kind))) return { ok: false, reason: `action ${index + 1} (${op}): sizing must be one of ${allowed.join(", ")} (a Predict buy is CASH: an amount, all or a fraction of the wallet's CASH; a sell or pool deposit is shares, all or a fraction of the shares held)` };
+  }
   if (op === "vault_deposit" || op === "vault_withdraw") {
     const kind = (s as Record<string, unknown> | null)?.kind;
     const allowed = op === "vault_deposit" ? ["literal", "usd", "all", "fraction"] : ["literal", "all", "fraction"];
@@ -419,6 +429,7 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
       amount: sized.amount,
       source: r.source === "margin" ? "margin" : r.source === "wallet" ? "wallet" : null,
       ...(VAULT_OPS.has(op) ? { asset: null, to_asset: null, vault: vaultOf(r.vault) } : {}),
+      ...(PREDICT_OPS.has(op) ? { asset: null, to_asset: null, market_id: typeof r.market_id === "string" ? r.market_id.trim() : null, outcome: r.outcome === "yes" || r.outcome === "no" ? r.outcome : null } : {}),
       ...(PERP_OPS.has(op)
         ? {
             market: perpMarketOf(r.market),
@@ -427,6 +438,9 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
           }
         : {}),
     };
+    if (PREDICT_LEG_OPS.has(op) && w.market_id && !ctx.evidence.some((o) => o.ok && o.result.includes(w.market_id as string))) {
+      return { ok: false, reason: `action ${i + 1} (${op}): market_id ${w.market_id} is not in any Predict read in the evidence. Call get_predict_markets (or get_predict_market) and copy the outcome's market_id exactly` };
+    }
     const v = validateWrite(w);
     // A guard message ("Pick two different assets") goes back to the model, which can ask the user or decline.
     if (!v.ok) return { ok: false, reason: `action ${i + 1} (${op}): ${v.message}. If that is what the user asked, tell them with ask_user or decline` };
