@@ -3,6 +3,7 @@ import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import "./v3.css";
 import { Navbar } from "@/components/navbar";
+import { RpcBanner } from "@/components/rpc-banner";
 import { navbarItems } from "@/lib/constants";
 import { ThemeProvider } from "@/contexts/theme-context";
 import { QueryProvider } from "@/contexts/query-provider";
@@ -103,6 +104,7 @@ export default function RootLayout({
               <LedgerSubscriberProvider>
                 <PriceProvider>
                   <MarginAccountHydrator />
+                  <RpcBanner />
                   <Navbar items={navbarItems}/>
                   <ScaleWrapper>{children}</ScaleWrapper>
                   <AppToaster />

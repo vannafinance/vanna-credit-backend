@@ -1266,3 +1266,11 @@ html.dark .run-card,
 @media (prefers-reduced-motion: reduce) {
   .cp-exec-live, .cp-exec-fill, .cp-exec-pop, .cp-exec-rise, .cp-exec-breathe, .cp-status-line { animation: none; }
 }
+
+/* Fork-RPC setup strip above the navbar (components/rpc-banner.tsx). */
+.rpc-banner{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 8px;padding:8px 16px;background:#5b3fd0;color:#fff;font-size:13px;font-weight:600;line-height:1.4;text-align:center}
+.rpc-banner-url{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:3px 6px 3px 8px;border:0;border-radius:6px;background:rgba(0,0,0,.28);color:#fff;font:500 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;word-break:break-all}
+.rpc-banner-url:hover{background:rgba(0,0,0,.4)}
+.rpc-banner-cp{padding:1px 6px;border-radius:4px;background:rgba(255,255,255,.18);font:600 11px/1.4 var(--font-plus-jakarta-sans),sans-serif}
+.rpc-banner-a{color:#fff;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+.rpc-banner-a:hover{opacity:.85}
