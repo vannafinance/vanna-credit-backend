@@ -38,12 +38,13 @@ function CompositionPanel({ s }: { s: AccountsSummary | null }) {
   return (
     <Panel title="What collateral is made of" sub="Across all accounts" tip="composition">
       {s && s.valued && comp && total > 0 ? (
-        <div className="an-grid-2" style={{ alignItems: "center", gap: 16 }}>
-          <Donut segments={defs.map(([k, label, color]) => ({ label, value: comp[k], color, tip: `${label}\n${usd(comp[k])} · ${pct(comp[k] / total, 1)}` }))} center={["Collateral", usdC(total)]} />
-          <div>{defs.map(([k, label, color]) => (
-            <div className="an-row an-between" style={{ padding: "7px 0" }} key={k}>
-              <span className="an-row" style={{ gap: 8 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: color }} /><b>{label}</b></span>
-              <span>{usd(comp[k])} <span className="an-muted">{pct(comp[k] / total, 1)}</span></span>
+        <div className="an-grid-2 an-comp" style={{ alignItems: "center", gap: 16 }}>
+          <Donut segments={defs.map(([k, label, color]) => ({ label, value: comp[k], color, tip: `${label}
+${usd(comp[k])} · ${pct(comp[k] / total, 1)}` }))} center={["Collateral", usdC(total)]} />
+          <div className="an-comp-list">{defs.map(([k, label, color]) => (
+            <div className="an-comp-row" key={k}>
+              <span className="an-row" style={{ gap: 8 }}><i style={{ width: 10, height: 10, borderRadius: 3, background: color, flex: "none" }} /><b>{label}</b></span>
+              <span className="an-comp-vals"><span>{usd(comp[k])}</span><span className="an-muted">{pct(comp[k] / total, 1)}</span></span>
             </div>
           ))}</div>
         </div>
