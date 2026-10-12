@@ -1,9 +1,11 @@
 /**
  * V3 icons: token / venue logos (the design's real logos, public/logos-v3) and the design's small
- * line icons. `Icon` falls back to the app's token icon, then to a lettered circle.
+ * line icons. `Icon` falls back to the app's token icon, then to a lettered circle. Kamino (kSOL…)
+ * and Basis vault (vbSOL…) receipts show their underlying's logo.
  */
 import type { ReactNode } from "react";
 import { findToken } from "@/lib/solana/tokens";
+import { VAULTS } from "@/lib/solana/vault-catalogue";
 
 /** Logos shipped with the design (file name = key). */
 const LOGO_FILES: Record<string, string> = {
@@ -22,6 +24,9 @@ export function logoSrc(sym: string): string | null {
   if (LOGO_FILES[key]) return `/logos-v3/${LOGO_FILES[key]}`;
   // Kamino receipts (kSOL…) show their underlying.
   if (/^k[A-Z]/.test(key) && LOGO_FILES[key.slice(1)]) return `/logos-v3/${LOGO_FILES[key.slice(1)]}`;
+  // Basis vault receipts (vbSOL…) show their underlying, as the margin's positions do.
+  const vault = VAULTS.find((v) => v.symbol === key);
+  if (vault?.kind === "basis" && LOGO_FILES[vault.asset]) return `/logos-v3/${LOGO_FILES[vault.asset]}`;
   return findToken(key)?.icon ?? null;
 }
 

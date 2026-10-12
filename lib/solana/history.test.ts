@@ -27,6 +27,22 @@ describe("history RPC work", () => {
     const result = await fetchMarginHistory(wallet);
     expect(result.rows).toEqual([expect.objectContaining({type:'farm-deposit',vaultId:'basis-sol',amount:'10',receiptAmount:'9.5',signature:'basis-deposit'})]);
   });
+  it("names vault receipts moved into the margin (vbSOL deposit, real fork tx bETN…GFuC)", async () => {
+    // `user_deposit_collateral` of 10.144446 vbSOL from wallet 34iZ… into its margin GB1E…: the mint is
+    // a Basis receipt, not a registry token, so the row used to come out with no asset and "0".
+    const { fetchMarginHistory } = await import("./history");
+    const owner = new PublicKey("34iZErvTLtY6K9JAmcTTbMcWFP9toSX7iXnYwpENH7XW");
+    rpc.getSignaturesForAddress.mockResolvedValue([{ signature: "bETN", confirmationStatus: "confirmed", err: null }]);
+    rpc.getTransaction.mockResolvedValue({ blockTime: 1, meta: { logMessages: [
+      "Program H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC invoke [1]",
+      "Program log: Instruction: UserDepositCollateral",
+      "Program data: 9D5NC4dwPWDhb16bh7ocPidDDp9Zcaqn/KaYM3vtiRtf5FcoqS7H9g6xwTvATTM7oId/2D2jLwFjwu5vfQ/F7o+PoYdIcKc6vsqaAAAAAADAzVwNAAAAAAkAAAAAAAAAv3LJagAAAAA=",
+      "Program H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC success",
+    ] } });
+    const { rows } = await fetchMarginHistory(owner);
+    expect(rows).toEqual([expect.objectContaining({ type: "deposit", symbol: "vbSOL", amount: "10.144446", amountRaw: 10144446n, signature: "bETN" })]);
+    expect(rows[0].vaultId).toBeUndefined(); // a collateral move, not a vault deposit (no double count)
+  });
   it("reads 200 finalized transactions only once across repeated refreshes", async () => {
     rpc.getSignaturesForAddress.mockResolvedValue(Array.from({ length: 200 }, (_, i) => ({ signature: `sig${i}`, confirmationStatus: "finalized", err: null, blockTime: 1 })));
     rpc.getTransaction.mockResolvedValue({ blockTime: 1, meta: { logMessages: [] } });

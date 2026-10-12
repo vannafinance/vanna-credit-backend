@@ -3,6 +3,7 @@
  * reader of sentences the patterns cannot read. Same fakes as chat.test.ts (fake MCP, fake language model); the real
  * router, guards, sizing and plan code run.
  */
+import { onlyDeclineWording } from "../testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
@@ -195,7 +196,7 @@ describe("fallback router: the model reads what the patterns cannot, but supplie
     setLlmClient(llm);
     const res = await chat("liquidate that account");
     expect(res.kind).toBe("blocked");
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 
   it("checks typed amounts against the message and the user's earlier messages only", () => {

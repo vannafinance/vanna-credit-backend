@@ -7,7 +7,7 @@ import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
-import { refreshWalletBalancesOnChain } from '@/hooks/use-wallet';
+import { refreshAfterTx } from '@/lib/after-tx';
 import { fetchPoolStates, type PoolState, type SerializedPoolState } from '@/lib/solana/protocol-state';
 import { fetchLenderPositions, redeem, supply, type LenderPosition } from '@/lib/solana/lend';
 import { computeEarnedInterest, fetchEarnHistory, type EarnedInterest, type EarnHistoryRow, type HistoryPage } from '@/lib/solana/history';
@@ -131,13 +131,8 @@ export const useEarnTransactions = () => {
 
 function useAfterEarnTx() {
   const qc = useQueryClient();
-  return async (address: string) => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ['earn'] }),
-      qc.invalidateQueries({ queryKey: ['margin'] }),
-      refreshWalletBalancesOnChain(address).catch(() => {}),
-    ]);
-  };
+  // Lender positions, pools and the account snapshot (wallet balances) first, history later.
+  return () => refreshAfterTx(qc, ['earn', 'margin']);
 }
 
 /** Supply mutation (`lender_supply`) with the progress modal + toast. */
@@ -151,7 +146,7 @@ export const useSupplyLiquidity = () => {
       try {
         const result = await supply(symbol, amount, { onStatus: onTxStatus });
         showTxSuccess(`Supplied ${amount} ${symbol}`);
-        void after(address).catch(() => {});
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Supply failed'));
@@ -172,7 +167,7 @@ export const useWithdrawLiquidity = () => {
       try {
         const result = await redeem(symbol, all ? { all: true } : { assetsUi: amount }, { onStatus: onTxStatus });
         showTxSuccess(all ? `Withdrew all ${symbol}` : `Withdrew ${amount} ${symbol}`);
-        void after(address).catch(() => {});
+        void after().catch(() => {});
         return result;
       } catch (error) {
         showTxError(describeError(error, 'Withdraw failed'));

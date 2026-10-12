@@ -3,7 +3,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useUserStore } from '@/store/user';
-import { useAfterMarginTx } from '@/hooks/use-margin';
+import { refreshAfterTx } from '@/lib/after-tx';
 import { cancelPerpOrder, closePerp, fetchPerpsHistory, fetchPerpsView, withdrawPerpCollateral } from '@/lib/solana/perps';
 import { openPerp } from '@/lib/solana/perps';
 import type { CancelPerpRequest, ClosePerpRequest, OpenPerpRequest, PerpHistoryRow, PerpsView, WithdrawPerpCollateralRequest } from '@/lib/solana/perps-types';
@@ -45,10 +45,8 @@ export const usePerpsHistory = (enabled: boolean) => {
 
 function useAfterPerpsTx() {
   const qc = useQueryClient();
-  const afterMargin = useAfterMarginTx();
-  return async () => {
-    await Promise.all([qc.invalidateQueries({ queryKey: ['perps'] }), afterMargin()]);
-  };
+  // Perps view and the account snapshot first, history later.
+  return () => refreshAfterTx(qc, ['perps', 'margin', 'earn']);
 }
 
 function useTx<T>(label: (req: T) => string, run: (req: T) => Promise<{ summary: string }>, failure: string) {

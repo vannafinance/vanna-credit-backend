@@ -2,7 +2,8 @@
  * Sign-In-With-Solana for the Copilot. The wallet is the only identity: it signs a server-issued
  * message (domain + nonce + issued-at + expiry), and the server answers with an AES-GCM sealed,
  * HttpOnly session cookie. Everything downstream (limits, plans, conversations) keys off that cookie,
- * never off a wallet field in a request body.
+ * never off a wallet field in a request body. Signing out records a per-wallet cut-off in the store, so every
+ * session for that wallet issued before it (this browser's and any copied cookie) stops working at once.
  */
 
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
@@ -42,6 +43,17 @@ export function setNonceStoreForTests(store: RecordStore<NonceRecord> | null): v
 }
 const nonces = () => nonceStoreOverride ?? limitStore<NonceRecord>();
 const nonceDoc = (nonce: string) => createHash("sha256").update(`siws-nonce:${nonce}`).digest("hex");
+
+/** Sessions for a wallet issued before `before` are void (written at sign-out). */
+interface RevocationRecord {
+  before: number;
+}
+let revocationStoreOverride: RecordStore<RevocationRecord> | null = null;
+export function setRevocationStoreForTests(store: RecordStore<RevocationRecord> | null): void {
+  revocationStoreOverride = store;
+}
+const revocations = () => revocationStoreOverride ?? limitStore<RevocationRecord>();
+const revocationDoc = (wallet: string) => createHash("sha256").update(`session-revoked:${wallet}`).digest("hex");
 
 // ── wallet helpers ──────────────────────────────────────────────────────────
 
@@ -152,12 +164,12 @@ export function createSession(wallet: string): { value: string; expiresAt: numbe
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", sessionKey(), iv);
   cipher.setAAD(Buffer.from("copilot-session"));
-  const data = Buffer.concat([cipher.update(JSON.stringify({ w: wallet, exp: expiresAt }), "utf8"), cipher.final()]);
+  const data = Buffer.concat([cipher.update(JSON.stringify({ w: wallet, iat: authClock.now(), exp: expiresAt }), "utf8"), cipher.final()]);
   const value = [iv, cipher.getAuthTag(), data].map((p) => p.toString("base64url")).join(".");
   return { value, expiresAt, maxAgeS: Math.floor(copilotConfig.sessionTtlMs / 1000) };
 }
 
-function unseal(value: string): { wallet: string; expiresAt: number } | null {
+function unseal(value: string): { wallet: string; issuedAt: number; expiresAt: number } | null {
   try {
     const [iv, tag, data, extra] = value.split(".");
     if (!iv || !tag || !data || extra || value.length > 1_000) return null;
@@ -166,10 +178,12 @@ function unseal(value: string): { wallet: string; expiresAt: number } | null {
     decipher.setAuthTag(Buffer.from(tag, "base64url"));
     const parsed = JSON.parse(Buffer.concat([decipher.update(Buffer.from(data, "base64url")), decipher.final()]).toString("utf8")) as {
       w?: unknown;
+      iat?: unknown;
       exp?: unknown;
     };
     if (typeof parsed.w !== "string" || typeof parsed.exp !== "number") return null;
-    return { wallet: parsed.w, expiresAt: parsed.exp };
+    // A cookie sealed before sessions carried an issue time counts as issued at 0: any sign-out voids it.
+    return { wallet: parsed.w, issuedAt: typeof parsed.iat === "number" ? parsed.iat : 0, expiresAt: parsed.exp };
   } catch {
     return null;
   }
@@ -209,5 +223,26 @@ export async function getUser(req: Request): Promise<CopilotUser | null> {
   } catch {
     return null;
   }
+  try {
+    const revoked = await revocations().read(revocationDoc(session.wallet));
+    if (revoked && session.issuedAt < revoked.value.before) return null;
+  } catch {
+    return null; // the store is unreachable: a session that might have been signed out is not honoured
+  }
   return userFor(session.wallet, session.expiresAt);
+}
+
+/**
+ * Sign-out: voids every session for this wallet issued until now, on every device (a stolen cookie too). A new
+ * sign-in afterwards works as usual. Compare-and-set, so two concurrent sign-outs both land.
+ */
+export async function revokeSessions(wallet: string): Promise<void> {
+  const s = revocations();
+  const id = revocationDoc(wallet);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await s.read(id);
+    const before = Math.max(authClock.now() + 1, current?.value.before ?? 0);
+    if (await s.write(id, current?.version ?? null, { before })) return;
+  }
+  throw new AuthError("sign_out_failed", "Could not sign out; try again.", 503);
 }

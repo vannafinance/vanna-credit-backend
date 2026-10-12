@@ -154,6 +154,20 @@ html.dark .v3{
   .v3 .fs .s{margin-top:-4px}
 }
 
+/* StatStrip `center` — the Margin page's stats strip (components/margin/margin-v3.css .mg-stats). */
+@media (min-width:768px){
+  .v3 .fs.c{border-color:var(--line-2)}
+  .v3 .fs.c article{height:auto;min-height:120px;padding:16px 8px;align-items:center;gap:6px}
+  .v3 .fs.c .hd{justify-content:center;gap:6px;width:100%;min-height:42px}
+  .v3 .fs.c .ic{width:24px;height:24px;flex:none}
+  .v3 .fs.c .k{font-size:11px;text-align:center;line-height:1.25;justify-content:center}
+  .v3 .fs.c .v{font-size:18px;text-align:center}
+  .v3 .fs.c .s{margin-top:0;text-align:center}
+}
+@media (min-width:1024px){.v3 .fs.c .v{font-size:22px}}
+/* A zone colour on a strip value (health factor) must win over the strip's text colour. */
+.v3 .fs .v.z-ok{color:var(--ok)} .v3 .fs .v.z-caution{color:var(--caution)} .v3 .fs .v.z-warn{color:var(--warn)} .v3 .fs .v.z-danger{color:var(--danger)}
+
 /* toolbar + segmented */
 .v3 .bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px}
 .v3 .seg{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--field);flex-wrap:wrap}
@@ -285,8 +299,6 @@ html.dark .v3{
 .v3 img.ico{object-fit:cover;border-radius:50%;background:transparent;box-shadow:0 0 0 1px var(--logo-ring)}   /* ring keeps dark logos (Kamino, CASH) visible on dark backgrounds */
 .v3 img.lg-p{border-radius:28%}
 .v3 .info-i:hover,.v3 .info-i:focus-visible{background:var(--violet-soft)}
-.v3 .tip{position:fixed;z-index:120;max-width:280px;padding:8px 11px;border-radius:10px;background:var(--toast-bg);color:var(--toast-fg);font-size:12.5px;font-weight:500;line-height:1.45;box-shadow:0 10px 28px var(--shadow);pointer-events:none;text-wrap:pretty}
-@media (prefers-reduced-motion:no-preference){.v3 .tip{animation:tipIn .12s ease-out}@keyframes tipIn{from{opacity:0;transform:translateY(3px)}}}
 /* content blocks rise and fade in (live: translateY 20px -> 0, ~450 ms, staggered); later blocks wait until they scroll into view */
 .v3 .rv{animation:rvIn .5s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--rv-d,0ms)}
 .v3 .rv-wait{opacity:0;transform:translateY(20px)}
@@ -356,7 +368,6 @@ html.dark .v3{
 .v3{--font:var(--font-plus-jakarta-sans),"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
 /* App glue: the app's sticky navbar sits at z-index 1000, so V3 modals and tooltips go above it. */
 .v3 .modal-bg{z-index:1100}
-.v3 .tip{z-index:1200}
 .v3 .toast{z-index:1150}
 /* `.v3` and `.page` on the same root element (<div className="v3 page">) get the same gutters. */
 .v3.page{padding-inline:16px;padding-block:16px 56px}

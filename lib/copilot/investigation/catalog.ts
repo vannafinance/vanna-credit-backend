@@ -8,7 +8,7 @@
  */
 
 import { copilotConfig } from "../config";
-import { LEND_BORROW_ASSETS, PRODUCT_ASSETS, normalizeAsset, parseDecimalString, perpMarketOf, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
+import { LEND_BORROW_ASSETS, PERP_MARKETS, PRODUCT_ASSETS, VAULT_IDS, normalizeAsset, parseDecimalString, perpMarketOf, vaultOf, type Asset, type ConceptTopic, type ReadIntent } from "../intent";
 import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts";
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
@@ -89,12 +89,31 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
     description: "What opening or adding to a Phoenix perps position would do: size, limit price, fee, health factor and liquidation price after. Nothing is built.",
     parameters: obj(
       {
-        market: { type: "STRING", enum: ["SOL", "ETH", "BTC", "TSLA", "META"] },
+        market: { type: "STRING", enum: [...PERP_MARKETS] },
         side: { type: "STRING", enum: ["long", "short"] },
         collateral_usdc: { type: "STRING", description: "USDC from the margin account backing the order; \"0\" = the Phoenix balance already there." },
         leverage: { type: "NUMBER", description: "1 up to the market's max leverage." },
       },
       ["market", "side", "collateral_usdc", "leverage"],
+    ),
+  },
+  {
+    name: "compare_yield",
+    description: "Every way to earn on an asset, side by side: Vanna Earn (APR, from the wallet), the Kamino farm (live APY, from the margin balance) and the Basis / Perena vaults (USDC; Perena's own 7-day APY, Phoenix funding for Basis, or the app's vault APY when it has one: share-price history, or an approximate deposit-based estimate, labelled as such). Use it when the user asks for yield without naming a product, then ask which.",
+    parameters: obj({ asset: { type: "STRING", enum: [...PRODUCT_ASSETS], description: "The asset the user wants to earn on, if named." } }, []),
+  },
+  { name: "get_vaults", description: "Basis (delta-neutral SOL/ETH/BTC/TSLA/META) and Perena (USD*, USD* Junior) vaults: share price, TVL, whether deposits are open, and each one's yield with its source (Perena's 7-day APY; Phoenix funding for Basis; the app's vault APY when it has one, from share-price history or an approximate deposit-based estimate, said as such). Never estimate one yourself." },
+  { name: "get_vault_positions", description: "The user's vault shares (in the margin account as collateral, or SOL Basis shares still in the wallet) and their value." },
+  {
+    name: "preview_vault",
+    description: "What a vault deposit (USDC) or withdrawal (shares) would do, simulated: shares or USDC out, the minimum enforced, health factor after. Nothing is built.",
+    parameters: obj(
+      {
+        vault: { type: "STRING", enum: [...VAULT_IDS] },
+        call: { type: "STRING", enum: ["deposit", "withdraw"] },
+        amount: { type: "STRING", description: "USDC for a deposit, shares for a withdrawal (the user's exact decimal)." },
+      },
+      ["vault", "call", "amount"],
     ),
   },
   { name: "get_protocol_info", description: "On-chain protocol configuration: operating mode, which assets can be lent, borrowed or used as collateral, integrations." },
@@ -104,7 +123,7 @@ export const READ_TOOLS: LlmFunctionDecl[] = [
 export const READ_TOOL_NAMES = new Set(READ_TOOLS.map((t) => t.name));
 
 /** Reads that scan on-chain history get more time than the default. */
-export const SLOW_READS: Record<string, number> = { get_earn_interest: 30_000, get_history: 25_000 };
+export const SLOW_READS: Record<string, number> = { get_earn_interest: 30_000, get_history: 25_000, get_vaults: 25_000 };
 
 const assetsArg = (v: unknown, allowed: readonly string[]): Asset[] =>
   (Array.isArray(v) ? v : []).map((x) => (typeof x === "string" ? normalizeAsset(x) : null)).filter((a): a is Asset => !!a && allowed.includes(a));
@@ -213,6 +232,21 @@ export async function executeRead(tool: string, args: Record<string, unknown>, c
       const leverage = typeof args.leverage === "number" ? args.leverage : Number(args.leverage);
       if (!market || !side || !collateral || !(leverage >= 1)) return { ok: false, result: { error: "a preview needs market, side, collateral_usdc and leverage >= 1" } };
       return viaRead({ kind: "perps_preview", market, side, collateral, leverage }, ctx);
+    }
+    case "compare_yield": {
+      const asset = typeof args.asset === "string" ? normalizeAsset(args.asset) : null;
+      return viaRead({ kind: "yield_options", asset }, ctx);
+    }
+    case "get_vaults":
+      return viaRead({ kind: "vaults_list" }, ctx);
+    case "get_vault_positions":
+      return viaRead({ kind: "vaults_positions" }, ctx);
+    case "preview_vault": {
+      const vault = vaultOf(args.vault);
+      const call = args.call === "deposit" || args.call === "withdraw" ? args.call : null;
+      const amount = typeof args.amount === "string" ? args.amount.trim() : typeof args.amount === "number" ? String(args.amount) : null;
+      if (!vault || !call || !amount || parseDecimalString(amount) === null) return { ok: false, result: { error: "a vault preview needs vault, call (deposit or withdraw) and a decimal amount" } };
+      return viaRead({ kind: "vault_preview", vault, call, amount }, ctx);
     }
     case "get_kamino_positions":
       return viaRead({ kind: "farm_positions" }, ctx);

@@ -76,7 +76,9 @@ flowchart LR
 1. `app/api/copilot/route.ts` receives `{ message, conversation_id, history, clarify }`. The body never carries a
    wallet, an amount to execute or a transaction.
 2. `lib/copilot/auth.ts` (`getUser`) reads the signed session cookie created at Sign-In-With-Solana
-   (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user.
+   (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user. Signing out (`/api/copilot/auth/logout`)
+   also records a per-wallet cut-off in the store, so every earlier session for that wallet stops working, not just
+   this browser's cookie.
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
    (last 12 turns).
 4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
@@ -86,6 +88,13 @@ flowchart LR
    (perpetuals / options / shorts, Kamino multi-asset liquidity) is read by the model in stage 2 (see "Timing and
    parts that are not done"). Only when the model is unavailable are conditional orders and those products refused
    whole here, in the product's words (`router.ts` `conditionalRefusal`, `domain-firewall.ts` `productRefusal`).
+
+   The rule decides a refusal; Gemini only words it. `decline.ts` (`composeDecline`) gets the rule, the rule's own
+   wording and the product's facts, and writes a short reply for this message in the user's tone and language: what
+   isn't possible, why, and the closest thing that is. It has no tools. Its reply is shown only if it passes the checks
+   (no number that isn't in the facts, no address, link, code or claim that something was done); otherwise, or when
+   the model is off or fails, the rule's own wording is shown. Router and guard refusals and "I'm not sure what you
+   mean" go through the same path.
 
 ### 3.2 Stage 2: investigate (Gemini)
 
@@ -196,7 +205,7 @@ A decision states amounts as a number the user typed or as a sizing word. Code r
 | `usd` | A dollar value the user typed ("$50 worth of SOL") | `index.ts` `handleWrite`: units = USD ÷ oracle price, rounded down to the token's decimals, when the plan is drawn |
 | `fraction` | A percentage of the relevant balance | `workflow/steps.ts` `resolvePercent` |
 | `all` | The whole balance or debt | At build time from the live balance |
-| `max_safe` | The largest borrow / withdrawal that keeps the floor | `mcp-facts.ts` `sizeSafeBorrow` / `sizeSafeWithdraw` |
+| `max_safe` | The largest borrow / withdrawal that keeps the floor. A borrow never exceeds the pool's available liquidity. With `base_asset` + `base_amount` ("what I can borrow against 5 JupSOL"), a borrow is sized on that holding alone: x with (V + x) / x = floor, capped by the whole account, the pool and the per-action limit | `mcp-facts.ts` `sizeSafeBorrow` / `sizeSafeWithdraw`; `workflow/leverage-borrow.ts` `sizeBorrowAgainst` |
 | `health_target` | Sized so the health factor ends at a number the user gave ("borrow until my health factor is 1.5", "repay enough to get back to 2"). Carried as `hf:<target>` and sized when the step is built, after every earlier step: borrow / withdraw use the safe sizers with the target as the floor (never below 1.15); repay from the wallet x = D − C/T, from the margin balance x = (T·D − C)/(T − 1); deposit x = T·D − C; repay and deposit round up, a repay never exceeds the debt; already at the target = the step is skipped | `mcp-facts.ts` `sizeToHealth`, `workflow/steps.ts` `preflightStep` |
 | `previous_leg` | The amount the previous action produced, or a percentage of it ("swap half of it") | `index.ts` `handleWrite` |
 | `leverage` | A borrow at N x leverage, as on the website's Margin page: borrow value = base value × (N − 1), nothing swapped. The base is the collateral the user names (`base_asset`, `base_amount`, which they must hold or deposit in the same plan), else the deposits in the request, else the account's equity | `workflow/leverage-borrow.ts` `sizeLevBorrow` |
@@ -481,6 +490,10 @@ environment.
 - **Transaction size.** Margin swaps load protocol-wide accounts from the frozen protocol lookup table named by the
   MCP's `PROTOCOL_LOOKUP_TABLES` and cap Jupiter's route size so they fit Solana's 1232-byte limit. A fork reset deletes
   the table; recreate it with the MCP's `scripts/create_protocol_lookup_table.py`.
+- **Compute budget (perps open).** Each of a perps open's three `margin_execute` calls re-checks health over every
+  asset the account holds; on an account holding many assets they exceed 1.4M compute units. The MCP then returns only
+  the funding transaction (`summary.prerequisite_kind = "phoenix_fund"`). Once it confirms, the step is marked `funded` and
+  rebuilt: the order is sized from the USDC now in Phoenix and moves nothing more (`workflow.ts`, `workflow/steps.ts`).
 - **Slow fork RPC reads** get a 30 s timeout, with a body-read timeout retried once.
 - **First call on a new instance** can fail while VPC egress and NAT come up; the WorkOS token request is retried up
   to 3 times.

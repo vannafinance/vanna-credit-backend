@@ -20,6 +20,8 @@ import { useAccountSnapshot } from "@/hooks/use-account-snapshot";
 import { useV3Account } from "@/hooks/use-v3-account";
 import { useSpotPositions } from "@/hooks/use-spot-positions";
 import { useFarmPools, useFarmPositions } from "@/lib/farm/use-farm";
+import { positionOf } from "@/lib/farm/basis-live";
+import { VAULTS } from "@/lib/solana/vault-catalogue";
 import {
   farmEarnedBySymbol,
   farmEarnedUsd,
@@ -28,6 +30,7 @@ import {
   lendingUsd,
   netDepositedUsd,
   perpsFlowPnl,
+  vaultEarnedUsd,
   walletUsd,
 } from "./portfolio-math";
 
@@ -42,7 +45,7 @@ export function usePortfolio() {
   const margin = useMarginHistory();
   const { snapshot } = useAccountSnapshot(address);
   const { pools: farmPools } = useFarmPools();
-  const { positions: farmPositions } = useFarmPositions(address);
+  const { positions: farmPositions, isLoading: farmLoading } = useFarmPositions(address);
   const spot = useSpotPositions();
 
   /** Oracle price per symbol: the margin's own price map first (what the HF uses), then /api/prices. */
@@ -68,11 +71,18 @@ export function usePortfolio() {
     // Spot rows without an entry price the chain can prove (deposited tokens) have no P&L.
     const spotPnl = spot.positions.reduce((t, p) => t + (p.pnl ?? 0), 0);
     const spotTraded = spot.positions.filter((p) => p.source !== "deposit");
-    const farmBySym = farmEarnedBySymbol(margin.history, farmPositions);
+    // Earnings = value now − net put in: unknown (null) until the holdings are loaded, or a
+    // still-loading position reads as the whole deposit lost.
+    const farmBySym = farmLoading ? null : farmEarnedBySymbol(margin.history, farmPositions);
     const farmEarned = farmEarnedUsd(farmBySym, px);
+    // Basis / Perena vaults held by the margin: receipts at NAV now − net USDC put in, per vault.
+    const vaults = VAULTS.map((def) => ({ def, ...positionOf(def, snapshot?.api.margin, margin.rows, Boolean(margin.history?.complete)) }));
+    const vaultEarned = snapshot?.api.margin ? vaultEarnedUsd(vaults) : null;
+    const perpsPnl = perpsFlow.total ?? perpsUnrealized;
     // Trading: perps all-in (realized + open, from the margin's Phoenix flows) when the history is
-    // complete, else the open positions' PnL; plus open spot PnL; plus farm earnings when known.
-    const trading = (perpsFlow.total ?? perpsUnrealized) + spotPnl + (farmEarned ?? 0);
+    // complete, else the open positions' PnL; plus open spot PnL; plus Kamino farm and Basis /
+    // Perena vault earnings when known.
+    const trading = perpsPnl + spotPnl + (farmEarned ?? 0) + (vaultEarned ?? 0);
 
     const debtTokens: Record<string, number> = {};
     for (const [sym, b] of Object.entries(snapshot?.borrowedBalances ?? {})) debtTokens[sym] = parseFloat(b.amount) || 0;
@@ -92,6 +102,7 @@ export function usePortfolio() {
       farmPools,
       farmPositions,
       farmBySym,
+      vaults,
       spot,
       totals: {
         net: wallet + lending + marginEquity,
@@ -100,19 +111,22 @@ export function usePortfolio() {
         marginEquity,
         lendEarned,
         trading,
+        /** Trading split: perps all-in, open spot, Kamino farm, Basis / Perena vaults (USD; null = unknown). */
+        tradingParts: { perps: perpsPnl, spot: spotPnl, farm: farmEarned, vaults: vaultEarned },
         perpsUnrealized,
         perpsRealized: perpsFlow.realized,
         spotPnl,
         /** Open positions Flash repay would close: perps, traded spot rows, farm positions. */
         openCount: perps.length + spotTraded.length + farmPositions.length,
         farmEarned,
+        vaultEarned,
         netEarnings: (lendEarned ?? 0) + trading,
         interest,
         netDeposited: netDepositedUsd(margin.history, px),
         debtTokens,
       },
     };
-  }, [address, acct, tokenBalances, px, lendPositions, lendLoading, pools, earn, margin, snapshot, farmPools, farmPositions, spot]);
+  }, [address, acct, tokenBalances, px, lendPositions, lendLoading, pools, earn, margin, snapshot, farmPools, farmPositions, farmLoading, spot]);
 }
 
 export type Portfolio = ReturnType<typeof usePortfolio>;

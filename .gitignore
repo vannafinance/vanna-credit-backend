@@ -25,3 +25,6 @@ next-env.d.ts
 
 # Copilot prompt-suite reports (generated)
 /scripts/copilot-prompts/reports/
+
+# Server-side caches + fork-only Predict keypairs (maker / pool keeper). Never commit.
+/.cache/

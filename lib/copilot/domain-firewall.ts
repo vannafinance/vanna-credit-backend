@@ -10,7 +10,7 @@
  * Reading whether an account is at risk of liquidation stays allowed; executing one never is.
  */
 
-import { LEND_BORROW_ASSETS, PRODUCT_ASSETS, RECEIPT_TO_UNDERLYING, assetRoles, extractAssets, tokenAfterAmount } from "./intent";
+import { LEND_BORROW_ASSETS, PERP_MARKETS, PRODUCT_ASSETS, RECEIPT_TO_UNDERLYING, VAULT_IDS, VAULT_NAMES, assetRoles, extractAssets, tokenAfterAmount } from "./intent";
 
 export type FirewallResult =
   | { allow: true; reason: string }
@@ -19,10 +19,10 @@ export type FirewallResult =
 export const MAX_MESSAGE_CHARS = 1500;
 
 export const CAPABILITY_LINE =
-  "I can read your health factor, positions, prices and pool rates, and prepare Earn, margin, swap and Kamino farm transactions for your wallet to sign. " +
+  "I can read your health factor, positions, prices and pool rates, and prepare Earn, margin, swap, Kamino farm, Phoenix perps and Basis / Perena vault transactions for your wallet to sign. " +
   "Try \"what's my health factor?\", \"supply 100 USDC\", or \"lever my SOL 2x\".";
 
-const OFF_DOMAIN_MESSAGE = `I only help with Vanna on Solana: Earn, margin, swaps, Kamino farm, health factor and your positions. I can't help with general coding, homework or unrelated chat. ${CAPABILITY_LINE}`;
+const OFF_DOMAIN_MESSAGE = `I only help with Vanna on Solana: Earn, margin, swaps, Kamino farm, perps, vaults, health factor and your positions. I can't help with general coding, homework or unrelated chat. ${CAPABILITY_LINE}`;
 
 const B58 = "[1-9A-HJ-NP-Za-km-z]";
 
@@ -31,7 +31,11 @@ const PERP_WORDS = /\b(?:perps?|perpetuals?|phoenix|(?:sol|eth|btc|tsla|meta)-?p
 /** A perps message phrased as a question or a preview is a read, not a trade. */
 const PERP_QUESTION = /\b(?:what\s+(?:if|would|happens|are|is)|preview|simulate|look\s+like|how\s+(?:much|many|close|far)|would\s+(?:it|a|an|my|i)|show|list|tell\s+me|which|can\s+i|could\s+i)\b|\?\s*$/i;
 /** The Phoenix markets Vanna lists (the app's PERP_MARKETS). */
-const PERP_MARKET_NAMES = new Set(["SOL", "ETH", "BTC", "TSLA", "META"]);
+const PERP_MARKET_NAMES = new Set<string>(PERP_MARKETS);
+/** Basis / Perena vault words: "vault", "basis", "delta-neutral", "perena", "USD*", "junior", the vb share tickers. */
+const VAULT_WORDS = /\b(?:vaults?|basis|delta[\s-]?neutral|perena|junior|vb(?:sol|eth|btc|tsla|meta))\b|usd\*/i;
+/** Share tickers of the vaults (and the "USD" of USD*), never unknown tokens in a vault message. */
+const VAULT_TICKERS = new Set<string>(["USD", ...VAULT_IDS.map((id) => VAULT_NAMES[id].symbol.toUpperCase()).filter((s) => /^[A-Z]+$/.test(s))]);
 
 const REFUSALS: Array<{ id: string; re: RegExp; message: string }> = [
   {
@@ -142,7 +146,7 @@ const DOMAIN_WORDS = [
   "lend", "lends", "lent", "lending", "borrow", "borrows", "borrowed", "borrowing", "borrowable",
   "repay", "repays", "repaid", "repaying", "repayment", "deposit", "deposits", "deposited", "depositing",
   "redeem", "redeems", "redeemed", "redeeming", "withdraw", "withdraws", "withdrew", "withdrawing", "withdrawal",
-  "swap", "swaps", "swapped", "swapping", "perp", "perps", "perpetual", "perpetuals", "phoenix", "supply", "supplies", "supplied", "supplying", "stake", "staked", "staking",
+  "swap", "swaps", "swapped", "swapping", "perp", "perps", "perpetual", "perpetuals", "phoenix", "vault", "vaults", "basis", "perena", "income", "returns", "supply", "supplies", "supplied", "supplying", "stake", "staked", "staking",
   "position", "positions", "portfolio", "holdings", "balance", "balances", "collateral", "debt", "debts", "owe", "owed",
   "leverage", "leveraged", "lever", "levered", "liquidate", "liquidated", "liquidation", "liquidations", "liquidatable",
   "margin", "hf", "health", "pool", "pools", "reserve", "reserves", "liquidity", "apy", "apr", "yield", "yields", "interest",
@@ -233,6 +237,11 @@ export function evaluateFirewall(message: string, opts: { hasDomainHistory?: boo
   if (PERP_WORDS.test(m) || opts.modelDecides) {
     tokens.unknown = tokens.unknown.filter((u) => !PERP_MARKET_NAMES.has(u.toUpperCase().replace(/-?PERP$/, "")));
     if (capsTicker && PERP_MARKET_NAMES.has(capsTicker.toUpperCase())) capsTicker = null;
+  }
+  // "ETH basis", "deposit into META basis", "withdraw 5 USD*": the asset names a vault there, not a token to hold.
+  if (VAULT_WORDS.test(m)) {
+    tokens.unknown = tokens.unknown.filter((u) => !PERP_MARKET_NAMES.has(u.toUpperCase()) && !VAULT_TICKERS.has(u.toUpperCase()));
+    if (capsTicker && (PERP_MARKET_NAMES.has(capsTicker.toUpperCase()) || VAULT_TICKERS.has(capsTicker.toUpperCase()))) capsTicker = null;
   }
   if (tokens.unknown.length || capsTicker) {
     const name = tokens.unknown[0] ?? capsTicker ?? "That token";

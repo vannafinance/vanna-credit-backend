@@ -5,9 +5,10 @@
  * legs, risks) and Analytics (statistics, share price / funding). All Transactions lives in
  * ../vault-parts.tsx. Every figure is live ({@link VaultView}, lib/farm/basis-live.ts): fork vault
  * state, recorded share-price history, Phoenix funding history; the borrow APY the vault is compared
- * against is the real Vanna USDC pool rate. Figures that need more history than exists render as 0.
+ * against is the real Vanna USDC pool rate. Yield figures without enough history remain unavailable.
  * Styled by the design's `.fm-card` family (components/farm/farm-v3.css).
  */
+import { apyText, grossFundingApr, netYield } from "@/lib/farm/yield";
 import { useState, type ReactNode } from "react";
 import type { VaultView } from "@/lib/farm/basis-live";
 import { Icon } from "@/components/v3/icons";
@@ -30,7 +31,7 @@ const ICONS = {
   venue: <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.4" fill="none" /><rect x="2" y="9" width="12" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.4" fill="none" /><circle cx="4.8" cy="4.75" r=".9" fill="currentColor" /><circle cx="4.8" cy="11.25" r=".9" fill="currentColor" /></svg>,
 };
 
-function Risk({ icon, title, level, value, caption }: { icon: ReactNode; title: string; level: "low" | "med" | "high"; value: string; caption: string }) {
+function Risk({ icon, title, level, value, caption }: { icon: ReactNode; title: string; level: "low" | "med" | "high" | "unknown"; value: string; caption: string }) {
   return (
     <div className="fm-rt">
       <div className="fm-rth">
@@ -41,7 +42,7 @@ function Risk({ icon, title, level, value, caption }: { icon: ReactNode; title: 
         <i />
         <i />
         <i />
-        <span>{level === "low" ? "Low" : level === "med" ? "Medium" : "High"}</span>
+        <span>{level === "unknown" ? "N/A" : level === "low" ? "Low" : level === "med" ? "Medium" : "High"}</span>
       </div>
       <b>{value}</b>
       <span>{caption}</span>
@@ -60,15 +61,15 @@ export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy:
   // and whatever the realised 7-day APY leaves after funding (Phoenix fees, execution, mark moves).
   const hedge = view.hedgeShare ?? 0;
   const funding7 = funding?.stats.avg7 ?? null;
-  const fundingPart = z(funding7) * hedge;
+  const fundingPart = grossFundingApr(funding7, state?.shortUsd, state?.navUsd);
   const apy7 = state?.apy7 ?? null;
-  const residual = apy7 !== null && funding7 !== null ? apy7 - fundingPart : 0;
-  const parts: [string, string, number][] = [
-    ["Funding", `${pct(z(funding7), 1)} 7-day average on the ${nf(hedge * 100, 0)}% held short`, fundingPart],
-    ["Phoenix fees + execution", apy7 === null ? "Shown once 7 days of share-price history exist" : "Realised 7D APY minus the funding share", residual],
+  const residual = apy7 !== null && fundingPart !== null ? apy7 - fundingPart : null;
+  const parts: [string, string, number | null][] = [
+    ["Funding", `${apyText(funding7, 1)} average funding APR on ${nf(hedge * 100, 0)}% short exposure; gross estimate`, fundingPart],
+    ["Return less funding estimate", "Approximate residual, not an itemized fee measurement", residual],
     ["Vault fee", "No vault, deposit or exit fee", 0],
   ];
-  const max = Math.max(1e-9, ...parts.map((p) => Math.abs(p[2])));
+  const max = Math.max(1e-9, ...parts.map((p) => Math.abs(p[2] ?? 0)));
 
   // Legs.
   const spotUsd = z(state?.assetValueUsd);
@@ -87,7 +88,7 @@ export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy:
   // Risks.
   const nd = funding?.stats.negativeDays30 ?? 0;
   const fd = funding?.stats.days30 ?? 0;
-  const spread = z(apy7) - z(borrowApy);
+  const spread = netYield(apy7, borrowApy, 1);
 
   // Vault APY vs USDC borrow chart.
   const s = inRange(view.apyDays, range);
@@ -99,7 +100,7 @@ export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy:
       </>
     ) : (
       <>
-        Spread today <b className={sign(spread)}>{spct(spread, 1)}</b> per borrowed dollar
+        Spread today <b className={spread === null ? "" : sign(spread)}>{spct(spread ?? 0, 1)}</b> per borrowed dollar
       </>
     );
 
@@ -114,15 +115,15 @@ export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy:
                 <small>{sub}</small>
               </span>
               <span className="fm-trk">
-                <span style={{ width: `${(Math.abs(value) / max) * 100}%`, background: `var(${value >= 0 ? "--ok" : "--short"})` }} />
+                <span style={{ width: `${(Math.abs(value ?? 0) / max) * 100}%`, background: `var(${(value ?? 0) >= 0 ? "--ok" : "--short"})` }} />
               </span>
-              <span className={`v ${sign(value)}`}>{spct(value, 1)}</span>
+              <span className={`v ${value === null ? "" : sign(value)}`}>{spct(value ?? 0, 1)}</span>
             </div>
           ))}
           <div className="fm-wfr tot">
             <span className="t">Vault APY (7D)</span>
             <span />
-            <span className="v">{pct(z(apy7), 1)}</span>
+            <span className="v">{apyText(apy7)}</span>
           </div>
         </div>
       </Card>
@@ -232,8 +233,8 @@ export function BasisOverview({ view, borrowApy }: { view: VaultView; borrowApy:
           <Risk
             icon={ICONS.scale}
             title="Below borrow APY"
-            level={spread >= 3 ? "low" : spread >= 0 ? "med" : "high"}
-            value={spct(spread, 1)}
+            level={spread === null ? "unknown" : spread >= 3 ? "low" : spread >= 0 ? "med" : "high"}
+            value={spct(spread ?? 0, 1)}
             caption="7D vault APY over USDC borrow"
           />
           <Risk
@@ -290,12 +291,12 @@ export function BasisAnalytics({ view }: { view: VaultView }) {
     <>
       <Card title="Statistics" sub={<p className="fm-sub">From recorded hourly share prices and Phoenix&apos;s published funding</p>}>
         <div className="fm-sg num">
-          {sg("Net APY 30D", pct(z(state?.apy30), 1), "After all costs", "Annualised share-price change over 30 days; 0.00% until 30 days are recorded.")}
-          {sg("Net APY 90D", pct(z(stats.apy90), 1), "After all costs", "Annualised share-price change over 90 days; 0.00% until 90 days are recorded.")}
-          {sg("Since launch", pct(z(stats.sinceLaunch), 1), since)}
-          {sg("ROI", spct(z(stats.roi), 2), "Share price since recording began")}
-          {sg("Sharpe ratio", nf(z(stats.sharpe), 2), "Daily returns, annualised", "Mean daily return divided by its standard deviation, times the square root of 365. Needs 3 daily returns.")}
-          {sg("Max drawdown", pct(z(stats.maxDrawdown), 2), "Since recording began", "Largest fall in share price from a previous high.")}
+          {sg(state?.apy30Source === "deposit-event" ? "APY · event estimate (30D+)" : "Net APY 30D", apyText(state?.apy30, 1), "After all costs", "Annualised share-price change over 30 days; 0.0% until a baseline exists; deposit-event fallbacks are approximate.")}
+          {sg("Net APY 90D", apyText(stats.apy90, 1), "After all costs", "Annualised share-price change over 90 days; 0.0% until 90 days are recorded.")}
+          {sg("Since recording", apyText(stats.sinceLaunch, 1), since)}
+          {sg("ROI", apyText(stats.roi), "Share price since recording began")}
+          {sg("Sharpe ratio", nf(stats.sharpe ?? 0, 2), "Daily returns, annualised", "Mean daily return divided by its standard deviation, times the square root of 365. Needs 3 daily returns.")}
+          {sg("Max drawdown", apyText(stats.maxDrawdown), "Since recording began", "Largest fall in share price from a previous high.")}
           {sg("Positive funding", `${nf(positive, 0)}%`, `Days in the last ${fd || 30}`)}
           {sg("Avg funding 30D", spct(z(funding?.stats.avg30), 1), `${perp}, annualised`)}
           {sg("Vault fee", "0%", "No vault, deposit or exit fee")}

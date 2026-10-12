@@ -25,14 +25,15 @@ import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount, fmtUsd, humanizeMcpError } from "./explain";
 import type { AmountSpec, AskOption, Asset, ChainStep, Intent, SwapProvider, WriteIntent } from "./intent";
-import { isDepositable, PERP_OPS, withNamedProvider } from "./intent";
+import { isDepositable, PERP_OPS, VAULT_NAMES, VAULT_OPS, withNamedProvider, type VaultId } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
 import { mcp } from "./mcp-client";
 import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
 import { floorDecimals, tokenDecimals, usdToUnits } from "./risk";
-import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, labelFor, planWarnings, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
+import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, balancesTouched, labelFor, percentBalance, planWarnings, providerName, readLegStep, stepFromWrite, reportStep, MARGIN_OPS, type StepSpec } from "./plan";
 import { conditionalRefusal, routeMessage } from "./router";
 import { productRefusal } from "./domain-firewall";
+import { composeDecline } from "./decline";
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -42,7 +43,7 @@ import { isConversationId, savePending, takePending } from "./workflow/pending";
 import { planLever, type PlannedWorkflow } from "./workflow/strategy";
 import { planUnwind } from "./workflow/unwind";
 import { checkFunding } from "./workflow/funding";
-import { sizeLevBorrow } from "./workflow/leverage-borrow";
+import { sizeBorrowAgainst, sizeLevBorrow } from "./workflow/leverage-borrow";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
 import type { CopilotUser } from "./types";
@@ -100,7 +101,13 @@ export async function handleChat(input: ChatInput): Promise<ChatResponse> {
     } else {
       const modelDecides = copilotConfig.investigationEnabled && llmConfigured();
       const fw = evaluateFirewall(message, { hasDomainHistory: historyIsOnDomain(history), modelDecides });
-      if (!fw.allow) return { kind: fw.kind === "empty" ? "clarification" : "blocked", message: fw.message, ...base };
+      if (!fw.allow) {
+        if (fw.kind === "empty") return { kind: "clarification", message: fw.message, ...base };
+        // The rule decided the refusal; Gemini words it for this message (the rule's own wording if it can't).
+        const declined = await composeDecline({ message, reason: fw.reason, fallback: fw.message, history, signal });
+        tokens += declined.tokens;
+        return { kind: "blocked", message: declined.text, ...base };
+      }
       let decided: Intent | null = null;
       if (modelDecides) {
         // Stage 2: Gemini reads the whole message, including which parts wait for a condition, a time or a repeat, or
@@ -172,12 +179,19 @@ type Reply = ChatResponse | { response: ChatResponse; tokens: number };
 async function dispatch(intent: Intent, t: Turn): Promise<Reply> {
   const { base } = t;
   switch (intent.lane) {
-    case "refuse":
-      return { kind: "blocked", message: intent.message, ...base };
-    case "unknown":
-      return t.source === "unavailable"
-        ? { kind: "unavailable", message: `I couldn't work out what you meant, and the language model that handles free-form requests is not reachable right now. ${CAPABILITY_LINE}`, ...base }
-        : { kind: "clarification", message: `I'm not sure what you'd like to do. ${CAPABILITY_LINE}`, ...base };
+    case "refuse": {
+      // Gemini's own decline is already its wording; a guard's or the router's refusal is worded for this message.
+      if (intent.reason === "model_decline") return { kind: "blocked", message: intent.message, ...base };
+      const declined = await composeDecline({ message: t.message, reason: intent.reason, fallback: intent.message, history: t.history, signal: t.signal });
+      return { response: { kind: "blocked", message: declined.text, ...base }, tokens: declined.tokens };
+    }
+    case "unknown": {
+      if (t.source === "unavailable") {
+        return { kind: "unavailable", message: `I couldn't work out what you meant, and the language model that handles free-form requests is not reachable right now. ${CAPABILITY_LINE}`, ...base };
+      }
+      const asked = await composeDecline({ message: t.message, reason: "unknown", fallback: `I'm not sure what you'd like to do. ${CAPABILITY_LINE}`, history: t.history, signal: t.signal });
+      return { response: { kind: "clarification", message: asked.text, ...base }, tokens: asked.tokens };
+    }
     case "ask": {
       if (intent.options?.length) {
         const saved = await savePending(t.conversationId, t.user, intent.options);
@@ -264,6 +278,47 @@ async function preparePerps(steps: StepSpec[], t: Turn, extras: string[]): Promi
 }
 
 /**
+ * Before each vault deposit: a USDC deposit from the wallet when the margin account holds less than the deposit (never
+ * a borrow) - except SOL Basis, which the vault program takes from the WALLET, followed by the step that moves the new
+ * shares into the margin account (the app's second transaction).
+ */
+async function prepareVaults(steps: StepSpec[], t: Turn, extras: string[]): Promise<Reply | null> {
+  if (!steps.some((s) => s.op === "vault_deposit")) return null;
+  let marginUsdc = 0;
+  try {
+    const h = await loadHealth(t.ctx);
+    if (h.kind === "ok") marginUsdc = h.health.collateral.find((r) => r.symbol === "USDC")?.units ?? 0;
+  } catch {
+    return { kind: "unavailable", message: "I couldn't read your margin account just now, so I won't plan a vault deposit.", ...t.base };
+  }
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]!;
+    if (s.op === "deposit" && s.asset === "USDC" && s.amount && s.amount !== "all") marginUsdc += Number(s.amount);
+    if (s.op !== "vault_deposit") continue;
+    const vault = String(s.slots.vault) as VaultId;
+    const need = Number(s.amount ?? 0);
+    if (vault === "basis-sol") {
+      // From the wallet's USDC; then its shares go into the margin account as collateral.
+      if (steps[i + 1]?.op !== "vault_move_shares") {
+        steps.splice(i + 1, 0, { kind: "write", op: "vault_move_shares", asset: null, amount: "all", slots: { vault } });
+        extras.push(`${VAULT_NAMES[vault].name} takes the deposit from your wallet's USDC; a second signature moves the new shares into your margin account.`);
+      }
+      i++;
+      continue;
+    }
+    if (need > marginUsdc + 1e-9) {
+      const short = (Math.ceil((need - marginUsdc) * 1e6) / 1e6).toFixed(6).replace(/\.?0+$/, "");
+      steps.splice(i, 0, stepFromWrite({ op: "deposit", asset: "USDC", amount: { kind: "exact", value: short } }, short));
+      extras.push(`Your margin account holds ${marginUsdc} USDC, so the plan first deposits ${short} USDC from your wallet for the vault.`);
+      marginUsdc += Number(short);
+      i++;
+    }
+    marginUsdc -= need;
+  }
+  return null;
+}
+
+/**
  * The first swap of the request that names no route and has an exact amount: if both Jupiter and Titan quote it, ask
  * which to use (each option re-runs the same request with that route). One provider quoting: use it. None: leave it to
  * the build, which reports the error. Titan quotes only with a key on the server and for the user's own wallet.
@@ -327,7 +382,7 @@ async function askSwapRoute(
   return null;
 }
 
-async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ ok: true; amount: string | null } | { ok: false; message: string }> {
+async function resolveAmount(w: WriteIntent, earlier: StepSpec[], t: Turn): Promise<{ ok: true; amount: string | null } | { ok: false; message: string }> {
   const a: AmountSpec | null = w.amount;
   if (!a) return { ok: true, amount: null };
   if (a.kind === "exact") return { ok: true, amount: a.value };
@@ -336,11 +391,43 @@ async function resolveAmount(w: WriteIntent, index: number, t: Turn): Promise<{ 
   if (a.kind === "prev") return { ok: false, message: "That amount depends on an earlier step. Say it in the same request." };
   if (a.kind === "lev") return { ok: false, message: "A leverage target is sized together with the deposit it applies to. Say it in one request, for example: deposit 100 USDC in margin and borrow SOL at 3x." };
   if (a.kind === "hf") return { ok: true, amount: `${HF_PREFIX}${a.target}` };
+  if (a.kind === "against") return { ok: false, message: "A borrow against a holding is sized with the plan. Say it in one request." };
   if (a.kind === "usd") return { ok: false, message: "That dollar amount couldn't be converted." };
-  if (index > 0) return { ok: false, message: "A percentage can only be used on the first step, because later amounts depend on earlier steps. Give an exact amount or say \"all\"." };
   if (!w.asset) return { ok: false, message: "Which asset is that percentage of?" };
+  // A percentage is sized now, from the balance as it is. That is exact unless an earlier step of this plan changes
+  // that same balance ("withdraw 50% of my SOL" after "deposit 2 SOL"); then the share is only known once that runs.
+  const balance = percentBalance(w);
+  const writes = earlier.filter((s) => s.kind === "write");
+  const blocking = writes.find((s) => balance === null || balancesTouched(s).some((k) => k === "*" || k === balance));
+  if (blocking) {
+    return { ok: false, message: `${a.pct}% of your ${w.asset} depends on "${labelFor(blocking)}" running first, so I can't size it yet. Give an exact ${w.asset} amount for it, or say "all".` };
+  }
   const r = await resolvePercent(w.op, w.asset, a.pct, { margin: w.source === "margin" }, t.ctx);
   return r.ok ? { ok: true, amount: r.amount } : { ok: false, message: r.message };
+}
+
+/**
+ * A vault deposit or perps collateral given as "all" or a percentage of the user's USDC: sized now from the margin
+ * account's USDC plus the wallet's (the plan tops the margin up from the wallet), or from the wallet only for SOL Basis,
+ * which is wallet-funded. Like any percentage, only when no earlier step of this plan changes that USDC.
+ */
+async function usdcShare(w: WriteIntent, earlier: StepSpec[], t: Turn): Promise<{ ok: true; amount: string; note: string } | { ok: false; message: string }> {
+  const walletOnly = w.op === "vault_deposit" && w.vault === "basis-sol";
+  const pct = w.amount?.kind === "pct" ? w.amount.pct : 100;
+  const blocking = earlier.find((s) => s.kind === "write" && balancesTouched(s).some((k) => k === "*" || k === "wallet:USDC" || (!walletOnly && k === "margin:USDC")));
+  if (blocking) return { ok: false, message: `${pct === 100 ? "All" : `${pct}% of`} your USDC depends on "${labelFor(blocking)}" running first, so I can't size it yet. Give an exact USDC amount for it.` };
+  const inWallet = (await walletSpendable("USDC", t.ctx)) ?? 0;
+  let inMargin = 0;
+  if (!walletOnly) {
+    const h = await loadHealth(t.ctx);
+    if (h.kind === "ok") inMargin = h.health.collateral.find((r) => r.symbol === "USDC")?.units ?? 0;
+  }
+  const total = inWallet + inMargin;
+  if (!(total > 0)) return { ok: false, message: walletOnly ? "Your wallet has no USDC for that." : "You have no USDC in your wallet or margin account for that." };
+  const amount = floorDecimals((total * pct) / 100, tokenDecimals("USDC"));
+  if (!(Number(amount) > 0)) return { ok: false, message: `${pct}% of your USDC is too small to use. Give an amount instead.` };
+  const where = walletOnly ? `your wallet's ${floorDecimals(inWallet, 6)} USDC` : `your ${floorDecimals(inMargin, 6)} USDC in margin plus ${floorDecimals(inWallet, 6)} in your wallet`;
+  return { ok: true, amount, note: `${pct === 100 ? "All" : `${pct}% of`} ${where} is ${amount} USDC.` };
 }
 
 async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes: string[] = []): Promise<Reply> {
@@ -349,7 +436,6 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
   const steps: StepSpec[] = [];
   // Parts of the request that can't be done lead the plan's notes, so the user sees them before approving.
   const extras: string[] = [...notes];
-  let k = 0;
   for (let i = 0; i < items.length; i++) {
     const w = writes[i];
     if (!w) {
@@ -358,11 +444,26 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
       steps.push("read" in item ? readLegStep(item.read) : reportStep());
       continue;
     }
+    if ((w.op === "vault_deposit" || w.op === "perp_open") && (w.amount?.kind === "all" || w.amount?.kind === "pct")) {
+      // "put half my USDC in USD*", "open a SOL long with all my USDC": a share of the USDC the plan can fund it from.
+      const sized = await usdcShare(w, steps, t);
+      if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
+      steps.push(stepFromWrite(w, sized.amount));
+      extras.push(sized.note);
+      continue;
+    }
+    if (VAULT_OPS.has(w.op)) {
+      // Vaults: a deposit is a USDC amount; a withdrawal is a share amount, all of them, or a fraction of them.
+      const amount = w.amount?.kind === "exact" || w.amount?.kind === "usd" ? w.amount.value : w.op === "vault_deposit" ? null : "all";
+      const step = stepFromWrite(w, amount);
+      if (w.op === "vault_withdraw" && w.amount?.kind === "pct" && w.amount.pct < 100) step.slots.fraction = w.amount.pct / 100;
+      steps.push(step);
+      continue;
+    }
     if (PERP_OPS.has(w.op)) {
       // Perps: collateral (perp_open) and USDC (perp_withdraw) are USDC amounts; a close is all of it or a fraction.
       const amount = w.amount?.kind === "exact" || w.amount?.kind === "usd" ? w.amount.value : w.op === "perp_open" ? null : "all";
       steps.push(stepFromWrite(w, amount));
-      k++;
       continue;
     }
     if (w.op !== "create_account" && w.op !== "close_account" && !w.amount) {
@@ -390,7 +491,6 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
         value = share;
       }
       steps.push(stepFromWrite(w, value));
-      k++;
       continue;
     }
     if (w.amount?.kind === "lev") {
@@ -399,7 +499,14 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
       if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
       steps.push(stepFromWrite(w, sized.amount));
       extras.push(...sized.notes);
-      k++;
+      continue;
+    }
+    if (w.amount?.kind === "against") {
+      // "borrow what I can against 5 JupSOL": sized here on that holding, from live prices and the health floor.
+      const sized = await sizeBorrowAgainst(w, steps, t.ctx, copilotConfig.minHealthFactor);
+      if (!sized.ok) return { kind: "clarification", message: sized.message, ...base };
+      steps.push(stepFromWrite(w, sized.amount));
+      extras.push(...sized.notes);
       continue;
     }
     if (w.amount?.kind === "usd" && w.asset) {
@@ -410,13 +517,11 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
       if (!(Number(units) > 0)) return { kind: "clarification", message: `$${w.amount.value} is less than the smallest ${w.asset} amount. Give a larger amount.`, ...base };
       steps.push(stepFromWrite(w, units));
       extras.push(`$${w.amount.value} of ${w.asset} at the oracle price of ${fmtUsd(price.usd)} is ${units} ${w.asset}.`);
-      k++;
       continue;
     }
-    const r = await resolveAmount(w, k, t);
+    const r = await resolveAmount(w, steps, t);
     if (!r.ok) return { kind: "clarification", message: r.message, ...base };
     steps.push(stepFromWrite(w, r.amount));
-    k++;
   }
 
   // A swap with no route named: show both providers' quotes and let the user pick (only when the amount is exact - an
@@ -427,6 +532,10 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
   // A perps open needs the USDC in the margin account and, the first time, a Phoenix trading account: add those steps.
   const perpPrep = await preparePerps(steps, t, extras);
   if (perpPrep) return perpPrep;
+
+  // A vault deposit needs the USDC where the vault takes it from, and SOL Basis a second step for its shares.
+  const vaultPrep = await prepareVaults(steps, t, extras);
+  if (vaultPrep) return vaultPrep;
 
   if (!steps.some((s) => s.kind === "write")) {
     const out = await runRead({ kind: "health" }, t.ctx);
@@ -475,9 +584,8 @@ async function handleWrite(items: Array<ChainStep | WriteIntent>, t: Turn, notes
   // Plan lane: reads only here. The first step is checked now so an impossible plan is not offered;
   // later steps depend on earlier ones and are checked when their turn comes.
   const first = writeSteps[0];
-  const probe = await preflightStep({ ...toStored(first, 1) }, t.ctx);
+  const [probe, unfunded] = await Promise.all([preflightStep({ ...toStored(first, 1) }, t.ctx), checkFunding(steps, t.ctx)]);
   if (!probe.ok) return failedCheck(probe, t);
-  const unfunded = await checkFunding(steps, t.ctx);
   if (unfunded) return { kind: "blocked", message: unfunded, ...base };
   const summary = steps.map((s) => labelFor(s)).join(", then ").replace(/^./, (c) => c.toUpperCase()) + ".";
   return planPreview({ summary, steps, warnings: planWarnings(steps, extras), simulation: "prepared" in probe ? probe.prepared.simulation : null, hfFloor: copilotConfig.minHealthFactor }, t);
@@ -496,10 +604,10 @@ function failedCheck(r: Extract<Awaited<ReturnType<typeof preflightStep>>, { ok:
 
 async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<Reply> {
   const { base } = t;
-  const pre = await preflightStep(toStored(step, 1), t.ctx);
+  // The step's own checks and the wallet-funding check read independent data: run together, results used in order.
+  const [pre, unfunded] = await Promise.all([preflightStep(toStored(step, 1), t.ctx), checkFunding([step], t.ctx)]);
   if (!pre.ok) return failedCheck(pre, t);
   if ("skip" in pre) return { kind: "answer", message: pre.skip, ...base };
-  const unfunded = await checkFunding([step], t.ctx);
   if (unfunded) return { kind: "blocked", message: unfunded, ...base };
 
   // Dry build: the MCP simulates the exact transaction now, so a failing action is explained before
@@ -510,6 +618,9 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
     return { kind: dry.code === "unavailable" ? "unavailable" : "error", message: dry.message, ...base };
   }
 
+  // Since the 2026-10-09 program upgrade a wallet's first margin transactions may need a one-time lookup-table setup.
+  if (dry.tx.prerequisite_kind === "phoenix_fund") extras = [...extras, "Your account holds enough assets that this order doesn't fit in one Solana transaction: your wallet first signs a transaction that moves the USDC into Phoenix, then the order itself."];
+  else if (dry.tx.prerequisite) extras = [...extras, "Your wallet first signs a one-time setup (a lookup table so margin transactions fit in one Solana transaction); then the action itself."];
   const resolved = pre.prepared.resolvedAmount;
   const shown: StepSpec = { ...step, amount: resolved ?? step.amount };
   const planSummary = `${labelFor(shown)}.`;

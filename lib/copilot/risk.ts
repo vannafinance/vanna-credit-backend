@@ -10,7 +10,9 @@
 import type { RiskResult, Simulation } from "./types";
 import { assetDecimals } from "./intent";
 
-export const LIQUIDATION_HF = 1.1;
+import { LIQUIDATION_HF } from "./protocol-constants";
+
+export { LIQUIDATION_HF };
 /** Ratio above the floor that is still flagged as thin. */
 export const THIN_BUFFER = 0.1;
 /** Slippage the lever plan assumes the swap may cost (matches the MCP's default `slippage_bps`). */

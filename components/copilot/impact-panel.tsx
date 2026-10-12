@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
+import { LIQUIDATION_HF, LIQUIDATION_HF_TEXT } from "@/lib/copilot/protocol-constants";
 import type { Simulation } from "@/lib/copilot/types";
 
 /**
@@ -14,7 +15,7 @@ import type { Simulation } from "@/lib/copilot/types";
 const OK_INK = "var(--cp-ok-fg)";
 const WARN_INK = "var(--cp-warn-fg)";
 const BAD_INK = "var(--cp-danger-fg)";
-const LIQUIDATION = 1.1;
+const LIQUIDATION = LIQUIDATION_HF;
 
 const usd = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n)
@@ -81,7 +82,7 @@ export function ImpactPanel({ sim, floor = 1.15 }: { sim: Simulation; floor?: nu
         <div className="absolute inset-y-0 w-0.5" style={{ left: `${(floor / 3) * 100}%`, background: WARN_INK }} />
       </div>
       <div className="mt-1.5 flex justify-between font-mono text-[10px] text-vgray-400">
-        <span style={{ color: BAD_INK }}>1.10 liquidation</span>
+        <span style={{ color: BAD_INK }}>{LIQUIDATION_HF_TEXT} liquidation</span>
         <span style={{ color: WARN_INK }}>{floor.toFixed(2)} copilot floor</span>
         <span>3.00+</span>
       </div>

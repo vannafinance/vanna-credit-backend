@@ -2,6 +2,7 @@
  * handleChat end to end with a FAKE MCP and a FAKE language model (no network, no credentials).
  * The real code paths run: firewall, router, limits, read answers, risk gate, plan store, pending picks.
  */
+import { onlyDeclineWording } from "../testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
@@ -97,7 +98,7 @@ function installFake() {
   vi.spyOn(mcp, "maxBorrow").mockImplementation(async () => ({ max_amount: "500" }));
   vi.spyOn(mcp, "call").mockImplementation(async (tool: string, args: Record<string, unknown>) => {
     fake.calls.push({ fn: `call:${tool}:${String(args.action)}`, args: [args] });
-    if (tool === "vanna_earn_write" || tool === "vanna_margin_trade" || tool === "vanna_swap" || tool === "vanna_farm_kamino" || tool === "vanna_account" || tool === "vanna_perps") {
+    if (tool === "vanna_earn_write" || tool === "vanna_margin_trade" || tool === "vanna_swap" || tool === "vanna_farm_kamino" || tool === "vanna_account" || tool === "vanna_perps" || tool === "vanna_vaults") {
       if (tool === "vanna_swap" && args.action === "quote") return { out_amount: "4.98", min_out_amount: "4.93" };
       return fake.buildEnvelope;
     }
@@ -130,7 +131,7 @@ afterEach(() => {
 });
 
 const chat = (message: string, extra: Partial<ChatRequest> = {}, user = USER): Promise<ChatResponse> => handleChat({ req: { message, ...extra }, user });
-const buildCalls = () => fake.calls.filter((c) => /^call:vanna_(earn_write|margin_trade|swap|farm_kamino|account|perps):(?!quote)/.test(c.fn));
+const buildCalls = () => fake.calls.filter((c) => /^call:vanna_(earn_write|margin_trade|swap|farm_kamino|account|perps|vaults):(?!quote)/.test(c.fn));
 
 function fakeLlm(handler: (req: LlmRequest) => { text?: string | null; calls?: Array<{ name: string; args: Record<string, unknown> }>; tokens?: number }): LlmClient & { requests: LlmRequest[] } {
   const requests: LlmRequest[] = [];
@@ -189,7 +190,7 @@ describe("firewall and refusals", () => {
     const res = await chat(m);
     expect(res.kind).toBe("blocked");
     expect(fake.calls).toHaveLength(0);
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 });
 
@@ -553,6 +554,108 @@ describe("swap route: Jupiter or Titan", () => {
     expect(res.kind).not.toBe("clarification");
     expect(res.plan?.steps[0].slots).toMatchObject({ provider: "jupiter" });
     expect(JSON.stringify(res)).toMatch(/Titan has no route/);
+  });
+});
+
+describe("Basis and Perena vaults", () => {
+  const list = {
+    vaults: [
+      { id: "basis-eth", name: "ETH Basis", kind: "basis", asset: "ETH", share_price_usd: "1.000009", nav_usd: "511.12", deposits_open: true, apy_7d_pct: null, apy_30d_pct: null },
+      { id: "perena-junior", name: "USD* Junior", kind: "perena", asset: "USDC", share_price_usd: "1.089171", nav_usd: "1520887.48", deposits_open: true, apy_7d_pct: null, apy_30d_pct: null },
+    ],
+  };
+  const noShares = { has_margin_account: true, positions: [] };
+
+  it("lists the vaults from the MCP, with no invented APY", async () => {
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => list);
+    const res = await chat("show me the vaults");
+    expect(res.kind).toBe("answer");
+    expect(res.answer?.headline).toMatch(/ETH Basis, USD\* Junior/);
+    expect(JSON.stringify(res.answer?.tables)).toContain("no data yet");
+    expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("names the app's APY source: share-price history, or an approximate estimate from past deposits", async () => {
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => ({
+      vaults: [
+        { ...list.vaults[0], apy_7d_pct: 8.4, apy_7d_source: "deposit_event_estimate", apy_7d_baseline: "2026-10-01" },
+        { ...list.vaults[1], apy_30d_pct: 9.25, apy_30d_source: "history" },
+      ],
+    }));
+    const table = JSON.stringify((await chat("show me the vaults")).answer?.tables);
+    expect(table).toContain("8.40% APY (approximate, estimated from past deposits since 2026-10-01)");
+    expect(table).toContain("9.25% APY (Vanna share-price history, 30-day)");
+  });
+
+  it("shows each vault's yield with its source: Perena's own APY, Phoenix funding for Basis", async () => {
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => ({
+      vaults: [
+        { ...list.vaults[0], funding: { funding_apr_7d_pct: 2.13, negative_days_30: 6 } },
+        { ...list.vaults[1], published_apy_7d_pct: 14.42 },
+      ],
+    }));
+    const table = JSON.stringify((await chat("show me the vaults")).answer?.tables);
+    expect(table).toContain("2.13% funding (Phoenix, 7-day, annualised); 6 negative days of 30");
+    expect(table).toContain("14.42% APY (Perena, 7-day)");
+  });
+
+  it("plans a deposit into ETH basis: tops up the margin USDC from the wallet first", async () => {
+    vi.spyOn(mcp, "vaultsPositions").mockImplementation(async () => noShares);
+    vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "15.0019", out_token: "vbETH", minimum_out: "14.926", health_factor_after: null }));
+    const res = await chat("deposit 20 USDC into ETH basis");
+    expect(res.kind).toBe("plan_preview");
+    const steps = res.plan!.steps;
+    expect(steps.map((s) => s.op)).toEqual(["deposit", "vault_deposit"]);
+    expect(steps[1]).toMatchObject({ amount: "20", slots: { vault: "basis-eth" } });
+    expect(steps.some((s) => s.op === "borrow")).toBe(false);
+  });
+
+  it("SOL basis deposits from the wallet and adds the step that moves the shares into margin", async () => {
+    vi.spyOn(mcp, "vaultsPositions").mockImplementation(async () => noShares);
+    vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "15.27", out_token: "vbSOL", minimum_out: "15.2" }));
+    const res = await chat("deposit 15 USDC into the SOL basis vault");
+    expect(res.plan?.steps.map((s) => s.op)).toEqual(["vault_deposit", "vault_move_shares"]);
+  });
+
+  it("withdraws all the shares of a vault to USDC", async () => {
+    vi.spyOn(mcp, "vaultsPositions").mockImplementation(async () => ({ has_margin_account: true, positions: [{ vault: "perena-junior", held_in: "margin", shares: "9.18", symbol: "USD* Junior", name: "USD* Junior" }] }));
+    vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "9.9", out_token: "USDC", minimum_out: "9.9" }));
+    const res = await chat("withdraw all my USD* junior");
+    expect(res.plan?.steps[0]).toMatchObject({ op: "vault_withdraw", amount: "all", slots: { vault: "perena-junior" } });
+  });
+
+  it("a yield request naming no product compares every product in its own measure and builds nothing", async () => {
+    vi.spyOn(mcp, "farmMarkets").mockImplementation(async () => ({ markets: [{ symbol: "kUSDC", underlying: "USDC", metrics_available: true, supply_apy_fraction: "0.051" }] }));
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => list);
+    const res = await chat("where should I put my USDC for the best yield?");
+    expect(res.kind).toBe("answer");
+    const table = JSON.stringify(res.answer?.tables);
+    expect(table).toContain("Vanna Earn");
+    expect(table).toContain("APR");
+    expect(table).toContain("Kamino farm");
+    expect(table).toContain("live APY");
+    expect(table).toContain("ETH Basis");
+    expect(table).toContain("no data yet");
+    expect(buildCalls()).toHaveLength(0);
+    expect((await chat("I want passive income")).kind).toBe("answer");
+  });
+
+  it("Gemini gets one product guide and the comparison tool, in both prompts", async () => {
+    const { systemPrompt } = await import("../investigation/prompt");
+    const { READ_TOOL_NAMES } = await import("../investigation/catalog");
+    const { ROUTER_SYSTEM } = await import("../vertex");
+    for (const text of [systemPrompt(), ROUTER_SYSTEM]) {
+      expect(text).toContain("WHICH PRODUCT: FOUR WAYS TO EARN");
+      expect(text).toContain('"Kamino vault" means the Kamino farm');
+    }
+    for (const tool of ["compare_yield", "get_vaults", "get_vault_positions", "preview_vault"]) expect(READ_TOOL_NAMES.has(tool)).toBe(true);
+  });
+
+  it("the firewall lets vault names through (ETH basis, USD*) and still refuses an unknown token", async () => {
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => list);
+    expect((await chat("what is the share price of the META basis vault?")).kind).toBe("answer");
+    expect(["refused", "blocked"]).toContain((await chat("buy 5 BONK")).kind);
+    expect(buildCalls()).toHaveLength(0);
   });
 });
 

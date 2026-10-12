@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import type { Venue } from "./types";
 import type { ReadCall, ReadLeg, WriteIntent, WriteOp } from "./intent";
-import { PERP_OPS } from "./intent";
+import { PERP_OPS, VAULT_NAMES, VAULT_OPS, type VaultId } from "./intent";
 
 export type Op = WriteOp | "report";
 export type SlotValue = string | number | boolean | null;
@@ -52,6 +52,10 @@ export const VENUE_BY_OP: Record<Op, Venue> = {
   perp_close: "perps",
   perp_withdraw: "perps",
   perp_register: "perps",
+  // The vaults live on the app's Farm page.
+  vault_deposit: "farm",
+  vault_withdraw: "farm",
+  vault_move_shares: "farm",
   report: "other",
 };
 
@@ -59,7 +63,7 @@ export const VENUE_BY_OP: Record<Op, Venue> = {
 export const RISK_INCREASING: ReadonlySet<Op> = new Set<Op>(["borrow", "withdraw", "swap", "perp_open"]);
 
 /** Ops that touch the margin account (need one, and a health read before/after). */
-export const MARGIN_OPS: ReadonlySet<Op> = new Set<Op>(["deposit", "withdraw", "borrow", "repay", "farm_deposit", "farm_redeem", "close_account", "perp_open", "perp_close", "perp_withdraw", "perp_register"]);
+export const MARGIN_OPS: ReadonlySet<Op> = new Set<Op>(["deposit", "withdraw", "borrow", "repay", "farm_deposit", "farm_redeem", "close_account", "perp_open", "perp_close", "perp_withdraw", "perp_register", "vault_deposit", "vault_withdraw", "vault_move_shares"]);
 
 function canonicalSlots(slots: Slots): Array<[string, SlotValue]> {
   return Object.entries(slots)
@@ -136,6 +140,18 @@ export function labelFor(s: StepSpec): string {
         : `Close your ${String(s.slots.market)}-PERP position`;
     case "perp_withdraw":
       return s.amount && s.amount !== "all" ? `Move ${s.amount} USDC from Phoenix back to your margin account` : "Move your USDC from Phoenix back to your margin account";
+    case "vault_deposit": {
+      const v = VAULT_NAMES[s.slots.vault as VaultId]?.name ?? String(s.slots.vault);
+      return s.slots.vault === "basis-sol" ? `Deposit ${s.amount ?? ""} USDC from your wallet into ${v}` : `Deposit ${s.amount ?? ""} USDC from your margin account into ${v}`;
+    }
+    case "vault_withdraw": {
+      const v = VAULT_NAMES[s.slots.vault as VaultId];
+      return s.amount && s.amount !== "all"
+        ? `Withdraw ${s.amount} ${v?.symbol ?? ""} shares from ${v?.name ?? String(s.slots.vault)} to USDC`
+        : `Withdraw all your ${v?.name ?? String(s.slots.vault)} shares to USDC`;
+    }
+    case "vault_move_shares":
+      return `Move your ${VAULT_NAMES[s.slots.vault as VaultId]?.name ?? String(s.slots.vault)} shares from the wallet into your margin account`;
     case "create_account":
       return "Open your margin account";
     case "close_account":
@@ -197,6 +213,60 @@ export function providerName(provider: string | null | undefined): string {
   return provider === "titan" ? "Titan" : "Jupiter";
 }
 
+/**
+ * The balances a planned step changes, as "place:ASSET" keys (wallet, margin, debt, earn, farm), or "*" for a step
+ * that may change any of them (perps, vaults, account steps). Used to tell whether a later percentage can be sized now.
+ */
+export function balancesTouched(s: StepSpec): string[] {
+  const a = String(s.asset ?? "");
+  switch (s.op) {
+    case "deposit":
+    case "withdraw":
+      return [`wallet:${a}`, `margin:${a}`];
+    case "earn_supply":
+    case "earn_redeem":
+      return [`wallet:${a}`, `earn:${a}`];
+    case "farm_deposit":
+    case "farm_redeem":
+      return [`margin:${a}`, `farm:${a}`];
+    case "borrow":
+      return [`margin:${a}`, `debt:${a}`];
+    case "repay":
+      return [`debt:${a}`, `${s.slots.source === "margin" ? "margin" : "wallet"}:${a}`];
+    case "swap": {
+      const place = s.slots.mode === "margin" ? "margin" : "wallet";
+      return [`${place}:${a}`, `${place}:${String(s.slots.to_asset ?? "")}`];
+    }
+    default:
+      return ["*"];
+  }
+}
+
+/**
+ * The balance a percentage in this write is a share of ("place:ASSET"), or null when it depends on the whole account
+ * (a borrow's safe size moves with every earlier step).
+ */
+export function percentBalance(w: WriteIntent): string | null {
+  const a = String(w.asset ?? "");
+  switch (w.op) {
+    case "deposit":
+    case "earn_supply":
+      return `wallet:${a}`;
+    case "swap":
+      return `${w.source === "margin" ? "margin" : "wallet"}:${a}`;
+    case "withdraw":
+      return `margin:${a}`;
+    case "earn_redeem":
+      return `earn:${a}`;
+    case "farm_redeem":
+      return `farm:${a}`;
+    case "repay":
+      return `debt:${a}`;
+    default:
+      return null;
+  }
+}
+
 export function stepFromWrite(w: WriteIntent, amount: string | null): StepSpec {
   const slots: Slots = {};
   if (w.op === "swap") {
@@ -217,6 +287,10 @@ export function stepFromWrite(w: WriteIntent, amount: string | null): StepSpec {
     return { kind: "write", op: w.op, asset: null, amount: null, slots };
   }
   if (w.op === "perp_register") return { kind: "write", op: w.op, asset: null, amount: null, slots };
+  if (VAULT_OPS.has(w.op)) {
+    slots.vault = w.vault ?? null;
+    return { kind: "write", op: w.op, asset: null, amount: w.op === "vault_move_shares" ? (amount ?? "all") : amount, slots };
+  }
   return { kind: "write", op: w.op, asset: w.asset, amount, slots };
 }
 
@@ -251,6 +325,12 @@ export function validateSteps(steps: StepSpec[]): string | null {
     if (s.kind === "read" && s.op !== "report") return "Unsupported read step.";
     if (s.kind === "read" && s.slots.report === "reads" && !readLegOf(s)) return "A step that shows information is malformed.";
     if (s.kind === "write" && s.op === "report") return "A report is not a write.";
+    if (s.kind === "write" && VAULT_OPS.has(s.op as WriteOp)) {
+      // Vaults name a vault, not an asset: a deposit is USDC, a withdrawal shares (or all).
+      if (!s.slots.vault) return "A vault step is missing its vault.";
+      if (s.op === "vault_deposit" && !s.amount) return "A vault deposit is missing its USDC amount.";
+      continue;
+    }
     if (s.kind === "write" && PERP_OPS.has(s.op as WriteOp)) {
       // Perps name a market, not an asset; a close and the registration carry no amount.
       if ((s.op === "perp_open" || s.op === "perp_close") && !s.slots.market) return "A perps step is missing its market.";

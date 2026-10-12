@@ -122,6 +122,8 @@ export interface PhoenixMarketState {
   markTicks: bigint;
   cumulativeFunding: bigint;
   isolatedOnly: boolean;
+  /** Same reopen/after-hours bits enforced by the Basis deposit contract. */
+  afterHours?: boolean;
 }
 
 /** Decodes the perp asset map (`PerpAssetMap`): 48-byte header, 1584 bytes per asset. */
@@ -142,6 +144,7 @@ export function decodePerpAssetMap(data: Buffer): PhoenixMarketState[] {
       markTicks: data.readBigUInt64LE(meta + 24),
       cumulativeFunding: data.readBigInt64LE(meta + 1312),
       isolatedOnly: data[meta + 1208] !== 0,
+      afterHours: (data[base + 1472] & 0b110) !== 0,
     });
   }
   return markets;

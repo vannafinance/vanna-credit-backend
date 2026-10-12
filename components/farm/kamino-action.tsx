@@ -246,7 +246,7 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
             </div>
             <div className="kv">
               <span>Est. receipt received <Info text="Estimated from the reserve's current exchange rate, rounded down to receipt-token precision. The final amount may change slightly when the transaction executes." /></span>
-              <span aria-live="polite">{rateQuery.isFetching && !rateQuery.data ? "Loading…" : estimatedReceipts !== null ? `≈ ${estimatedReceipts} ${pool.receiptSymbol}` : "Unavailable"}</span>
+              <span aria-live="polite">{rateQuery.isFetching && !rateQuery.data ? "Loading…" : estimatedReceipts !== null ? `≈ ${estimatedReceipts} ${pool.receiptSymbol}` : `≈ 0 ${pool.receiptSymbol}`}</span>
             </div>
             <div className="kv">
               <span>APY</span>

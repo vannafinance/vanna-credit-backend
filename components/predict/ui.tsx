@@ -1,44 +1,52 @@
 "use client";
 
 /**
- * Predict (BETA) small views and formatters — ports of the design's predict.js helpers
- * (cents format, tiles, cells, key/value rows, event badges, quick Yes/No buttons, toast).
- * UI only: every number comes from the in-memory sample in lib/predict-sample.ts.
+ * Predict small views and formatters: ports of the V4 design's predict.js helpers (cents format,
+ * tiles, cells, key/value rows, event artwork / team logos, source badges, side tags, quick Yes/No
+ * buttons, pool-balance bar). Every number comes from the real World data (`/api/predict/*`);
+ * an unpriced outcome (no World trade yet) shows "No price" and cannot be bought.
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { IC } from "@/components/v3/icons";
+import { IC, Icon, VMark } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
 import { nf, pct, usd } from "@/components/v3/format";
-import {
-  RATE, lab, posIn, pmx, yourApy, predictHref, usePredictStore,
-  type Outcome, type PredictEvent, type Side, type Cat,
-} from "@/lib/predict-sample";
+import { canTrade, isDraw, lab, mainOuts, predictHref } from "@/lib/predict/view";
+import type { Cat, PredictEvent, PredictOutcome as Outcome, Side } from "@/lib/predict/types";
 
 // ---------------------------------------------------------------------------------------------
 // Formatters (design predict.js)
 // ---------------------------------------------------------------------------------------------
 const r1 = (c: number) => Math.round(c * 10) / 10;
 const frac = (c: number) => Math.abs(r1(c) - Math.round(r1(c))) > 1e-9;
-/** One cents format: "95¢", tenths only when there are tenths ("0.8¢", "99.3¢"). */
-export const cf = (c: number) => `${nf(r1(c), frac(c) ? 1 : 0)}¢`;
+/** One cents format: "95¢", tenths only when there are tenths ("0.8¢", "99.3¢"); "No price" when unpriced. */
+export const cf = (c: number | null | undefined) => (c == null ? "No price" : `${nf(r1(c), frac(c) ? 1 : 0)}¢`);
 /** Both sides of a pair, same decimals. */
-export const cpair = (a: number, b: number): [string, string] => {
-  const d = frac(a) || frac(b) ? 1 : 0;
-  return [`${nf(r1(a), d)}¢`, `${nf(r1(b), d)}¢`];
+export const cpair = (a: number | null, b: number | null): [string, string] => {
+  const d = (a != null && frac(a)) || (b != null && frac(b)) ? 1 : 0;
+  return [a == null ? "No price" : `${nf(r1(a), d)}¢`, b == null ? "No price" : `${nf(r1(b), d)}¢`];
 };
-/** Chance: "<1%" below one percent. */
-export const pc = (v: number) => `${v > 0 && v < 1 ? "<1" : nf(v, 0)}%`;
+/** Chance: "<1%" below one percent; "N/A" when the outcome has no price. */
+export const pc = (v: number | null | undefined) => (v == null ? "N/A" : `${v > 0 && v < 1 ? "<1" : nf(Math.min(100, v), 0)}%`);
 /** APY: two decimals (only "up to" figures use one). */
 export const p2 = (v: number) => pct(v, 2);
 /** Earn's compact format ($17.45K). */
 export const k2 = (n: number) => (Math.abs(n) >= 1e3 ? `$${nf(n / 1e3, 2)}K` : usd(n));
 /** Shares: two decimals under 1,000. */
 export const shf = (n: number) => nf(n, Math.abs(n) >= 1000 ? 0 : 2);
+/** Paired share 0..1 as "69%". */
+export const pp = (v: number) => `${nf(Math.round(v * 100), 0)}%`;
 /** Parse a typed amount. */
 export const parseAmt = (s: string) => {
   const n = parseFloat(String(s).replace(/[^0-9.]/g, ""));
   return Number.isFinite(n) ? n : 0;
+};
+/** Keep digits and one dot, two decimals at most (the design's `cleanAmt`). */
+export const cleanAmt = (raw: string) => {
+  let v = raw.replace(/[^0-9.]/g, "");
+  const i = v.indexOf(".");
+  if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, "").slice(0, 2);
+  return v;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -57,62 +65,34 @@ export const PIC = {
   chart: sv(14, <path d="M4 4v16h16M7 15l4-4 3 3 5-6" />),
   grid: sv(14, <><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></>),
   back: sv(14, <path d="M19 12H5M11 6l-6 6 6 6" />),
-  link: sv(16, <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />),
+  plus: sv(14, <path d="M12 5v14M5 12h14" />),
+  x: sv(14, <path d="M6 6l12 12M18 6L6 18" />),
+  list: sv(14, <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />),
 };
 export type CatKey = "trending" | Cat | "all";
 export const CATS: [CatKey, string, ReactNode][] = [
   ["trending", "Trending", PIC.flame], ["crypto", "Crypto", PIC.btc], ["sports", "Sports", PIC.trophy],
   ["politics", "Politics", PIC.landmark], ["economics", "Economics", PIC.chart], ["all", "All", PIC.grid],
 ];
-export const CATN: Record<Cat, string> = { crypto: "Crypto", sports: "Sports", politics: "Politics", economics: "Economics" };
+export const CATN: Record<Cat, string> = { crypto: "Crypto", sports: "Sports", politics: "Politics", economics: "Economics", other: "Culture" };
 /** Chart / party colours (readable on white and on #161616). */
 export const PAL = ["#703ae6", "#14b8a6", "#f59e0b", "#3b82f6"];
-export const DRAW = "#9ca3af";
+export const DRAW = "#6b7280";
 export const INFO = {
-  vault: "Today’s value of your shares that are paired with the other side and lent as USDC in the Earn pool (still shares: worth $0 if your side loses).",
-  apy: "Yearly yield on your shares while you wait: the smaller side of a market earns the full USDC Earn rate, the larger side only on its matched part.",
-  earned: "Yield received so far, paid as extra shares of your side and worth $0 if that side loses.",
-  matched: "The part of your shares paired with the other side: only this part is lent and earns.",
-  free: "USDC in the Earn pool that is not lent out right now, which a sell can withdraw at once.",
-  pays: "What these shares pay if your side wins: $1 each, yield shares included.",
-  paysMax: "The most all your positions can pay together, counting only your best case where just one outcome can win.",
-  split: "A sell first uses this market’s unmatched shares, then withdraws $1 of USDC per remaining share from the Earn pool and turns it back into your side.",
-  newUsd: "New USDC this buy adds to the Earn pool, $1 per new Yes+No pair; buying the larger side adds none.",
-  estYield: "What your matched shares earn per month at the USDC Earn rate, paid in extra shares of your side.",
-  small: "The side with fewer shares in the vault is fully matched, so it earns the full USDC Earn rate.",
-  buyStep: "Your USDC buys the shares on World at the best prices in the order book.",
-  vaultStep: "The shares go into Vanna’s yield vault, where matched Yes+No pairs are merged into USDC.",
-  lent: "USDC lent in the Earn pool from this event’s matched Yes+No pairs, $1 per pair.",
-  gap: "How much more a share costs on Vanna than it sells for on Polymarket.",
-  moveCost: "How many fewer shares you hold after the move, and what they are worth today.",
-  slip: "How far each fill is from the best price; the move sets a limit just above this and reverts if prices move further.",
-  rate: "The USDC Earn pool’s supply APY (a sample rate), which the smaller side of each market earns in full.",
-  unlisted: "This market is not listed on Vanna, so it stays on Polymarket.",
-  sideApy: "Yearly yield for this side of the market at today’s vault balance.",
+  inPool: "Today’s value of your shares that are paired and earning in Vanna’s USDC pool. They are still Yes or No shares, worth $0 if your side loses.",
+  apy: "Yearly yield on your shares in Vanna’s pool while you wait for the result. Only paired shares earn.",
+  earned: "Yield so far. It is paid in extra shares of your side, so it pays out only if your side wins.",
+  paired: "Your shares earn when they can be paired with the opposite side in this market’s pool. Unpaired shares wait until more of the other side arrives.",
+  pays: "What these shares pay if your side wins: $1 each, extra yield shares included.",
+  paysMax: "The most all your positions can pay together. Where only one outcome can win, only your best case there counts.",
+  estYield: "What your paired shares earn per month at today’s USDC pool rate, paid in extra shares of your side.",
+  rate: "Supply APY of Vanna’s USDC pool, live from the chain. Paired shares earn it.",
+  pairs: "Each pair is one Yes and one No share from this market. Each pair is $1 lent in Vanna’s USDC pool.",
+  sideApy: "Yearly yield for shares on this side at today’s pool balance.",
+  slip: "What each outcome pays if it happens, for the amounts in this slip.",
+  notPooled: "This market is not in Vanna’s pool yet, so shares bought here stay in your wallet and do not earn.",
+  prices: "Prices come from the latest trades on World. A buy fills at the ask, a sell at the bid.",
 };
-
-/** "Preview — sample data, no transactions" note shown wherever an action happens. */
-export function PreviewNote({ className = "" }: { className?: string }) {
-  return (
-    <p className={`pd-prevnote ${className}`}>
-      {IC.warn}
-      <span>
-        <b>Preview</b> — sample data, no transactions. Actions only change this page until you reload.
-      </span>
-    </p>
-  );
-}
-
-/** The page toast (sample-state confirmations). */
-export function PredictToast() {
-  const msg = usePredictStore((s) => s.toast);
-  if (!msg) return null;
-  return (
-    <div className="toast" role="status" aria-live="polite">
-      {msg}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------------------------
 // Small views
@@ -143,31 +123,60 @@ export const KI = ({ k, tip }: { k: ReactNode; tip: string }) => (
     {k} <Info text={tip} />
   </>
 );
+/** Progress meter 0..1. */
+export const Meter = ({ v, cls = "" }: { v: number; cls?: string }) => (
+  <span className={`pd-meter ${cls}`}>
+    <i style={{ width: `${Math.max(0, Math.min(100, v * 100)).toFixed(1)}%` }} />
+  </span>
+);
 
-/** Event (or party) avatar: the event's short code, or a team's abbreviation. */
-export function IcFor({ e, o, cls = "" }: { e: PredictEvent; o?: Outcome | null; cls?: string }) {
-  const t = e.type === "match" && o && o.ab ? (o.ab === "DRAW" ? "X" : o.ab) : e.ic;
-  return <span className={`pd-ic ${cls}`}>{t}</span>;
+/** World artwork URL, if any. */
+// eslint-disable-next-line @next/next/no-img-element
+const Img = ({ src }: { src: string }) => <img src={src} alt="" aria-hidden="true" loading="lazy" draggable={false} />;
+
+/** Event avatar: World's artwork, else the event's short code. */
+export function EvIc({ e, cls = "" }: { e: PredictEvent; cls?: string }) {
+  return <span className={`pd-ic ${cls}`}>{e.image ? <Img src={e.image} /> : e.ic}</span>;
 }
-/** Two-party badge (both teams' avatars). */
-export function VsBadge({ e, cls = "" }: { e: PredictEvent; cls?: string }) {
+
+/** Colour of a party (draw grey, otherwise the palette by position). */
+export const partyCol = (e: PredictEvent, o: Outcome) => {
+  if (isDraw(o)) return DRAW;
+  const ps = mainOuts(e).filter((x) => !isDraw(x));
+  return PAL[Math.max(0, ps.indexOf(o)) % PAL.length];
+};
+/** Team logo: World's team artwork when it has one, else a coloured disc with the initial. */
+export function TeamLogo({ e, o, cls = "" }: { e: PredictEvent; o: Outcome; cls?: string }) {
+  const art = o.image && !/\/img\//.test(o.image) ? o.image : null;
   return (
-    <span className={`pd-vs ${cls}`}>
-      {e.outs
-        .filter((o) => !o.grp && o.k !== "draw")
-        .map((o) => (
-          <span key={o.k} className="pd-ic">
-            {o.ab}
-          </span>
-        ))}
+    <span className={`pd-team ${cls} ${art ? "img" : ""}`} style={{ ["--t" as string]: partyCol(e, o) }} aria-hidden="true">
+      {art ? <Img src={art} /> : isDraw(o) ? "=" : o.name.slice(0, 1).toUpperCase()}
     </span>
   );
 }
+/** Two-party badge (both teams' logos). */
+export function VsBadge({ e, cls = "" }: { e: PredictEvent; cls?: string }) {
+  const ps = mainOuts(e).filter((o) => !isDraw(o)).slice(0, 2);
+  return (
+    <span className={`pd-vs ${cls}`}>
+      {ps.map((o) => (
+        <TeamLogo key={o.k} e={e} o={o} />
+      ))}
+    </span>
+  );
+}
+/** Event logo: the two teams of a game, else the event artwork. */
+export const EvLogo = ({ e, cls = "" }: { e: PredictEvent; cls?: string }) =>
+  e.type === "match" && mainOuts(e).filter((o) => !isDraw(o)).length === 2 ? <VsBadge e={e} cls={cls} /> : <EvIc e={e} cls={cls} />;
+
+/** Same text as the tag (World tags some events "Politics" in the Politics category): shown once. */
+export const catDup = (e: PredictEvent) => e.tag.trim().toLowerCase() === CATN[e.cat].toLowerCase();
+
 export function Tags({ e }: { e: PredictEvent }) {
   return (
     <div className="pd-tags">
       <span className="pd-tag">{e.tag}</span>
-      <span className="pd-cat">{CATN[e.cat]}</span>
+      {!catDup(e) && <span className="pd-cat">{CATN[e.cat]}</span>}
       {e.live && <span className="pd-live">LIVE</span>}
       {e.when && <span className="pd-when">{e.when}</span>}
     </div>
@@ -175,31 +184,72 @@ export function Tags({ e }: { e: PredictEvent }) {
 }
 /** Quick Yes / No buy button on a card: opens the event with that market and side selected. */
 export function QBtn({ e, o, s }: { e: PredictEvent; o: Outcome; s: Side }) {
+  const price = cpair(o.y, o.n)[s === "yes" ? 0 : 1];
+  if (!canTrade(o))
+    return (
+      <button type="button" className={s === "yes" ? "pd-y" : "pd-n"} disabled aria-label={`${lab(o, s)}: no price yet`} onClick={(ev) => ev.stopPropagation()}>
+        <span>{lab(o, s)}</span>
+      </button>
+    );
   return (
-    <Link
-      href={predictHref(e.id, o.k, s)}
-      className={s === "yes" ? "pd-y" : "pd-n"}
-      aria-label={`Buy ${lab(o, s)}: ${o.name}`}
-      onClick={(ev) => ev.stopPropagation()}
-    >
+    <Link href={predictHref(e.id, o.k, s)} className={s === "yes" ? "pd-y" : "pd-n"} aria-label={`Buy ${lab(o, s)}: ${o.name}`} onClick={(ev) => ev.stopPropagation()}>
       <span>{lab(o, s)}</span>
-      <span className="pd-op">{cpair(o.y, o.n)[s === "yes" ? 0 : 1]}</span>
+      <span className="pd-op">{price}</span>
     </Link>
   );
 }
-/** "Earning x%" when the account holds the event, else "Earn up to" the Earn rate. */
-export function EarnChip({ e }: { e: PredictEvent }) {
-  const mine = posIn(e).map(pmx);
+/** "Earning x%" when the account holds the event in the pool, else "Earn up to" the pool rate (pooled markets only). */
+export function EarnChip({ mine, rate }: { mine: number | null; rate: number }) {
   return (
     <span className="pd-earn">
       {IC.coins}
-      {mine.length ? `Earning ${p2(yourApy(mine))}` : `Earn up to ${pct(RATE(), 1)}`}
+      {mine !== null ? `Earning ${p2(mine)}` : `Earn up to ${pct(rate, 1)}`}
     </span>
   );
 }
-/** Colour of a party in a match (draw grey; the last of 3 parties teal). */
-export const partyCol = (e: PredictEvent, o: Outcome) => {
-  const ps = e.outs.filter((x) => !x.grp);
-  const i = ps.indexOf(o);
-  return o.k === "draw" ? DRAW : PAL[i === ps.length - 1 && ps.length > 2 ? 1 : Math.max(0, i)];
-};
+const ChainT = () => <span className="pd-chain-t">Solana</span>;
+/** Source badges: World (shares in the wallet), Vanna (in Vanna's pool), Polymarket (not integrated). */
+export function SrcBadge({ src }: { src: "vanna" | "world" | "polymarket" }) {
+  if (src === "world")
+    return (
+      <span className="pd-sb world">
+        <Icon sym="WORLD" className="pd-i14" />
+        World
+        <ChainT />
+      </span>
+    );
+  if (src === "polymarket")
+    return (
+      <span className="pd-sb poly">
+        <Icon sym="POLY" className="pd-i14" />
+        Polymarket<span className="pd-chain-t">Polygon</span>
+      </span>
+    );
+  return (
+    <span className="pd-sb vanna">
+      <VMark size={13} />
+      Vanna
+      <ChainT />
+    </span>
+  );
+}
+export const SideTag = ({ s, L }: { s: Side; L: string }) => <span className={`pd-sd ${s}`}>{L.toUpperCase()}</span>;
+
+/** Pool balance: Yes vs No shares in the pool, the paired part of each side filled. */
+export function PoolBar({ o }: { o: Outcome }) {
+  const y = o.pool.yes;
+  const n = o.pool.no;
+  const tot = y + n || 1;
+  const m = Math.min(y, n);
+  const empty = y + n === 0;
+  return (
+    <div className="pd-pb" role="img" aria-label={`Yes ${nf(y)}, No ${nf(n)}, ${nf(m)} pairs`}>
+      <span className="y" style={{ width: `${empty ? 50 : ((y / tot) * 100).toFixed(2)}%` }}>
+        <i style={{ width: `${(y ? (m / y) * 100 : 0).toFixed(2)}%` }} />
+      </span>
+      <span className="n" style={{ width: `${empty ? 50 : ((n / tot) * 100).toFixed(2)}%` }}>
+        <i style={{ width: `${(n ? (m / n) * 100 : 0).toFixed(2)}%` }} />
+      </span>
+    </div>
+  );
+}

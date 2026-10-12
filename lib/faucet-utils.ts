@@ -30,3 +30,26 @@ export async function runFaucet(symbol: string, address: string): Promise<Faucet
     return { ok: false, symbol, error: error instanceof Error ? error.message : "Faucet request failed" };
   }
 }
+
+/** CASH (World's prediction-market dollar, Token-2022) is not a Vanna registry token, so it has its own row. */
+export const CASH_FAUCET_AMOUNT = 1000;
+
+/**
+ * Tops up CASH for Predict through POST /api/predict/faucet (fork cheatcodes, also adds a little
+ * SOL for fees). Same result shape as {@link runFaucet}.
+ */
+export async function runCashFaucet(address: string): Promise<FaucetResult> {
+  const symbol = "CASH";
+  try {
+    const res = await fetch("/api/predict/faucet", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address, amount: CASH_FAUCET_AMOUNT }),
+    });
+    const body = await res.json();
+    if (!res.ok || !body?.ok) return { ok: false, symbol, error: body?.error ?? `Faucet failed (${res.status})` };
+    return { ok: true, symbol, added: String(body.added ?? CASH_FAUCET_AMOUNT), balance: body.cash != null ? String(body.cash) : undefined };
+  } catch (error) {
+    return { ok: false, symbol, error: error instanceof Error ? error.message : "Faucet request failed" };
+  }
+}

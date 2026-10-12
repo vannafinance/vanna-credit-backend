@@ -1,255 +1,243 @@
 "use client";
 
 /**
- * Predict (BETA) — event page (design predict.js `viewEvent`): head card (tiles + chart), the
- * outcome rows, "Your position", the Vault / Order book / Rules / Activity tabs and the sticky
- * trade panel. Route id = `<eventId>[~<marketId>[~yes|no]]` (a market id opens that market
- * selected, the panel on Buy with the default amount). UI only: sample data, in-memory actions.
+ * Predict event page (design predict.js `viewEvent`, V4): head card (tiles; price history is not
+ * indexed, so a quiet note replaces the chart), the outcome rows (Buy Yes / Buy No, or +/✓ while
+ * the bet slip is on), "Your position" (one collapsible row per position: side, outcome, status,
+ * shares, value; expanded: paired gauge, tiles, Buy more / Sell; the source badge once when every
+ * position shares it), the Earning / Prices / Rules / Activity tabs and the sticky trade panel.
+ * Route id = `<eventId>[~<marketId>[~yes|no]]`: a market id opens that market selected, the panel
+ * on Buy with the default amount. Real data: GET /api/predict/events/:id (fresh prices and pool
+ * balances), the wallet's positions and its own trades, the USDC pool rate.
  */
 import "./predict-v3.css";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
-import { IC, Icon, VMark } from "@/components/v3/icons";
+import { IC, Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
-import { nf, pct, sUsd, spct, usd, usdC } from "@/components/v3/format";
+import { nf, pct, sUsd, usd, usdC } from "@/components/v3/format";
+import { usePredictActivity, usePredictEvent } from "@/hooks/use-predict";
+import { timeAgo } from "@/lib/predict/math";
+import { useStartEarning, usePredictAccount } from "./positions";
 import {
-  DEF_AMT, EVM, OUT, PX, RATE, ask, bid, byChance, cancelQueued, defaultOut, hash, heldOf, lab, lentOf, levels, nl, openOuts, pairsOf,
-  pmx, posIn, posOf, predictToast, rng, sampleBuy, sampleSell, side, toggleTight, usePredictSample, yl,
-  type Outcome, type PredictEvent, type Side,
-} from "@/lib/predict-sample";
-import { CATN, INFO, IcFor, VsBadge, Tile, Cell, Kv, PIC, PredictToast, cf, cpair, p2, parseAmt, pc, shf } from "./ui";
-import { EventChart } from "./charts";
-import { TradePanel, type PanelActions, type PanelState } from "./trade-panel";
-import { ImportSheet } from "./import-sheet";
+  DEF_AMT, LEG_AMT, MAX_TRADE_LEGS, ask, bid, byChance, canTrade, defaultOut, isDraw, lab, mName, mainOuts, nl, outOf, pairsIn, pairsOf, parseRouteId, poolSide, pooled, yl,
+} from "@/lib/predict/view";
+import type { PredictEvent, PredictOutcome as Outcome, PredictPosition, Side } from "@/lib/predict/types";
+import { CATN, Cell, catDup, EvLogo, INFO, Kv, Meter, PIC, PoolBar, SideTag, SrcBadge, TeamLogo, Tile, cf, cpair, p2, pc, pp, shf } from "./ui";
+import { TradePanel, type PanelState, heldOf } from "./trade-panel";
+import { LinkedSheet } from "./linked-sheet";
 
-type Tab = "vault" | "book" | "rules" | "activity";
+type Tab = "earning" | "prices" | "rules" | "activity";
 
-function Tiles({ e, o }: { e: PredictEvent; o: Outcome }) {
-  const earnT = <Tile k={<>Passive yield <Info text={INFO.apy} /></>} v={`up to ${pct(RATE(), 1)}`} cls="e" />;
-  const ops = openOuts(e);
-  if (e.type === "binary") {
+function Tiles({ e, o, rate }: { e: PredictEvent; o: Outcome; rate: number }) {
+  const earnT = e.outs.some(pooled) ? <Tile k={<>Earn while you wait <Info text={INFO.apy} /></>} v={`up to ${pct(rate, 1)}`} cls="e" /> : <Tile k="Open interest" v={usdC(e.oi)} />;
+  const ms = mainOuts(e);
+  if (e.outs.length === 1) {
     const [py, pn] = cpair(o.y, o.n);
-    return <><Tile k="Yes chance" v={pc(o.y)} cls="big" /><Tile k="Buy Yes" v={py} cls="y" /><Tile k="Buy No" v={pn} cls="n" />{earnT}</>;
-  }
-  if (e.type === "updown") {
-    const now = PX[e.asset ?? "SOL"];
-    const open = e.open ?? now;
-    const ch = (now / open - 1) * 100;
+    if (e.type === "updown")
+      return (
+        <>
+          <Tile k={`${yl(o)} chance`} v={pc(o.y)} cls="big" />
+          <Tile k={`Buy ${yl(o)}`} v={py} cls="y" />
+          <Tile k="Closes in" v={e.countdown || "Closed"} sub={e.ends || undefined} />
+          {earnT}
+        </>
+      );
     return (
       <>
-        <Tile k="Up chance" v={pc(o.y)} cls="big" />
-        <Tile k={`${e.asset} now`} v={`$${nf(now, 2)}`} cls={now >= open ? "y" : "n"} sub={`open $${nf(open, 2)} · ${spct(ch, 2)}`} />
-        <Tile k="Closes in" v={e.countdown} sub={e.ends} />
+        <Tile k={`${yl(o)} chance`} v={pc(o.y)} cls="big" />
+        <Tile k={`Buy ${yl(o)}`} v={py} cls="y" />
+        <Tile k={`Buy ${nl(o)}`} v={pn} cls="n" />
         {earnT}
       </>
     );
   }
   if (e.type === "match") {
-    const ps = e.outs.filter((x) => !x.grp);
-    return <>{ps.map((x) => <Tile key={x.k} k={x.name} v={pc(x.y)} cls="big" />)}{ps.length < 3 && <Tile k="Volume" v={usdC(e.vol)} />}{earnT}</>;
+    const ps = ms.slice(0, 3);
+    return (
+      <>
+        {ps.map((x) => (
+          <Tile key={x.k} k={<><TeamLogo e={e} o={x} cls="xs" />{isDraw(x) ? "Draw" : x.name}</>} v={pc(x.y)} cls="big" />
+        ))}
+        {ps.length < 3 && <Tile k="Volume, 24h" v={usdC(e.vol)} />}
+        {earnT}
+      </>
+    );
   }
-  if (e.type === "strike") return <><Tile k={`${e.asset} now`} v={`$${nf(PX[e.asset ?? "BTC"], 0)}`} cls="big" /><Tile k="Ends in" v={e.countdown} sub={e.ends} /><Tile k="Volume" v={usdC(e.vol)} />{earnT}</>;
-  if (e.type === "date") {
-    const nx = ops[0];
-    return <><Tile k={`By ${nx.name}`} v={pc(nx.y)} cls="big" /><Tile k="Volume" v={usdC(e.vol)} /><Tile k="Last date" v={e.ends} />{earnT}</>;
-  }
-  const lead = ops.slice().sort(byChance)[0];
-  return <><Tile k="Leader" v={lead.name} sub={`${pc(lead.y)} chance`} /><Tile k="Volume" v={usdC(e.vol)} /><Tile k="Ends" v={e.ends} />{earnT}</>;
+  const lead = e.outs.slice().sort(byChance)[0];
+  return (
+    <>
+      <Tile k="Leader" v={lead.name} sub={`${pc(lead.y)} chance`} />
+      <Tile k="Volume, 24h" v={usdC(e.vol)} />
+      <Tile k="Open interest" v={usdC(e.oi)} />
+      {earnT}
+    </>
+  );
 }
 
-function OutRow({ e, o, on, st, onRow, onPick }: { e: PredictEvent; o: Outcome; on: boolean; st: PanelState; onRow: () => void; onPick: (s: Side) => void }) {
-  const held = posIn(e).filter((p) => p.o === o.k);
-  const d = o.d || 0;
+function OutRow({ e, o, on, st, held, onRow, onPick }: { e: PredictEvent; o: Outcome; on: boolean; st: PanelState; held: PredictPosition[]; onRow: () => void; onPick: (s: Side) => void }) {
+  const leg = st.slip?.find((l) => l.k === o.k);
+  const ok = canTrade(o);
   return (
-    <div className={`pd-row ${on ? "on" : ""} ${o.res ? "res" : ""}`} onClick={o.res ? undefined : onRow}>
+    <div className={`pd-row ${on || leg ? "on" : ""}`} onClick={ok ? onRow : undefined}>
       <div className="pd-r-n">
-        {e.type === "match" && o.ab ? <IcFor e={e} o={o} cls="sm" /> : null}
+        {e.type === "match" ? <TeamLogo e={e} o={o} cls="sm" /> : null}
         <div>
           <b>{o.name}</b>
           <small className="num">
-            {o.res ? (
-              `Resolved ${o.res === "yes" ? yl(o) : nl(o)} · Vol ${usdC(o.vol)}`
-            ) : (
-              <>
-                Vol {usdC(o.vol)}
-                {held.length > 0 && (
-                  <>
-                    {" · "}
-                    <span className="pd-you">You: {held.map((p) => `${shf(p.sh + p.yld)} ${lab(o, p.side)}`).join(", ")}</span>
-                  </>
-                )}
-              </>
-            )}
+            <span>Vol {usdC(o.vol)}</span>
+            {!ok && <span>No World trades yet</span>}
+            {ok && !pooled(o) && <span>Not in Vanna&apos;s pool</span>}
+            {held.length > 0 && <span className="pd-you">You hold {held.map((p) => `${shf(p.shares)} ${p.label}`).join(" and ")}</span>}
           </small>
         </div>
       </div>
       <div className="pd-r-p num">
-        <b>
-          {o.yl && !o.res ? <i className="pd-r-l">{o.yl}</i> : null}
-          {o.res ? (o.res === "yes" ? "100%" : "0%") : pc(o.y)}
-        </b>
-        {!o.res && d ? <small className={d > 0 ? "pos" : "neg"}>{d > 0 ? "↑" : "↓"}{Math.abs(d)}</small> : null}
+        <b>{pc(o.y)}</b>
       </div>
       <div className="pd-r-b num">
-        {!o.res &&
-          (["yes", "no"] as const).map((s, i) => (
+        {(["yes", "no"] as const).map((s, i) => {
+          const sel = st.slip ? leg?.s === s : on && st.side === s && st.mode === "buy";
+          return (
             <button
               key={s}
               type="button"
-              className={`${s === "yes" ? "pd-y" : "pd-n"} ${on && st.side === s && st.mode === "buy" ? "on" : ""}`}
+              disabled={!ok}
+              className={`${s === "yes" ? "pd-y" : "pd-n"} ${sel ? "on" : ""}`}
               onClick={(ev) => {
                 ev.stopPropagation();
                 onPick(s);
               }}
             >
-              {o.yl ? "" : "Buy "}
-              {lab(o, s)} {cpair(o.y, o.n)[i]}
+              {st.slip ? (sel ? IC.check : PIC.plus) : null}
+              {ok ? `Buy ${lab(o, s)} ${cpair(o.y, o.n)[i]}` : `${lab(o, s)}: no price`}
             </button>
-          ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function VaultTab({ e, o }: { e: PredictEvent; o: Outcome }) {
-  const ops = openOuts(e);
-  const lent = lentOf(e);
-  const y = side(o, "yes");
-  const n = side(o, "no");
-  const mineV = posIn(e).map(pmx).reduce((t, m) => t + m.inVault, 0);
-  const on = ops.length > 1 ? ` · ${o.name}` : "";
-  const usdcI = <Icon sym="USDC" className="pd-i14" />;
+/**
+ * Earning tab: the selected market's pairs and pool balance, then every pooled market of the event.
+ * Markets whose pool is still empty (no Yes, no No) fold behind a "+N markets with no pool yet" toggle.
+ */
+function EarnTab({ e, o, rate }: { e: PredictEvent; o: Outcome; rate: number }) {
+  const [showEmpty, setShowEmpty] = useState(false);
+  const y = poolSide(o, "yes", rate);
+  const n = poolSide(o, "no", rate);
+  const pairs = pairsOf(o);
+  const ops = e.outs.filter(pooled);
+  if (!pooled(o) && !ops.length)
+    return <p className="pd-note sm">{INFO.notPooled} Pools open market by market.</p>;
+  // An empty pool has no pairs and nothing on either side; the selected market always stays listed.
+  const isEmpty = (x: Outcome) => pairsOf(x) <= 0 && x.pool.yes <= 0 && x.pool.no <= 0;
+  const hidden = ops.filter((x) => isEmpty(x) && x.k !== o.k);
+  const shown = showEmpty ? ops : ops.filter((x) => !hidden.includes(x));
   return (
     <>
-      <div className="pd-tiles num">
-        <Tile k={<>{usdcI}Lent from this event <Info text={INFO.lent} /></>} v={usd(lent, 0)} sub={`${nf(lent)} Yes+No pairs`} />
-        <Tile k={<>{usdcI}USDC Earn pool <Info text={INFO.rate} /></>} v={`${p2(RATE())} APY`} cls="e" sub="smaller side: full rate" />
-        <Tile k={<>{yl(o)} side{on} <Info text={INFO.sideApy} /></>} v={p2(y.apy)} cls={y.scarce ? "e" : ""} sub={`${pct(y.share * 100, 0)} matched`} />
-        <Tile k={<>{nl(o)} side{on} <Info text={INFO.sideApy} /></>} v={p2(n.apy)} cls={n.scarce ? "e" : ""} sub={`${pct(n.share * 100, 0)} matched`} />
+      <div className="pd-et">
+        <p className="pd-et-l num">
+          {e.outs.length > 1 ? `${o.name}: ` : ""}
+          {pooled(o) ? (
+            <>
+              <b>
+                {nf(pairs, pairs >= 100 ? 0 : 2)} pair{pairs === 1 ? "" : "s"} earning {p2(rate)}
+              </b>{" "}
+              in Vanna&apos;s USDC pool <Info text={INFO.pairs} />
+            </>
+          ) : (
+            <b>Not in Vanna&apos;s pool yet</b>
+          )}
+        </p>
+        {pooled(o) && (
+          <>
+            <PoolBar o={o} />
+            <div className="pd-pb-k num">
+              <span>
+                <SideTag s="yes" L={yl(o)} />
+                {nf(o.pool.yes, 2)} in pool, {y.full ? "all paired" : `${nf(y.waiting, 2)} waiting`}
+                <b className={y.full && y.mine > 0 ? "pos" : ""}>earns {p2(y.apy)}</b>
+              </span>
+              <span>
+                <SideTag s="no" L={nl(o)} />
+                {nf(o.pool.no, 2)} in pool, {n.full ? "all paired" : `${nf(n.waiting, 2)} waiting`}
+                <b className={n.full && n.mine > 0 ? "pos" : ""}>earns {p2(n.apy)}</b>
+              </span>
+            </div>
+          </>
+        )}
       </div>
-      <div className="pd-flow">
-        <span>Your Yes or No</span>
-        {IC.arrow}
-        <span>
-          <VMark size={13} />
-          Vault
-        </span>
-        {IC.arrow}
-        <span>Yes+No pairs</span>
-        {IC.arrow}
-        <span>
-          {usdcI}USDC
-        </span>
-        {IC.arrow}
-        <span className="e">Earn pool {p2(RATE())}</span>
-      </div>
-      {ops.length > 1 ? (
+      {e.outs.length > 1 && ops.length > 0 && (
         <div className="pd-vtbl">
           <div className="pd-vt-h">
             <span>Market</span>
-            <span>Yes supplied</span>
-            <span>No supplied</span>
-            <span>Lent</span>
-            <span>Yes APY</span>
-            <span>No APY</span>
+            <span>Pool balance</span>
+            <span>Pairs</span>
+            <span>
+              Yes earns <Info text={INFO.sideApy} />
+            </span>
+            <span>No earns</span>
           </div>
-          {ops.map((x) => {
-            const a = side(x, "yes");
-            const b = side(x, "no");
+          {shown.map((x) => {
+            const a = poolSide(x, "yes", rate);
+            const b = poolSide(x, "no", rate);
             return (
               <div key={x.k} className={`pd-vt-r num ${x.k === o.k ? "on" : ""}`}>
                 <span>
+                  {e.type === "match" ? <TeamLogo e={e} o={x} cls="xs" /> : null}
                   {x.name}
-                  {x.yl ? <small>Yes = {x.yl} · No = {x.nl}</small> : null}
                 </span>
-                <span>{nf(x.pool.yes)}</span>
-                <span>{nf(x.pool.no)}</span>
+                <span>
+                  <PoolBar o={x} />
+                </span>
                 <span className="pd-lent">
-                  {usdcI}
-                  {usd(pairsOf(x), 0)}
+                  <Icon sym="USDC" className="pd-i14" />
+                  {nf(pairsOf(x), pairsOf(x) >= 100 ? 0 : 2)}
                 </span>
-                <span className={a.scarce ? "pos" : ""}>{p2(a.apy)}</span>
-                <span className={b.scarce ? "pos" : ""}>{p2(b.apy)}</span>
+                <span className={a.full && a.mine > 0 ? "pos" : ""}>{p2(a.apy)}</span>
+                <span className={b.full && b.mine > 0 ? "pos" : ""}>{p2(b.apy)}</span>
               </div>
             );
           })}
-        </div>
-      ) : (
-        <div className="pd-sides num">
-          {([["yes", y], ["no", n]] as const).map(([s, d]) => (
-            <div key={s} className="pd-sidec">
-              <div className="h">
-                <span className={`pd-sd ${s}`}>{lab(o, s).toUpperCase()}</span>
-                <span className={d.scarce ? "pos" : "mut"}>{d.scarce ? "Smaller side · full rate" : `${pct(d.share * 100, 0)} matched`}</span>
-              </div>
-              <div className={`v ${d.scarce ? "e" : ""}`}>
-                {p2(d.apy)}{" "}
-                <span className="mut" style={{ fontSize: 12, fontWeight: 500 }}>
-                  APY
-                </span>
-              </div>
-              <span className="pd-meter">
-                <i style={{ width: `${(d.share * 100).toFixed(0)}%` }} />
-              </span>
-              <div className="pd-kv" style={{ marginTop: 8, fontSize: 12 }}>
-                <span>Supplied</span>
-                <span>{nf(d.mine)} shares</span>
-              </div>
-            </div>
-          ))}
+          {hidden.length > 0 && (
+            <button type="button" className="pd-vt-more" aria-expanded={showEmpty} onClick={() => setShowEmpty(!showEmpty)}>
+              {showEmpty ? "Hide markets with no pool yet" : `+${hidden.length} market${hidden.length === 1 ? "" : "s"} with no pool yet`}
+            </button>
+          )}
         </div>
       )}
-      <p className="pd-note">
-        Vanna&apos;s keeper merges pairs into USDC and lends it in the Earn pool. Yield is paid as extra shares of each side, worth $0 if that side loses.
-        {mineV ? (
-          <>
-            {" "}
-            Your matched shares:{" "}
-            <b className="num" style={{ color: "var(--pd-text)" }}>
-              {usd(mineV)}
-            </b>
-            .
-          </>
-        ) : null}
-      </p>
     </>
   );
 }
 
-function BookTab({ e, o, s }: { e: PredictEvent; o: Outcome; s: Side }) {
-  const L = lab(o, s);
-  const asks = levels(o, s, 1).slice(0, 5);
-  const bids = levels(o, s, -1).slice(0, 5);
-  const mx = Math.max(...asks.map((x) => x.q), ...bids.map((x) => x.q));
-  // Cumulative USD down each side of the book.
-  const cum = (ls: { p: number; q: number }[]) => ls.map((x, i) => ({ ...x, cum: ls.slice(0, i + 1).reduce((t, l) => t + (l.q * l.p) / 100, 0) }));
-  const askRows = cum(asks);
-  const bidRows = cum(bids);
-  const row = (x: { p: number; q: number; cum: number }, cls: string) => (
-    <div key={`${cls}${x.p}`} className={`pd-bk-r ${cls}`}>
-      <i style={{ width: `${((x.q / mx) * 100).toFixed(0)}%` }} />
-      <span>{cf(x.p)}</span>
-      <span>{nf(x.q)}</span>
-      <span>{usd(x.cum, 0)}</span>
+/** Best prices now (World's latest trades): what the panel fills at. No depth is indexed. */
+function PricesTab({ e, o }: { e: PredictEvent; o: Outcome }) {
+  const row = (s: Side) => (
+    <div className="pd-bk-r" key={s}>
+      <span>
+        <SideTag s={s} L={lab(o, s)} />
+      </span>
+      <span>{cf(ask(o, s))}</span>
+      <span>{cf(bid(o, s))}</span>
     </div>
   );
   return (
     <div className="pd-bk num">
       <div className="pd-bk-h">
-        <span>
-          {L}
-          {openOuts(e).length > 1 ? ` · ${o.name}` : ""}
-        </span>
-        <span>Shares</span>
-        <span>Total</span>
+        <span>{e.outs.length > 1 ? o.name : "Side"}</span>
+        <span>Buy at</span>
+        <span>Sell at</span>
       </div>
-      {askRows.slice().reverse().map((x) => row(x, "a"))}
-      <div className="pd-bk-m">
-        <span>Spread {cf(ask(o, s) - bid(o, s))}</span>
-        <span>Best ask {cf(ask(o, s))}</span>
+      {row("yes")}
+      {row("no")}
+      <div className="pd-kvs num">
+        <Kv k="Last trade" v={e.last || "No trades yet"} />
+        <Kv k="Open interest" v={usdC(o.oi)} />
+        <Kv k="Volume, 24h" v={usdC(o.vol)} />
       </div>
-      {bidRows.map((x) => row(x, "b"))}
-      <p className="pd-note">Sample order book (best prices across World&apos;s trading venues in the design); the panel&apos;s quotes fill against these levels. It follows the side picked in the panel.</p>
+      <p className="pd-note">{INFO.prices} The full order book is not shown yet.</p>
     </div>
   );
 }
@@ -259,181 +247,206 @@ function RulesTab({ e }: { e: PredictEvent }) {
     <div className="pd-rules">
       <p>{e.rules}</p>
       <div className="pd-kvs num">
-        <Kv k="Resolver" v={<><Icon sym="WORLD" className="pd-i16" />World operator (on-chain)</>} />
-        <Kv k="Winning share pays" v={<><Icon sym="CASH" className="pd-i16" />$1 (1 CASH), yield shares too</>} />
-        <Kv k="Losing share" v="Worth $0, yield shares too" />
+        <Kv k="Resolver" v={<><Icon sym="WORLD" className="pd-i16" />World, on-chain</>} />
+        <Kv k="Winning share pays" v={<><Icon sym="CASH" className="pd-i16" />$1 (1 CASH), extra yield shares too</>} />
+        <Kv k="Losing share" v="Worth $0, extra yield shares too" />
         <Kv k="Source" v={e.source} />
-        <Kv k="Market opened" v={e.opened} />
-        <Kv k="Ends" v={e.ends} />
+        {e.opened && <Kv k="Market opened" v={e.opened} />}
+        <Kv k="Ends" v={e.ends || "When World resolves it"} />
       </div>
     </div>
   );
 }
 
-function ActTab({ e }: { e: PredictEvent }) {
-  const r = rng(hash(`${e.id}/act`));
-  const ops = openOuts(e);
-  const rows: React.ReactNode[] = [];
-  [2, 7, 15, 33, 58, 96, 140, 210].forEach((m, i) => {
-    const o = ops[Math.floor(r() * ops.length)];
-    const s: Side = r() < 0.6 ? "yes" : "no";
-    const t = m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
-    if (i % 3 === 2) {
-      const pr = Math.round(40 + r() * 400);
-      rows.push(
-        <div key={i} className="pd-act-r num">
-          <span className="t">{t}</span>
-          <span className="d">
-            Vault merge<small>{nf(pr)} pairs of {o.name} into USDC</small>
-          </span>
-          <span className="a pos">+{usd(pr, 0)} lent</span>
-        </div>,
-      );
-      return;
-    }
-    const buy = r() < 0.7;
-    const n = Math.round(20 + r() * 480);
-    const px = buy ? ask(o, s) : bid(o, s);
-    rows.push(
-      <div key={i} className="pd-act-r num">
-        <span className="t">{t}</span>
-        <span className="d">
-          {buy ? "Buy" : "Sell"}{" "}
-          <span className={`pd-sd ${s}`} style={{ height: 18, fontSize: 10 }}>
-            {lab(o, s).toUpperCase()}
-          </span>
-          {ops.length > 1 ? <small>{o.name}</small> : null}
-        </span>
-        <span className="a">
-          {nf(n)} at {cf(px)}
-        </span>
-      </div>,
-    );
-  });
-  return <div>{rows}</div>;
+/** The connected wallet's own trades on this event (rebuilt from its fork transactions). */
+function ActTab({ e, connected }: { e: PredictEvent; connected: boolean }) {
+  const { data, isLoading } = usePredictActivity();
+  if (!connected) return <p className="pd-note sm">Connect a wallet to see your trades on this event.</p>;
+  const ids = new Set(e.outs.map((o) => o.k));
+  const rows = (data ?? []).filter((t) => ids.has(t.marketId));
+  if (isLoading) return <p className="pd-note sm">Loading your trades…</p>;
+  if (!rows.length) return <p className="pd-note sm">No trades on this event yet.</p>;
+  const ago = (ms: number | null) => timeAgo(ms) || "N/A";
+  return (
+    <div>
+      {rows.slice(0, 20).map((t) => {
+        const o = outOf(e, t.marketId);
+        return (
+          <div key={`${t.signature}-${t.marketId}-${t.outcome}`} className="pd-act-r num">
+            <span className="t">{ago(t.time)}</span>
+            <span className="d">
+              {t.side === "buy" ? "Buy" : "Sell"} <SideTag s={t.outcome} L={o ? lab(o, t.outcome) : t.outcomeLabel} />
+              {e.outs.length > 1 && <small>{o?.name ?? t.question}</small>}
+              {t.pooled > 0 && <small>into Vanna&apos;s pool</small>}
+            </span>
+            <span className="a">
+              {shf(t.shares)} at {cf(t.price * 100)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-/** The event page; `id` is the route segment (`event[~market[~side]]`). */
-export function PredictEventPage({ id }: { id: string }) {
-  usePredictSample();
-  const [evId, mk, sd] = decodeURIComponent(id).split("~");
-  const e = EVM(evId);
-  // Arriving on an event page: Buy, default amount, the market and side from the link.
-  const [sel, setSel] = useState<string | undefined>(() => {
-    const o = e && mk ? OUT(e, mk) : undefined;
-    return o && !o.res ? o.k : undefined;
-  });
-  const [st, setSt] = useState<PanelState>(() => {
-    const o = e && mk ? OUT(e, mk) : undefined;
-    const held = e && o ? (["yes", "no"] as const).find((s) => posOf(e, o, s)) : undefined;
-    return { side: sd === "yes" || sd === "no" ? sd : (held ?? "yes"), mode: "buy", amt: DEF_AMT, pay: "USDC" };
-  });
-  const [tab, setTab] = useState<Tab>("vault");
-  const [range, setRange] = useState<"1W" | "1M" | "ALL">("1M");
-  const [showRes, setShowRes] = useState(false);
-  const [osel, setOsel] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
-  const panelRef = useRef<HTMLElement>(null);
-  const scrollPanel = useCallback(() => {
-    if (window.innerWidth < 1024) requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
-  }, []);
+/** Where a position's shares are: Vanna's pool when any of them are in it, else the wallet (World). */
+const srcOf = (p: PredictPosition): "vanna" | "world" => (p.poolValueShares > 0 ? "vanna" : "world");
 
-  if (!e)
-    return (
-      <div className="v3 page">
-        <Link href="/predict" className="pd-back">
-          {PIC.back}All markets
-        </Link>
-        <div className="pd-empty" style={{ marginTop: 16 }}>
-          This market doesn&apos;t exist in the preview.
+/**
+ * One position on this event (pool part + wallet part of one market side), as a collapsible row.
+ * Collapsed: side, outcome, status, shares, value with P&L. Expanded: the paired gauge, the wallet
+ * notice (Start earning), the detail tiles and Buy more / Sell. `showSrc` adds the source badge when
+ * the event's positions do not all share one source (otherwise the section header shows it once).
+ */
+function PosBlock({
+  e, p, onMore, onSell, onEarn, busy, defaultOpen, showSrc,
+}: { e: PredictEvent; p: PredictPosition; onMore: () => void; onSell: () => void; onEarn: (() => void) | null; busy: boolean; defaultOpen: boolean; showSrc: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const o = outOf(e, p.marketId);
+  const L = p.label;
+  const share = p.shares > 0 ? Math.min(1, p.matched / 100) : 0;
+  const inPool = p.poolValueShares > 0;
+  // In the pool with nothing paired yet earns 0%, so it reads "Not paired" rather than "Earning 0.00%".
+  const status = !inPool ? (
+    <span className="mini warn">Not earning</span>
+  ) : p.merging ? (
+    <span className="mini warn">Joining the pool</span>
+  ) : share <= 0 || p.apy <= 0 ? (
+    <span className="mini warn">Not paired</span>
+  ) : (
+    <span className="mini ok">Earning {p2(p.apy)}</span>
+  );
+  const bodyId = `pd-pos-${p.id}`;
+  const [pa, pn] = cpair(p.avg * 100, p.mark * 100);
+  return (
+    <div className={`pd-p ${open ? "open" : ""}`}>
+      <button type="button" className="pd-p-row" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
+        <SideTag s={p.side} L={L} />
+        <span className="pd-p-n">
+          <b>{o ? mName(e, o) : p.market}</b>
+          {status}
+        </span>
+        <span className="pd-p-sh num">{shf(p.shares)} shares</span>
+        <span className="pd-p-v num">
+          <b>{usd(p.value)}</b>
+          <small className={p.pnl >= 0 ? "pos" : "neg"}>{sUsd(p.pnl)}</small>
+        </span>
+        <span className="pd-p-cv" aria-hidden="true">
+          {IC.chev}
+        </span>
+      </button>
+      {open && (
+        <div className="pd-p-b" id={bodyId}>
+          {inPool && !p.merging && share > 0 && (
+            <div className="pd-pair">
+              <div className="pd-pair-h">
+                <b>
+                  Earning on {pp(share)} of your shares <Info text={INFO.paired} />
+                </b>
+                <span className="num">
+                  {shf(p.shares * share)} of {shf(p.shares)} {L} paired
+                </span>
+              </div>
+              <Meter v={share} />
+            </div>
+          )}
+          {p.walletShares > 0 && (
+            <div className="pd-qd">
+              <span>
+                {IC.wallet}
+                <span>
+                  <b className="num">
+                    {shf(p.walletShares)} {L} in your wallet
+                  </b>{" "}
+                  {onEarn ? "are not earning. Move them into Vanna's pool to earn." : "do not earn: this market is not in Vanna's pool yet."}
+                </span>
+              </span>
+              {onEarn && (
+                <button type="button" className="btn-v" disabled={busy} onClick={onEarn}>
+                  Start earning
+                </button>
+              )}
+            </div>
+          )}
+          {/* Sub-lines only where they add something (yield shares, buy date, joining); tiles with nothing in them
+              (no value in the pool, nothing earned) are left out, as is the gauge while nothing is paired. */}
+          <div className="pd-p-g num">
+            <Cell k="Avg / now" v={<span className="pd-ba">{pa}{IC.arrow}{pn}</span>} sub={p.since ? `bought ${p.since}` : undefined} />
+            {(p.inVault > 0 || p.merging) && <Cell k={<>Earning in pool <Info text={INFO.inPool} /></>} v={usd(p.inVault)} sub={p.merging ? "joining" : undefined} />}
+            {(p.inVault > 0 || p.earned > 0) && (
+              <Cell k={<>Earned <Info text={INFO.earned} /></>} v={<span className="pos">{sUsd(p.earned)}</span>} sub={p.yieldShares > 0.005 ? `${shf(p.yieldShares)} extra ${L} shares` : undefined} />
+            )}
+            <Cell k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(p.pays)} />
+          </div>
+          <div className="pd-p-a">
+            {showSrc && <SrcBadge src={srcOf(p)} />}
+            <span className="pd-p-ab">
+              <button type="button" className="btn-s" onClick={onMore} disabled={!o || !canTrade(o)}>
+                Buy more
+              </button>
+              <button type="button" className="btn-s" onClick={onSell}>
+                Sell
+              </button>
+            </span>
+          </div>
         </div>
-      </div>
-    );
+      )}
+    </div>
+  );
+}
 
-  const k = sel && OUT(e, sel) && !OUT(e, sel)?.res ? sel : defaultOut(e);
-  const o = OUT(e, k) as Outcome;
-  /** Sell mode prefills the holding of that market / side. */
-  const sellAmt = (oo: Outcome, s: Side) => {
-    const h = heldOf(e, oo, s);
+function EventView({ e, ev, mk, sd }: { e: PredictEvent; ev: string; mk?: string; sd?: Side }) {
+  const acct = usePredictAccount();
+  const earn = useStartEarning();
+  const rate = acct.rate;
+  // A route that names a market (or IS a market id) opens it selected.
+  const start = outOf(e, mk ?? ev) ?? defaultOut(e);
+  const [sel, setSel] = useState<string>(start.k);
+  const [tab, setTab] = useState<Tab>("earning");
+  // Predict pays in CASH only (World's collateral).
+  const [st, setSt] = useState<PanelState>(() => ({ side: sd ?? "yes", mode: "buy", amt: DEF_AMT, pay: "CASH", slip: null, pop: null }));
+  const panelRef = useRef<HTMLElement>(null);
+  const set = useCallback((p: Partial<PanelState>) => setSt((x) => ({ ...x, ...p })), []);
+  const o = outOf(e, sel) ?? start;
+  const data = acct.data;
+  const mine = (data?.positions ?? []).filter((p) => e.outs.some((x) => x.k === p.marketId));
+  const scrollPanel = () => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
+  const sellAmt = (x: Outcome, s: Side) => {
+    const h = heldOf(data, x, s).total;
     return h ? String(Math.floor(h * 100) / 100) : "";
   };
-  const setMode = (m: "buy" | "sell", oo: Outcome = o, s: Side = st.side) =>
-    setSt((p) => ({ ...p, mode: m, side: s, amt: m === "buy" ? (parseAmt(p.amt) && p.mode === "buy" ? p.amt : DEF_AMT) : sellAmt(oo, s) }));
-
-  const act: PanelActions = {
-    setSide: (s) => setSt((p) => ({ ...p, side: s, amt: p.mode === "sell" ? sellAmt(o, s) : p.amt })),
-    setMode: (m) => {
-      if (m !== st.mode) setMode(m);
-    },
-    setAmt: (a) => setSt((p) => ({ ...p, amt: a })),
-    setPay: (pay) => {
-      setSt((p) => ({ ...p, pay }));
-      setPayOpen(false);
-    },
-    choose: (kk) => {
-      setSel(kk);
-      setOsel(false);
-      if (st.mode === "sell") setSt((p) => ({ ...p, amt: sellAmt(OUT(e, kk) as Outcome, p.side) }));
-    },
-    twin: (kk, s) => {
-      setSel(kk);
-      setSt((p) => ({ ...p, side: s }));
-    },
-    exec: () => {
-      const a = parseAmt(st.amt);
-      if (st.mode === "buy") {
-        const t = sampleBuy(e, o, st.side, a, st.pay);
-        if (t) {
-          predictToast(t);
-          setSt((p) => ({ ...p, amt: DEF_AMT }));
-        }
-      } else {
-        const t = sampleSell(e, o, st.side, a);
-        if (t) {
-          predictToast(t);
-          setSt((p) => ({ ...p, amt: "" }));
-        }
-      }
-    },
-    tight: () => {
-      const t = toggleTight();
-      if (t) predictToast(t);
-    },
-    cancelQ: (pid) => {
-      const t = cancelQueued(pid);
-      if (t) {
-        predictToast(t);
-        setSt((p) => ({ ...p, amt: sellAmt(o, p.side) }));
-      }
-    },
+  const choose = (k: string) => {
+    setSel(k);
+    const x = outOf(e, k);
+    if (x && st.mode === "sell") set({ amt: sellAmt(x, st.side) });
+  };
+  const addLeg = (k: string, s: Side = "yes") =>
+    setSt((x) => {
+      const legs = x.slip ?? [];
+      const l = legs.find((z) => z.k === k);
+      if (!l) return legs.length >= MAX_TRADE_LEGS ? x : { ...x, slip: [...legs, { k, s, amt: LEG_AMT }] };
+      if (l.s !== s) return { ...x, slip: legs.map((z) => (z.k === k ? { ...z, s } : z)) };
+      return { ...x, slip: legs.filter((z) => z !== l) };
+    });
+  const pick = (x: Outcome, s: Side) => {
+    if (st.slip && st.mode === "buy") return addLeg(x.k, s);
+    setSel(x.k);
+    set({ side: s, mode: "buy", amt: st.mode === "buy" ? st.amt : DEF_AMT });
+    scrollPanel();
   };
 
-  const main = e.outs.filter((x) => !x.grp && !x.res);
-  const lines = e.outs.filter((x) => x.grp === "lines");
-  const res = e.outs.filter((x) => x.res);
-  const rows = e.type === "multi" ? main.slice().sort(byChance) : main;
-  const outsTitle = ({ match: "Moneyline", multi: "Outcomes", date: "Dates", strike: "Price targets" } as Record<string, string>)[e.type] || "Markets";
-  const note = e.note || (e.type === "multi" ? "exactly one resolves YES" : "");
-  const when = e.live ? `${e.score} · ${e.when}` : e.when ? e.when : `Ends ${e.ends}`;
-  const rowEl = (x: Outcome) => (
-    <OutRow
-      key={x.k}
-      e={e}
-      o={x}
-      on={x.k === k}
-      st={st}
-      onRow={() => {
-        setSel(x.k);
-        if (st.mode === "sell") setSt((p) => ({ ...p, amt: sellAmt(x, p.side) }));
-      }}
-      onPick={(s) => {
-        setSel(x.k);
-        setSt((p) => ({ ...p, side: s, mode: "buy", amt: parseAmt(p.amt) && p.mode === "buy" ? p.amt : DEF_AMT }));
-        scrollPanel();
-      }}
-    />
-  );
-  const mine = posIn(e);
+  const ms = mainOuts(e);
+  const lines = e.outs.filter((x) => x.grp);
+  const rows = e.type === "match" ? ms : ms.slice().sort(byChance);
+  const outsTitle = ({ match: "Who wins", multi: "Outcomes", date: "Dates", strike: "Price targets" } as Record<string, string>)[e.type] ?? "Markets";
+  const note = e.note ? e.note.charAt(0).toUpperCase() + e.note.slice(1) : e.exh === false ? "Every listed outcome can lose" : "";
+  const when = e.live ? `${e.when ?? ""}` : e.when ? e.when : e.ends ? `Ends ${e.ends}` : e.last ? `Last trade ${e.last}` : "";
+  const tv = mine.reduce((t, p) => t + p.value, 0);
+  // Source shown once in the header when every position shares it, else on each expanded row.
+  const oneSrc = mine.length && mine.every((p) => srcOf(p) === srcOf(mine[0])) ? srcOf(mine[0]) : null;
+  const pairsAll = pairsIn(e);
 
   return (
     <div className="v3 page">
@@ -444,28 +457,31 @@ export function PredictEventPage({ id }: { id: string }) {
         <div className="pd-main">
           <section className="pd-box pd-head">
             <div className="pd-h-top">
-              {e.type === "match" ? <VsBadge e={e} cls="lg" /> : <IcFor e={e} cls="lg" />}
+              <EvLogo e={e} cls="lg" />
               <div className="pd-h-q">
                 <div className="pd-h-tags">
                   <span className="pd-ltag">{e.tag}</span>
-                  <span className="pd-hcat">{CATN[e.cat]}</span>
+                  {!catDup(e) && <span className="pd-hcat">{CATN[e.cat]}</span>}
                   {e.live && <span className="pd-live">LIVE</span>}
-                  <span className="pd-hcat num">{when}</span>
+                  {when && <span className="pd-hcat num">{when}</span>}
                   <span className="pd-hcat num">Vol {usdC(e.vol)}</span>
-                  <span className="pd-beta-sm">Sample</span>
+                  {pairsAll > 0 && <span className="pd-hcat num">{usdC(pairsAll)} earning in the pool</span>}
                 </div>
                 <h1 className="pd-h1">{e.title}</h1>
               </div>
             </div>
             <div className="pd-tiles num">
-              <Tiles e={e} o={o} />
+              <Tiles e={e} o={o} rate={rate} />
             </div>
-            {e.type === "binary" && (
+            {e.outs.length === 1 && o.y !== null && (
               <div className="pd-pbar">
-                <i style={{ width: `${o.y}%` }} />
+                <i style={{ width: `${Math.min(100, o.y)}%` }} />
               </div>
             )}
-            <EventChart e={e} range={range} onRange={setRange} />
+            <p className="pd-chart-e">
+              {IC.clock}
+              <span>Price history is not available yet. Prices here update live from the latest World trades{e.last ? ` (last trade ${e.last})` : ""}.</span>
+            </p>
           </section>
 
           {e.outs.length > 1 && (
@@ -474,22 +490,36 @@ export function PredictEventPage({ id }: { id: string }) {
                 <h2>{outsTitle}</h2>
                 <span>{note}</span>
               </div>
-              <div className="pd-rows">{rows.map(rowEl)}</div>
+              {st.slip && st.mode === "buy" && (
+                <p className="pd-sliphint">
+                  {PIC.plus}Bet slip is on. Tap Buy Yes or Buy No on any row to add it.
+                </p>
+              )}
+              <div className="pd-rows">
+                {rows.map((x) => (
+                  <OutRow
+                    key={x.k}
+                    e={e}
+                    o={x}
+                    on={x.k === o.k && !st.slip}
+                    st={st}
+                    held={mine.filter((p) => p.marketId === x.k)}
+                    onRow={() => !st.slip && choose(x.k)}
+                    onPick={(s) => pick(x, s)}
+                  />
+                ))}
+              </div>
               {lines.length > 0 && (
                 <>
                   <div className="pd-oh sub">
-                    <h2>Game lines</h2>
-                    <span>spread and total runs</span>
+                    <h2>More on this game</h2>
+                    <span>Side bets on the same game. Each one is its own Yes or No market.</span>
                   </div>
-                  <div className="pd-rows">{lines.map(rowEl)}</div>
-                </>
-              )}
-              {res.length > 0 && (
-                <>
-                  <button type="button" className="pd-resv" aria-expanded={showRes} onClick={() => setShowRes(!showRes)}>
-                    {showRes ? "Hide" : "View"} resolved ({res.length}) {IC.chev}
-                  </button>
-                  {showRes && <div className="pd-rows">{res.map(rowEl)}</div>}
+                  <div className="pd-rows">
+                    {lines.map((x) => (
+                      <OutRow key={x.k} e={e} o={x} on={x.k === o.k && !st.slip} st={st} held={mine.filter((p) => p.marketId === x.k)} onRow={() => !st.slip && choose(x.k)} onPick={(s) => pick(x, s)} />
+                    ))}
+                  </div>
                 </>
               )}
             </section>
@@ -498,65 +528,35 @@ export function PredictEventPage({ id }: { id: string }) {
           {mine.length > 0 && (
             <section className="pd-box pd-pos">
               <div className="pd-oh">
-                <h2>Your position</h2>
-                <span className="num">{usd(mine.map(pmx).reduce((t, m) => t + m.value, 0))}</span>
+                <h2>Your position{mine.length > 1 ? "s" : ""}</h2>
+                <span className="pd-pos-t num">
+                  {oneSrc && <SrcBadge src={oneSrc} />}
+                  {usd(tv)}
+                </span>
               </div>
               {mine.map((p) => {
-                const m = pmx(p);
-                const L = lab(m.o, p.side);
+                const x = outOf(e, p.marketId);
+                const imp = data?.importable.find((i) => i.marketId === p.marketId && i.side === p.side) ?? null;
                 return (
-                  <div key={p.id} className="pd-p">
-                    <div className="pd-p-h">
-                      <span className={`pd-sd ${p.side}`}>{L.toUpperCase()}</span>
-                      <b>{e.outs.length > 1 ? m.o.name : e.title}</b>
-                      {m.merging ? <span className="mini warn">Merging into the Earn pool</span> : <span className="mini ok">Earning {p2(m.apy)}</span>}
-                      {p.src === "wallet" && (
-                        <span className="mini pd-srcm">
-                          <Icon sym="WORLD" className="pd-i12" />
-                          From wallet
-                        </span>
-                      )}
-                      {p.src === "polymarket" && (
-                        <span className="mini pd-srcm">
-                          <Icon sym="POLY" className="pd-i12" />
-                          Moved from Polymarket
-                        </span>
-                      )}
-                      {p.q ? <span className="mini warn">Sell queued: {shf(p.q)}</span> : null}
-                      <span className="pd-p-a">
-                        <button
-                          type="button"
-                          className="btn-s"
-                          onClick={() => {
-                            setSel(p.o);
-                            setSt((x) => ({ ...x, side: p.side, mode: "buy", amt: DEF_AMT }));
-                            scrollPanel();
-                          }}
-                        >
-                          Buy more
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-s"
-                          onClick={() => {
-                            setSel(p.o);
-                            setMode("sell", m.o, p.side);
-                            scrollPanel();
-                          }}
-                        >
-                          Sell
-                        </button>
-                      </span>
-                    </div>
-                    <div className="pd-p-g num">
-                      <Cell k="Shares" v={shf(m.tot)} sub={p.yld ? `+${shf(p.yld)} from yield` : `bought ${p.t}`} />
-                      <Cell k="Avg / now" v={<span className="pd-ba">{cpair(p.avg * 100, m.mk * 100)[0]}{IC.arrow}{cpair(p.avg * 100, m.mk * 100)[1]}</span>} />
-                      <Cell k="Value" v={usd(m.value)} sub={<span className={m.pnl >= 0 ? "pos" : "neg"}>{sUsd(m.pnl)} P&amp;L</span>} />
-                      <Cell k={<>In USDC vault <Info text={INFO.vault} /></>} v={usd(m.inVault)} sub={m.merging ? "merging" : `${pct(m.sd.share * 100, 0)} matched`} />
-                      <Cell k={<>Earned <Info text={INFO.earned} /></>} v={<span className="pos">{sUsd(m.earned)}</span>} sub={`${shf(p.yld)} ${L} shares`} />
-                      <Cell k={<>Pays if right <Info text={INFO.pays} /></>} v={usd(m.pays)} sub={`${p2(m.apy)} APY now`} />
-                    </div>
-                  </div>
+                  <PosBlock
+                    key={p.id}
+                    e={e}
+                    p={p}
+                    busy={earn.busy}
+                    defaultOpen={mine.length === 1}
+                    showSrc={!oneSrc}
+                    onEarn={imp ? () => earn.start([imp]) : null}
+                    onMore={() => {
+                      setSel(p.marketId);
+                      set({ side: p.side, mode: "buy", amt: DEF_AMT, slip: null });
+                      scrollPanel();
+                    }}
+                    onSell={() => {
+                      setSel(p.marketId);
+                      set({ side: p.side, mode: "sell", slip: null, amt: x ? sellAmt(x, p.side) : "" });
+                      scrollPanel();
+                    }}
+                  />
                 );
               })}
             </section>
@@ -564,23 +564,40 @@ export function PredictEventPage({ id }: { id: string }) {
 
           <section className="pd-box pd-tabs-c">
             <div className="pd-tabs" role="tablist">
-              {([["vault", "Vault"], ["book", "Order book"], ["rules", "Rules"], ["activity", "Activity"]] as const).map(([kk, l]) => (
-                <button key={kk} type="button" className={tab === kk ? "on" : ""} role="tab" aria-selected={tab === kk} onClick={() => setTab(kk)}>
+              {([["earning", "Earning"], ["prices", "Prices"], ["rules", "Rules"], ["activity", "Activity"]] as const).map(([k, l]) => (
+                <button key={k} type="button" className={tab === k ? "on" : ""} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
                   {l}
                 </button>
               ))}
             </div>
             <div className="pd-tab-b">
-              {tab === "vault" ? <VaultTab e={e} o={o} /> : tab === "book" ? <BookTab e={e} o={o} s={st.side} /> : tab === "rules" ? <RulesTab e={e} /> : <ActTab e={e} />}
+              {tab === "earning" ? <EarnTab e={e} o={o} rate={rate} /> : tab === "prices" ? <PricesTab e={e} o={o} /> : tab === "rules" ? <RulesTab e={e} /> : <ActTab e={e} connected={acct.connected} />}
             </div>
           </section>
         </div>
         <aside className="pd-side">
-          <TradePanel ref={panelRef} e={e} o={o} st={st} act={act} oselOpen={osel} setOsel={setOsel} payOpen={payOpen} setPayOpen={setPayOpen} />
+          <TradePanel ref={panelRef} e={e} o={o} st={st} set={set} choose={choose} addLeg={addLeg} data={data} address={acct.address} rate={rate} />
         </aside>
       </div>
-      <ImportSheet />
-      <PredictToast />
+      <LinkedSheet />
     </div>
   );
+}
+
+/** The event page: loads the event (by event id or any of its market ids), then the view. */
+export function PredictEventPage({ id }: { id: string }) {
+  const { ev, mk, sd } = parseRouteId(id);
+  const { data: e, isLoading, error } = usePredictEvent(ev);
+  if (!e)
+    return (
+      <div className="v3 page">
+        <Link href="/predict" className="pd-back">
+          {PIC.back}All markets
+        </Link>
+        <div className="pd-load" style={{ marginTop: 16 }}>
+          {isLoading ? "Loading the market from World… the first load can take up to a minute." : `This market could not be loaded${error ? `: ${(error as Error).message}` : "."}`}
+        </div>
+      </div>
+    );
+  return <EventView e={e} ev={ev} mk={mk} sd={sd} />;
 }

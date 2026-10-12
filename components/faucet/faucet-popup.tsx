@@ -5,7 +5,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/contexts/theme-context";
-import { runFaucet, type FaucetResult } from "@/lib/faucet-utils";
+import { runFaucet, runCashFaucet, CASH_FAUCET_AMOUNT, type FaucetResult } from "@/lib/faucet-utils";
 import { TOKENS } from "@/lib/solana/tokens";
 import { refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import toast from "react-hot-toast";
@@ -29,7 +29,10 @@ interface RowState {
  * localStorage: balances shown after a mint come straight from the chain.
  */
 const initialRows = (): Record<string, RowState> =>
-  Object.fromEntries(TOKENS.map((t) => [t.symbol, { status: "idle" as Status }]));
+  Object.fromEntries([...TOKENS.map((t) => t.symbol), "CASH"].map((s) => [s, { status: "idle" as Status }]));
+
+/** Registry tokens go through POST /api/faucet; CASH (Predict) through POST /api/predict/faucet. */
+const faucetFor = (symbol: string, address: string) => (symbol === "CASH" ? runCashFaucet(address) : runFaucet(symbol, address));
 
 const fmt = (value?: string) => {
   const n = Number(value ?? "0");
@@ -64,7 +67,7 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
       return;
     }
     updateRow(symbol, { status: "loading", message: undefined });
-    const result = await runFaucet(symbol, walletAddress);
+    const result = await faucetFor(symbol, walletAddress);
     applyResult(symbol, result);
     if (!result.ok) toast.error(`${symbol}: ${result.error}`);
     else toast.success(`+${fmt(result.added)} ${symbol}`);
@@ -80,10 +83,10 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
     // Sequential: each cheatcode reads-then-sets one account, and SOL first keeps the wallet
     // rent-funded before its token accounts are written.
     const results: FaucetResult[] = [];
-    for (const t of TOKENS) {
-      updateRow(t.symbol, { status: "loading", message: undefined });
-      const r = await runFaucet(t.symbol, walletAddress);
-      applyResult(t.symbol, r);
+    for (const symbol of [...TOKENS.map((t) => t.symbol), "CASH"]) {
+      updateRow(symbol, { status: "loading", message: undefined });
+      const r = await faucetFor(symbol, walletAddress);
+      applyResult(symbol, r);
       results.push(r);
     }
     setIsMintingAll(false);
@@ -181,6 +184,16 @@ export const FaucetPopup = ({ isOpen, onClose, walletAddress }: FaucetPopupProps
                   onMint={() => mintOne(token.symbol)}
                 />
               ))}
+              {/* CASH: World's dollar, used to buy Yes / No on the Predict page. */}
+              <FaucetRow
+                label="CASH"
+                icon="/logos-v3/CASH.svg"
+                description={`+${CASH_FAUCET_AMOUNT.toLocaleString("en-US")} CASH (Predict)`}
+                state={rows.CASH ?? { status: "idle" }}
+                isDark={isDark}
+                disabled={!walletAddress || isMintingAll}
+                onMint={() => mintOne("CASH")}
+              />
             </div>
 
             {/* Action footer */}

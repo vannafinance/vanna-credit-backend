@@ -45,6 +45,7 @@ const VENUE_TOKEN: Record<Exclude<AnswerVenue, "none">, string> = {
   wallet: "wallet",
   oracle: "wallet",
   phoenix: "margin",
+  vaults: "farm",
 };
 
 const VENUE_LABEL: Record<Exclude<AnswerVenue, "none">, string> = {
@@ -55,6 +56,7 @@ const VENUE_LABEL: Record<Exclude<AnswerVenue, "none">, string> = {
   wallet: "wallet",
   oracle: "oracle",
   phoenix: "phoenix perps",
+  vaults: "vaults",
 };
 
 function toneColor(tone: AnswerFact["tone"]): string {

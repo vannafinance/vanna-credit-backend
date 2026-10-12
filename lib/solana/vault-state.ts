@@ -6,7 +6,7 @@ import {
   vaultProgram,
 } from "@vanna/phoenix-vault-client";
 import { getConnection, forkUnixTimestamp } from "./connection";
-import { readPhoenixExchange } from "./phoenix";
+import { fetchPerpAssetMap, readPhoenixExchange } from "./phoenix";
 import { assetConfigPda, integrationPda, protocolConfigPda } from "./pdas";
 import { getProgram } from "./program";
 import {
@@ -28,6 +28,8 @@ export interface LiveVault {
   capUsd: number | null;
   maxDepositUsd: number | null;
   depositsOpen: boolean;
+  depositBlockedReason?: string | null;
+  marketAfterHours?: boolean;
   paused: boolean;
   assetUnits: number | null;
   shortUsd: number | null;
@@ -41,8 +43,20 @@ export interface LiveVault {
   phoenixEffectiveUsd: number | null;
   phoenixMaintenanceUsd: number | null;
   exitFeeBps: number;
+  apy7Source?: "history" | "deposit-event" | null;
+  apy30Source?: "history" | "deposit-event" | null;
+  apy7BaselineAt?: number;
+  apy30BaselineAt?: number;
+  apyHistoryStatus?: "collecting" | "available" | "unavailable";
   apy7: number | null;
   apy30: number | null;
+  /**
+   * Basis only: realized APY since launch — the share price (it starts at 1.0) annualised by the
+   * seconds since the vault's first transaction, compounded. Null until known.
+   */
+  apySinceLaunch?: number | null;
+  /** Basis only: unix ms of the vault account's first transaction (its launch). */
+  launchedAt?: number | null;
 }
 export async function readLiveVault(def: VaultDefinition): Promise<LiveVault> {
   const c = getConnection();
@@ -157,7 +171,12 @@ export async function readLiveVault(def: VaultDefinition): Promise<LiveVault> {
         v.maxPositionUsd > 0n ? Number(v.maxPositionUsd) / 1e6 : null;
       base.maxDepositUsd =
         v.maxDepositUsd > 0n ? Number(v.maxDepositUsd) / 1e6 : null;
-      base.depositsOpen = v.depositsOpen;
+      const market = (await fetchPerpAssetMap(c, ex.perpAssetMap)).find(m => m.assetId === v.assetId);
+      if (!market) throw new Error("Vault market session is unavailable");
+      base.marketAfterHours = Boolean(market.afterHours);
+      base.depositBlockedReason = !v.afterHoursDeposits && market.afterHours
+        ? "Market session closed. Deposits resume when the market reopens." : null;
+      base.depositsOpen = v.depositsOpen && !base.depositBlockedReason;
       base.paused = v.paused;
       base.available = true;
     }

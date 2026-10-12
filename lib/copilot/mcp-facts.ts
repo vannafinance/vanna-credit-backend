@@ -29,6 +29,7 @@ import {
   type HealthRead,
 } from "./risk";
 import type { AnswerFact, StructuredAnswer } from "./answer-schema";
+import { LIQUIDATION_HF_TEXT } from "./protocol-constants";
 import type { CopilotUser } from "./types";
 
 export interface ReadOutcome {
@@ -48,7 +49,7 @@ export interface ReadCtx extends McpCtx {
 const fact = (label: string, value: string, tone?: AnswerFact["tone"]): AnswerFact => ({ label, value, ...(tone ? { tone } : {}) });
 
 const hfTone = (hf: number | null): AnswerFact["tone"] =>
-  hf === null ? "good" : hf <= 1.1 ? "bad" : hf < copilotConfig.minHealthFactor ? "warn" : "good";
+  hf === null ? "good" : hf <= LIQUIDATION_HF ? "bad" : hf < copilotConfig.minHealthFactor ? "warn" : "good";
 
 function unavailable(err: unknown, what: string): ReadOutcome {
   const h = humanizeMcpError(err);
@@ -144,14 +145,27 @@ export async function loadFreshPrice(asset: string, ctx: ReadCtx): Promise<Price
 
 export type Sized = { ok: true; amount: string; usd: number; hfAfter: number | null; protocolMax: string | null } | { ok: false; reason: string };
 
-/** Largest borrow that keeps HF >= floor, verified through the MCP. */
+/** Share of a pool's available liquidity a sized borrow may take: interest accrues between the read and the borrow. */
+export const POOL_HEADROOM = 0.99;
+
+/** Units of `asset` the Vanna pool can lend right now, or null when the pool can't be read (the borrow check still runs). */
+export async function poolAvailable(asset: string, ctx: ReadCtx): Promise<number | null> {
+  try {
+    const v = Number((await mcp.poolStats(asset, ctx)).available_liquidity);
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Largest borrow that keeps HF >= floor and fits the pool's available liquidity, verified through the MCP. */
 export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult; floor?: number } = {}): Promise<Sized> {
   // A user may ask for a higher floor ("borrow down to a health factor of 1.5"), never a lower one.
   const floor = Math.max(copilotConfig.minHealthFactor, opts.floor ?? 0);
-  const h = opts.hint ?? (await loadHealth(ctx));
+  // The account, the price and the pool are independent reads: fetched together.
+  const [h, price, available] = await Promise.all([opts.hint ? Promise.resolve(opts.hint) : loadHealth(ctx), loadFreshPrice(asset, ctx), poolAvailable(asset, ctx)]);
   if (h.kind === "no_account") return { ok: false, reason: "You don't have a margin account yet." };
   if (h.kind !== "ok") return { ok: false, reason: "I couldn't read your account, so I can't size a safe borrow." };
-  const price = await loadFreshPrice(asset, ctx);
   if (!price) return { ok: false, reason: `The ${asset} price is unavailable right now.` };
   const { collateralUsd: c, debtUsd: d } = h.health;
   const maxUsd = maxBorrowUsd(c, d, floor, true);
@@ -161,6 +175,11 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
     .then((m) => (typeof m.max_amount === "string" ? m.max_amount : null))
     .catch(() => null);
   let units = Number(usdToUnits(maxUsd * 0.995, price.usd, asset));
+  // The health maths can't see the pool: a borrow above what the pool can lend fails on chain.
+  if (available !== null) {
+    if (!(available > 0)) return { ok: false, reason: `The ${asset} pool has nothing available to borrow right now.` };
+    units = Math.min(units, available * POOL_HEADROOM);
+  }
   for (let i = 0; i < 8 && units > 0; i++) {
     const amount = floorDecimals(units, tokenDecimals(asset));
     if (Number(amount) <= 0) break;
@@ -297,6 +316,14 @@ export async function runRead(intent: ReadIntent, ctx: ReadCtx): Promise<ReadOut
       return readPerpsPositions(ctx);
     case "perps_preview":
       return readPerpsPreview(intent, ctx);
+    case "vaults_list":
+      return readVaultsList(ctx);
+    case "vaults_positions":
+      return readVaultsPositions(ctx);
+    case "vault_preview":
+      return readVaultPreview(intent, ctx);
+    case "yield_options":
+      return readYieldOptions(intent.asset, ctx);
     case "concept":
       return concept(intent.topic);
     case "help":
@@ -323,7 +350,7 @@ async function readHealthAnswer(ctx: ReadCtx): Promise<ReadOutcome> {
     fact("health factor", fmtHf(h.hf), hfTone(h.hf)),
     fact("collateral", fmtUsd(h.collateralUsd)),
     fact("debt", fmtUsd(h.debtUsd)),
-    fact("liquidation at", "1.10"),
+    fact("liquidation at", LIQUIDATION_HF_TEXT),
     fact("safety floor", copilotConfig.minHealthFactor.toFixed(2)),
   ];
   const headline =
@@ -500,8 +527,202 @@ async function readPerpsPositions(ctx: ReadCtx): Promise<ReadOutcome> {
         : "You have no open Phoenix perps positions.",
       facts,
       ...(positions.length ? { tables: [perpsTable("Positions", positions)] } : {}),
-      note: "Liquidation is the price at which your whole margin account would fall to the 1.10 health factor with only that market moving; \"none\" means it can't get there.",
+      note: `Liquidation is the price at which your whole margin account would fall to the ${LIQUIDATION_HF_TEXT} health factor with only that market moving; "none" means it can't get there.`,
       venue: "phoenix",
+    },
+  };
+}
+
+// ── Basis and Perena vaults ──────────────────────────────────────────────────
+
+type VaultRow = Record<string, unknown>;
+/**
+ * A vault's yield as its source publishes it (the app's vault pages, backend `dd46264`, `fa6d2f6`): the app's APY with
+ * its source - Vanna's share-price history, or an approximate estimate from past deposits' share price (named as an
+ * estimate, with its baseline date); else Perena's own 7-day APY, or Phoenix's funding for a Basis market (what the
+ * short is paid, annualised - not the vault's net yield). The Copilot computes none of these.
+ */
+function vaultYield(v: VaultRow): string {
+  const days = num(v.apy_30d_pct) !== null ? 30 : num(v.apy_7d_pct) !== null ? 7 : null;
+  if (days !== null) {
+    const value = num(v[`apy_${days}d_pct`]) as number;
+    if (v[`apy_${days}d_source`] === "deposit_event_estimate") {
+      const since = typeof v[`apy_${days}d_baseline`] === "string" ? ` since ${v[`apy_${days}d_baseline`]}` : "";
+      return `${value.toFixed(2)}% APY (approximate, estimated from past deposits${since})`;
+    }
+    return `${value.toFixed(2)}% APY (Vanna share-price history, ${days}-day)`;
+  }
+  const published = num(v.published_apy_7d_pct);
+  if (published !== null) return `${published.toFixed(2)}% APY (Perena, 7-day)`;
+  const funding = (v.funding ?? null) as Record<string, unknown> | null;
+  const f7 = num(funding?.funding_apr_7d_pct);
+  if (f7 !== null) {
+    const neg = num(funding?.negative_days_30);
+    return `${f7.toFixed(2)}% funding (Phoenix, 7-day, annualised)${neg ? `; ${neg} negative day${neg === 1 ? "" : "s"} of 30` : ""}`;
+  }
+  return "no data yet";
+}
+
+const VAULT_NOTE =
+  "Every deposit is USDC and every withdrawal pays USDC; the shares sit in your margin account as collateral. Perena's APY is Perena's own 7-day figure; a Basis vault shows Phoenix's funding for its market (what the short is paid, not the vault's net yield). Where the app has its own vault APY it is shown with its source; one marked approximate is estimated from past deposits, not measured.";
+
+async function readVaultsList(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.vaultsList(ctx);
+  } catch (err) {
+    return unavailable(err, "the vaults");
+  }
+  const vaults = Array.isArray(raw.vaults) ? (raw.vaults as VaultRow[]) : [];
+  if (!vaults.length) return unavailable(new Error("no vaults returned"), "the vaults");
+  return {
+    ok: true,
+    data: { vaults: raw },
+    answer: {
+      headline: `Vaults you can deposit USDC into: ${vaults.map((v) => String(v.name)).join(", ")}.`,
+      facts: [],
+      tables: [
+        {
+          columns: ["Vault", "Type", "Share price", "TVL (NAV)", "Yield (source)", "Deposits"],
+          rows: vaults.map((v) => [
+            String(v.name),
+            v.kind === "basis" ? `Delta-neutral ${String(v.asset)}` : "Perena (USDC)",
+            v.share_price_usd === null || v.share_price_usd === undefined ? "—" : `$${Number(v.share_price_usd).toFixed(4)}`,
+            px(v.nav_usd),
+            vaultYield(v),
+            v.error ? "unavailable" : v.deposits_open === true ? (v.id === "basis-sol" ? "open (from wallet)" : "open") : "closed",
+          ]),
+        },
+      ],
+      note: VAULT_NOTE + " USD* Junior's instant withdrawal has a 1% exit fee.",
+      venue: "vaults",
+    },
+  };
+}
+
+async function readVaultsPositions(ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.vaultsPositions(ctx.user.wallet, ctx);
+  } catch (err) {
+    return unavailable(err, "your vault positions");
+  }
+  const rows = Array.isArray(raw.positions) ? (raw.positions as VaultRow[]) : [];
+  const inWallet = rows.filter((r) => r.held_in === "wallet");
+  return {
+    ok: true,
+    data: { vaults: raw },
+    answer: {
+      headline: rows.length ? `You hold shares in ${rows.length} vault position${rows.length === 1 ? "" : "s"}.` : "You hold no vault shares.",
+      facts: [],
+      ...(rows.length
+        ? {
+            tables: [
+              {
+                columns: ["Vault", "Shares", "Held in", "Collateral value"],
+                rows: rows.map((r) => [String(r.name), `${String(r.shares)} ${String(r.symbol)}`, String(r.held_in), px(r.collateral_value_usd)]),
+              },
+            ],
+          }
+        : {}),
+      note: inWallet.length
+        ? "Shares in your wallet don't count as collateral until they are moved into the margin account."
+        : VAULT_NOTE,
+      venue: "vaults",
+    },
+  };
+}
+
+/**
+ * Every way to earn on an asset, side by side, each yield in its own measure (Earn APR, Kamino live APY, vault APY from
+ * share-price history): nothing is converted, combined or ranked here.
+ */
+async function readYieldOptions(asset: Asset | null, ctx: ReadCtx): Promise<ReadOutcome> {
+  const lendable = asset ? ((LEND_BORROW_ASSETS as readonly string[]).includes(asset) ? [asset] : []) : [...LEND_BORROW_ASSETS];
+  const [poolsR, farmR, vaultsR] = await Promise.allSettled([
+    Promise.all(lendable.map((a) => mcp.poolStats(a, ctx).then((p) => [a, p] as const))),
+    mcp.farmMarkets(ctx),
+    mcp.vaultsList(ctx),
+  ]);
+  const rows: string[][] = [];
+  const data: Record<string, unknown> = {};
+  if (poolsR.status === "fulfilled") {
+    for (const [a, p] of poolsR.value) {
+      data[`earn_${a}`] = p;
+      const apr = num(p.supply_apr_pct);
+      rows.push(["Vanna Earn", a, apr === null ? "unavailable" : `${fmtPct(apr)} APR`, "Lends to Vanna's pool; not collateral", "wallet"]);
+    }
+  }
+  if (farmR.status === "fulfilled") {
+    data.kamino = farmR.value;
+    const markets = Array.isArray(farmR.value.markets) ? (farmR.value.markets as Array<Record<string, unknown>>) : [];
+    for (const m of markets) {
+      if (asset && String(m.underlying) !== asset) continue;
+      const apy = m.metrics_available === true && num(m.supply_apy_fraction) !== null ? `${fmtFractionPct(String(m.supply_apy_fraction))} live APY` : "unavailable";
+      rows.push(["Kamino farm", String(m.underlying), apy, `Lends on Kamino; ${String(m.symbol)} stays collateral`, "margin"]);
+    }
+  }
+  if (vaultsR.status === "fulfilled" && (!asset || asset === "USDC")) {
+    data.vaults = vaultsR.value;
+    const vaults = Array.isArray(vaultsR.value.vaults) ? (vaultsR.value.vaults as VaultRow[]) : [];
+    for (const v of vaults) {
+      const how = v.kind === "basis" ? `Delta-neutral ${String(v.asset)}: earns funding` : v.id === "perena-junior" ? "Perena junior tranche: first loss, 1% exit fee" : "Perena stablecoin yield";
+      rows.push([String(v.name), "USDC", vaultYield(v), how, v.id === "basis-sol" ? "wallet" : "margin"]);
+    }
+  }
+  if (!rows.length) return unavailable(new Error("no yield products answered"), "the yield options");
+  return {
+    ok: true,
+    data,
+    answer: {
+      headline: asset ? `Ways to earn on ${asset} here.` : "Ways to earn here: Vanna Earn, the Kamino farm and the vaults.",
+      facts: [],
+      tables: [{ columns: ["Product", "Deposit", "Yield", "How it earns", "Funded from"], rows }],
+      note:
+        "Each yield is in its own measure (Earn: APR; Kamino: live APY; Perena: its own 7-day APY; Basis: Phoenix funding, which is what the short is paid and not the vault's net yield), so they are not ranked here. None is guaranteed." +
+        (asset && asset !== "USDC" ? " The vaults take USDC deposits." : ""),
+      venue: "none",
+    },
+  };
+}
+
+async function readVaultPreview(r: Extract<ReadIntent, { kind: "vault_preview" }>, ctx: ReadCtx): Promise<ReadOutcome> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = await mcp.vaultsPreview({ authority: ctx.user.wallet, vault: r.vault, call: r.call, amount: r.amount }, ctx);
+  } catch (err) {
+    return isNoAccount(err) ? noMargin("vault position") : unavailable(err, "a preview of that vault action");
+  }
+  const name = String(raw.name ?? r.vault);
+  if (raw.needs_setup === true) {
+    return {
+      ok: true,
+      fixedWording: true,
+      data: { preview: raw },
+      answer: {
+        headline: `A preview of ${name} needs your wallet's one-time setup first.`,
+        facts: [],
+        note: "Ask to make the deposit or withdrawal: the plan signs the one-time setup (a lookup table) first, then the action, and shows the figures before you approve.",
+        venue: "vaults",
+      },
+    };
+  }
+  const facts: AnswerFact[] = [
+    fact(r.call === "deposit" ? "shares you'd receive" : "USDC you'd receive", `${String(raw.expected_out)} ${String(raw.out_token)}`),
+    fact("minimum enforced", `${String(raw.minimum_out)} ${String(raw.out_token)}`),
+    fact("health factor after", raw.health_factor_after ? String(raw.health_factor_after) : "no debt"),
+  ];
+  return {
+    ok: true,
+    data: { preview: raw },
+    answer: {
+      headline:
+        r.call === "deposit"
+          ? `Depositing ${r.amount} USDC into ${name} would give about ${String(raw.expected_out)} ${String(raw.out_token)}.`
+          : `Withdrawing ${r.amount} ${name} shares would pay about ${String(raw.expected_out)} USDC.`,
+      facts,
+      ...(typeof raw.note === "string" ? { note: raw.note } : r.vault === "basis-sol" && r.call === "deposit" ? { note: "SOL Basis takes this USDC from your wallet; a second signature moves the shares into your margin account." } : {}),
+      venue: "vaults",
     },
   };
 }
@@ -780,7 +1001,7 @@ async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ct
       rows.push([a, fmtAmount(s.amount, a), fmtUsd(s.usd), s.hfAfter === null ? "no debt" : s.hfAfter.toFixed(2)]);
       if (targets.length === 1) {
         facts.push(fact(`safe ${what} (HF >= ${floor.toFixed(2)})`, fmtAmount(s.amount, a)), fact("value", fmtUsd(s.usd)), fact("health factor after", fmtHf(s.hfAfter)));
-        if (s.protocolMax) facts.push(fact("protocol maximum (HF > 1.10)", fmtAmount(s.protocolMax, a), "warn"));
+        if (s.protocolMax) facts.push(fact(`protocol maximum (HF > ${LIQUIDATION_HF_TEXT})`, fmtAmount(s.protocolMax, a), "warn"));
       }
     } else rows.push([a, "none", "-", s.reason]);
   });
@@ -798,7 +1019,7 @@ async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ct
         : `Here is how much you can ${what} while keeping your health factor at ${floor.toFixed(2)} or above.`,
       facts,
       ...(one ? {} : { tables: [{ columns: ["Asset", "Safe amount", "Value", "HF after / note"], rows }] }),
-      note: `Sized to the ${floor.toFixed(2)} safety floor, stricter than the protocol's 1.10 liquidation line, and checked against the program's own rules.`,
+      note: `Sized to the ${floor.toFixed(2)} safety floor, stricter than the protocol's ${LIQUIDATION_HF_TEXT} liquidation line, and checked against the program's own rules.`,
       venue: "margin",
     },
   };
@@ -820,7 +1041,7 @@ async function readWhatIf(intent: Extract<ReadIntent, { kind: "whatif" }>, ctx: 
   const price = asset ? await loadFreshPrice(asset, ctx) : null;
   if (!asset || !price) return { ok: true, fixedWording: true, data: {}, answer: { headline: `The ${asset ?? "asset"} price is unavailable right now, so I can't work that out.`, facts: [], venue: "margin" } };
   const verdict = (hf: number | null): { tone: "good" | "warn" | "bad"; text: string } =>
-    hf === null ? { tone: "good", text: "no debt, so no liquidation risk" } : hf < LIQUIDATION_HF ? { tone: "bad", text: "below the 1.10 liquidation line" } : hf < floor ? { tone: "warn", text: `above liquidation but under the ${floor.toFixed(2)} safety floor` } : { tone: "good", text: `at or above the ${floor.toFixed(2)} safety floor` };
+    hf === null ? { tone: "good", text: "no debt, so no liquidation risk" } : hf < LIQUIDATION_HF ? { tone: "bad", text: `below the ${LIQUIDATION_HF_TEXT} liquidation line` } : hf < floor ? { tone: "warn", text: `above liquidation but under the ${floor.toFixed(2)} safety floor` } : { tone: "good", text: `at or above the ${floor.toFixed(2)} safety floor` };
 
   // Solve for an amount that reaches a target health factor.
   if (amount === null && target !== null) {
@@ -898,7 +1119,7 @@ async function readWhatIf(intent: Extract<ReadIntent, { kind: "whatif" }>, ctx: 
       data: { health: h.raw, check: can },
       answer: {
         headline: head,
-        facts: [fact("health factor now", fmtHf(hfAfter(c, d))), fact("health factor after", fmtHf(hf), v.tone), fact("liquidation at", "1.10")],
+        facts: [fact("health factor now", fmtHf(hfAfter(c, d))), fact("health factor after", fmtHf(hf), v.tone), fact("liquidation at", LIQUIDATION_HF_TEXT)],
         note: "Checked with the protocol's own rules; this is a question, nothing was prepared. Say the action to prepare it for your approval.",
         venue: "margin",
       },
@@ -919,14 +1140,14 @@ async function readLiquidation(ctx: ReadCtx): Promise<ReadOutcome> {
   const hf = hfRaw === null ? null : num(hfRaw);
   if (hfRaw !== null && hf === null) return unavailable(new Error("incomplete liquidation data"), "your liquidation status");
   const liquidatable = raw.health_at_or_below_threshold === true;
-  const facts: AnswerFact[] = [fact("health factor", fmtHf(hf), hfTone(hf)), fact("liquidation at", "1.10"), fact("debt", fmtUsd(Number(raw.total_debt_usd))), fact("collateral", fmtUsd(Number(raw.total_collateral_usd)))];
+  const facts: AnswerFact[] = [fact("health factor", fmtHf(hf), hfTone(hf)), fact("liquidation at", LIQUIDATION_HF_TEXT), fact("debt", fmtUsd(Number(raw.total_debt_usd))), fact("collateral", fmtUsd(Number(raw.total_collateral_usd)))];
   let note = "This is a read-only check; the Copilot never executes a liquidation.";
-  if (hf !== null && !liquidatable) note = `If the value of all your collateral fell together by about ${((1 - 1.1 / hf) * 100).toFixed(0)}%, your account would reach the liquidation line. ${note}`;
+  if (hf !== null && !liquidatable) note = `If the value of all your collateral fell together by about ${((1 - LIQUIDATION_HF / hf) * 100).toFixed(0)}%, your account would reach the liquidation line. ${note}`;
   return {
     ok: true,
     data: { snapshot: raw },
     answer: {
-      headline: hf === null ? "You have no debt, so your account cannot be liquidated." : liquidatable ? `Your account is at or below the liquidation threshold (health factor ${hf.toFixed(2)}).` : `Your account is not liquidatable. Health factor ${hf.toFixed(2)}, liquidation at 1.10.`,
+      headline: hf === null ? "You have no debt, so your account cannot be liquidated." : liquidatable ? `Your account is at or below the liquidation threshold (health factor ${hf.toFixed(2)}).` : `Your account is not liquidatable. Health factor ${hf.toFixed(2)}, liquidation at ${LIQUIDATION_HF_TEXT}.`,
       facts,
       note,
       venue: "margin",
@@ -971,7 +1192,7 @@ async function readProtocol(ctx: ReadCtx): Promise<ReadOutcome> {
     data: { config: cfg.value, assets: assets.value, integrations: integ.status === "fulfilled" ? integ.value : {} },
     answer: {
       headline: `The protocol is in ${String(cfg.value.operating_mode)} mode (${String(cfg.value.operating_mode_blocks)}).`,
-      facts: [fact("max assets per margin account", String(cfg.value.max_assets_per_margin)), fact("liquidation at", "1.10"), fact("Copilot safety floor", copilotConfig.minHealthFactor.toFixed(2))],
+      facts: [fact("max assets per margin account", String(cfg.value.max_assets_per_margin)), fact("liquidation at", LIQUIDATION_HF_TEXT), fact("Copilot safety floor", copilotConfig.minHealthFactor.toFixed(2))],
       tables: [
         { caption: "Assets", columns: ["Asset", "Lend / borrow", "Collateral", "Pool"], rows: offered.map((a) => [String(a.symbol), a.lend_borrow_offered === true ? "yes" : "no", a.collateral_enabled === true ? "yes" : "no", String(a.reserve_status)]) },
         ...(integrations.length ? [{ caption: "Integrations", columns: ["Adapter", "Enabled"], rows: integrations.map((i) => [String(i.adapter), i.enabled === true ? "yes" : "no"]) }] : []),

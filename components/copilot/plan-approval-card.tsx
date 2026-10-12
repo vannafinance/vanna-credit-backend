@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { LIQUIDATION_HF_TEXT } from "@/lib/copilot/protocol-constants";
 import type { PlanStepView, PlanView, Venue } from "@/lib/copilot/types";
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
@@ -389,7 +390,7 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
         <span>{execution.stepCount} planned {execution.stepCount === 1 ? "step" : "steps"}</span>
         <span>{execution.signatureCount} wallet {execution.signatureCount === 1 ? "signature" : "signatures"}</span>
         {execution.readCount > 0 ? <span>{execution.readCount} read-only</span> : null}
-        <span>health floor {plan.hf_floor.toFixed(2)} · liquidation at 1.10</span>
+        <span>health floor {plan.hf_floor.toFixed(2)} · liquidation at {LIQUIDATION_HF_TEXT}</span>
       </div>
 
       {/* Warnings — never dismissable, always above the buttons. One tinted block holding

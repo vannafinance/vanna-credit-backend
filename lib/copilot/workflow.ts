@@ -427,10 +427,20 @@ export async function advanceWorkflow(id: string, user: CopilotUser, ctx: Omit<R
         next: {
           ...withStep(r, step.n, {
             status: "awaiting_signature",
-            tx: { transaction: built.tx.transaction, blockhash: built.tx.blockhash, lastValidBlockHeight: built.tx.lastValidBlockHeight, built_at: t, ...(built.tx.summary ? { summary: built.tx.summary } : {}) },
-            usd: pre.prepared.usd,
+            tx: {
+              transaction: built.tx.transaction, blockhash: built.tx.blockhash, lastValidBlockHeight: built.tx.lastValidBlockHeight, built_at: t,
+              ...(built.tx.summary ? { summary: built.tx.summary } : {}),
+              ...(built.tx.prerequisite ? { prerequisite: true } : {}),
+              ...(built.tx.prerequisite_kind ? { prerequisite_kind: built.tx.prerequisite_kind } : {}),
+            },
+            // A prerequisite moves no funds: nothing counts toward the spend caps until the step itself is signed.
+            usd: built.tx.prerequisite ? 0 : pre.prepared.usd,
             resolved: pre.prepared.resolvedAmount,
-            note: pre.prepared.notes.join(" ") || null,
+            note: built.tx.prerequisite_kind === "phoenix_fund"
+              ? "Your account holds enough assets that this order doesn't fit in one Solana transaction. This first transaction moves the USDC into Phoenix; the order itself follows."
+              : built.tx.prerequisite
+                ? "One-time setup: this creates your wallet's lookup table so margin transactions fit in one Solana transaction. The step itself follows."
+                : pre.prepared.notes.join(" ") || null,
           }),
           state: "running",
           simulation: pre.prepared.simulation ?? r.simulation,
@@ -591,6 +601,20 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
     const s = r.steps.find((x) => x.n === step.n);
     if (!s || s.signature !== signature || (s.status !== "submitted" && s.status !== "uncertain")) return { next: null, out: null };
     const note = confirmed ? null : `The transaction failed on chain: ${humanizeFailure((state as { err: string }).err)}`;
+    if (confirmed && s.tx?.prerequisite) {
+      // The one-time setup landed: the step itself is built next (status back to pending).
+      return {
+        next: {
+          ...withStep(r, step.n, s.tx.prerequisite_kind === "phoenix_fund"
+            ? { status: "pending", tx: null, signature: null, submitted_at: null, funded: true, note: "The USDC is in Phoenix. Preparing the order." }
+            : { status: "pending", tx: null, signature: null, submitted_at: null, note: "One-time setup done. Preparing the step itself." }),
+          state: r.state === "paused" ? "running" : r.state,
+          pause_reason: null,
+          log: logEvent(r, t, `prerequisite_confirmed:${step.n}`),
+        },
+        out: null,
+      };
+    }
     return { next: { ...withStep(r, step.n, { status: confirmed ? "confirmed" : "failed", note }), state: r.state === "paused" && confirmed ? "running" : r.state, pause_reason: confirmed ? null : r.pause_reason, log: logEvent(r, t, `${confirmed ? "confirmed" : "failed_onchain"}:${step.n}`) }, out: null };
   });
   const s2 = next.steps.find((x) => x.n === step.n);
@@ -599,6 +623,6 @@ export async function confirmWorkflow(id: string, req: ConfirmRequest, user: Cop
     status: s2?.status ?? (confirmed ? "confirmed" : "failed"),
     signature,
     explorer_url: sigLink(signature),
-    message: confirmed ? "Confirmed on chain." : (s2?.note ?? "The transaction failed."),
+    message: s2?.status === "pending" ? s2.note : confirmed ? "Confirmed on chain." : (s2?.note ?? "The transaction failed."),
   };
 }

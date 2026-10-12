@@ -7,92 +7,16 @@
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { hfPos, LIQ_HF } from "@/lib/account-model";
 import { nf, pct, usd } from "./format";
 import { IC } from "./icons";
 
 // ---------------------------------------------------------------------------------------------
-// Info tooltip: hover or keyboard focus shows it, a click / tap pins it, Escape or a click
-// elsewhere closes it (the design's single floating `.tip`).
+// All app help icons share the same viewport-aware, accessible overlay.
 // ---------------------------------------------------------------------------------------------
 export function Info({ text, label }: { text: string; label?: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const [pinned, setPinned] = useState(false);
-  const tipRef = useRef<HTMLDivElement>(null);
-
-  const place = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const tw = tipRef.current?.offsetWidth ?? 240;
-    const th = tipRef.current?.offsetHeight ?? 40;
-    const x = Math.max(8, Math.min(window.innerWidth - tw - 8, r.left + r.width / 2 - tw / 2));
-    let y = r.top - th - 8;
-    if (y < 8) y = r.bottom + 8;
-    setPos({ x, y });
-  }, []);
-
-  useEffect(() => {
-    if (!pos) return;
-    // Measure once rendered (the first placement guessed the size).
-    place();
-    const close = (e: Event) => {
-      if (e.type === "keydown" && (e as KeyboardEvent).key !== "Escape") return;
-      if (e.type === "mousedown" && ref.current?.contains(e.target as Node)) return;
-      setPos(null);
-      setPinned(false);
-    };
-    const onScroll = () => (pinned ? place() : setPos(null));
-    document.addEventListener("keydown", close);
-    document.addEventListener("mousedown", close);
-    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
-    return () => {
-      document.removeEventListener("keydown", close);
-      document.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", onScroll, { capture: true });
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos !== null, pinned]);
-
-  return (
-    <>
-      <span
-        ref={ref}
-        className="info-i"
-        tabIndex={0}
-        role="button"
-        aria-label={label ?? text}
-        onMouseEnter={() => !pinned && place()}
-        onMouseLeave={() => !pinned && setPos(null)}
-        onFocus={() => place()}
-        onBlur={() => !pinned && setPos(null)}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (pinned) {
-            setPinned(false);
-            setPos(null);
-          } else {
-            setPinned(true);
-            place();
-          }
-        }}
-      >
-        i
-      </span>
-      {pos &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <div className="v3">
-            <div ref={tipRef} className="tip" role="tooltip" style={{ left: pos.x, top: pos.y }}>
-              {text}
-            </div>
-          </div>,
-          document.body,
-        )}
-    </>
-  );
+  return <InfoTooltip content={text} label={label ?? text} triggerClassName="info-i" size="regular" />;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -251,9 +175,10 @@ export interface StatItem {
   sub?: ReactNode;
   valueClass?: string;
 }
-export function StatStrip({ items, n }: { items: StatItem[]; n?: number }) {
+/** `center`: the Margin page's strip look (icon + label on one centered line, centered value). */
+export function StatStrip({ items, n, center = false }: { items: StatItem[]; n?: number; center?: boolean }) {
   return (
-    <section className={`fs ${items.length % 2 ? "odd" : ""}`} style={{ ["--n" as string]: n ?? items.length }}>
+    <section className={`fs ${items.length % 2 ? "odd" : ""} ${center ? "c" : ""}`} style={{ ["--n" as string]: n ?? items.length }}>
       {items.map((it, k) => (
         <article key={k}>
           <div className="hd">

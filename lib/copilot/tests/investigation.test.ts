@@ -3,7 +3,10 @@
  * read catalogue, decision parsing, sizing and plan store run. The model's tool calls are scripted turn by turn, the way
  * Gemini answers with function calls.
  */
+import { investigationDeps } from "../investigation/runtime";
+import { onlyDeclineWording } from "../testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { copilotConfig } from "../config";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
 import { setLimitStoreForTests } from "../limits";
@@ -121,6 +124,36 @@ describe("investigate, then decide", () => {
     expect(llm.requests[1].user).toContain("5000"); // the evidence the model now reasons over
   });
 
+  it("gives the first model turn the account health when it is back in time, so an account question takes one turn", async () => {
+    const llm = scripted([[{ name: "answer", args: { headline: "You have no debt, so there is no health factor." } }]]);
+    setLlmClient(llm);
+    const res = await chat("how is my account doing?");
+    expect(res.kind).toBe("answer");
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0].user).toMatch(/EVIDENCE[\s\S]*get_account_health/);
+  });
+
+  it("stops retrying a read after it has failed twice, and tells the model to decide with what it has", async () => {
+    const original = investigationDeps.executeRead;
+    let vaultReads = 0;
+    investigationDeps.executeRead = async (tool, a, ctx) => {
+      if (tool === "get_vaults") {
+        vaultReads++;
+        throw new Error("timed out");
+      }
+      return original(tool, a, ctx);
+    };
+    try {
+      const llm = scripted((Array.from({ length: 5 }, () => [{ name: "get_vaults", args: {} }]) as Call[][]).concat([[{ name: "answer", args: { headline: "The vault list couldn't be read just now." } }]]));
+      setLlmClient(llm);
+      await chat("show me the vaults");
+      expect(vaultReads).toBe(2);
+      expect(JSON.stringify(llm.requests.map((r) => r.user))).toMatch(/has already failed twice/);
+    } finally {
+      investigationDeps.executeRead = original;
+    }
+  });
+
   it("binds every read to the signed-in wallet, whatever the model passes", async () => {
     setLlmClient(scripted([[{ name: "get_account_health", args: { authority: WALLET_B } }], [{ name: "answer", args: { headline: "You have no debt, so there is no health factor." } }]]));
     const res = await chat("how am i doing");
@@ -137,6 +170,51 @@ describe("investigate, then decide", () => {
     expect(res.kind).toBe("plan_preview");
     // (3 - 1) x $100 = $200 of SOL at $120 = 1.666666666 SOL
     expect(res.plan?.steps.map((s) => [s.op, s.asset, s.amount])).toEqual([["deposit", "USDC", "100"], ["borrow", "SOL", "1.666666666"]]);
+  });
+
+  it("sizes a percentage on a later step when no earlier step touches that balance", async () => {
+    const row = (symbol: string, units: string, usd: string, price: string) =>
+      ({ symbol, raw_balance: 0, ui_balance: units, usd_value: usd, price: { usd: price, fresh: true } });
+    vi.spyOn(mcp, "accountHealth").mockImplementation(async () => ({
+      ...HEALTH,
+      collateral: [row("SOL", "5", "600.00", "120"), row("JupSOL", "2", "260.00", "130"), row("JupUSD", "40", "40.00", "1"), row("GOOGLx", "3", "540.00", "180")],
+      total_collateral_usd: "1440.00",
+    }));
+    vi.spyOn(mcp, "canWithdraw").mockImplementation(async () => ({ allowed: true, projected_health_factor: null, current_health_factor: null }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "withdraw", asset: "JupSOL", sizing: { kind: "all" }, source_quote: "withdraw all my jup sol" },
+      { op: "withdraw", asset: "JupUSD", sizing: { kind: "all" }, source_quote: "all jup usd" },
+      { op: "withdraw", asset: "GOOGLx", sizing: { kind: "fraction", percent: 50 }, source_quote: "50% of googlex" },
+    ], requested_count: 3 } }]]));
+    const res = await chat("withdraw all my jup sol, all jup usd, 50% of googlex");
+    expect(res.message).not.toMatch(/only be used on the first step/);
+    expect(res.kind).toBe("plan_preview");
+    expect(res.plan?.steps.map((s) => [s.asset, s.amount])).toEqual([["JupSOL", "all"], ["JupUSD", "all"], ["GOOGLx", "1.5"]]);
+  });
+
+  it("asks for an exact amount only when an earlier step changes the balance a percentage is of", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "deposit", asset: "SOL", sizing: { kind: "literal", amount: "2" }, source_quote: "deposit 2 SOL" },
+      { op: "withdraw", asset: "SOL", sizing: { kind: "fraction", percent: 50 }, source_quote: "then withdraw half my SOL" },
+    ], requested_count: 2 } }]]));
+    const res = await chat("deposit 2 SOL then withdraw half my SOL");
+    expect(res.message).toMatch(/50% of your SOL depends on "Deposit 2 SOL/);
+  });
+
+  it("sizes 'half my USDC into USD*' from the margin and wallet USDC the plan can use", async () => {
+    vi.spyOn(mcp, "accountHealth").mockImplementation(async () => ({
+      ...HEALTH,
+      collateral: [...HEALTH.collateral, { symbol: "USDC", raw_balance: 0, ui_balance: "200", usd_value: "200.00", price: { usd: "1", fresh: true } }],
+    }));
+    const llm = scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "vault_deposit", vault: "perena-usdstar", sizing: { kind: "fraction", percent: 50 }, source_quote: "put half my usdc in usd*" },
+    ], requested_count: 1 } }]]);
+    setLlmClient(llm);
+    const res = await chat("put half my usdc in usd*");
+    // The decision guard accepted a fraction for a vault deposit (no correction turn was needed).
+    expect(llm.requests.filter((r) => r.user.includes("put half my usdc")).length).toBeGreaterThan(0);
+    expect(JSON.stringify(res)).not.toMatch(/sizing must be one of/);
+    expect(JSON.stringify(res)).toMatch(/2600(\.0+)? USDC/); // (200 in margin + 5000 in the wallet) / 2
   });
 
   it("carries the previous step's amount into the next one", async () => {
@@ -190,7 +268,7 @@ describe("the boundary between the model and the money", () => {
     setLlmClient(llm);
     const res = await chat("liquidate that account");
     expect(res.kind).toBe("blocked");
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 
   it("lets the model decide what is on-topic when there is no product word, and shows its refusal", async () => {
@@ -256,7 +334,7 @@ describe("attacks and policy stay deterministic", () => {
     const res = await chat(message);
     expect(res.kind).toBe("blocked");
     expect(res.message).toContain(expected);
-    expect(llm.requests).toHaveLength(0);
+    expect(onlyDeclineWording(llm.requests)).toBe(true);
   });
 
   it("cross-checks a conditional order: proposing it as an action now goes back to the model, which declines it", async () => {
@@ -395,6 +473,64 @@ describe("only what the user asked for", () => {
     const res = await chat("borrow usdc using 50 sol at 2x");
     expect(res.kind).toBe("clarification");
     expect(res.message).toMatch(/holds 5 SOL/);
+  });
+});
+
+describe("a borrow sized on one holding", () => {
+  const floor = copilotConfig.minHealthFactor;
+  const PROMPT = "Deposit 5 JupSOL as collateral, borrow what i can against 5 jupSol";
+  const plan = (base = "5") => [
+    { op: "deposit", asset: "JupSOL", sizing: { kind: "literal", amount: "5" }, source_quote: "Deposit 5 JupSOL as collateral" },
+    { op: "borrow", asset: "USDC", sizing: { kind: "max_safe", base_asset: "JupSOL", base_amount: base }, source_quote: "borrow what i can against 5 jupSol" },
+  ];
+
+  beforeEach(() => {
+    vi.spyOn(mcp, "wallet").mockImplementation(async () => ({
+      authority: WALLET_A,
+      sol_balance: "10",
+      margin_account_exists: true,
+      assets: ["SOL", "USDC", "USDT", "JupSOL"].map((symbol) => ({ symbol, wallet_balance: "5000", lender_share_balance: "0", lender_redeemable_underlying: "0" })),
+    }));
+  });
+
+  it("sizes the borrow on that holding alone, not the whole account", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan() } }]]));
+    const res = await chat(PROMPT);
+    expect(res.kind).toBe("plan_preview");
+    const [deposit, borrow] = res.plan?.steps.map((s) => Number(s.amount)) ?? [];
+    expect(deposit).toBe(5);
+    // 5 JupSOL x $130 = $650; on its own it holds (650 + x) / x >= floor at x = 650 / (floor - 1); the whole account
+    // ($600 SOL + $650 JupSOL) would allow far more.
+    const onItsOwn = 650 / (floor - 1);
+    expect(borrow).toBeLessThanOrEqual(onItsOwn);
+    expect(borrow).toBeGreaterThan(onItsOwn * 0.99);
+    expect(JSON.stringify(res.plan)).toMatch(/5 JupSOL of your collateral/);
+  });
+
+  it("never sizes past what the pool can lend", async () => {
+    vi.spyOn(mcp, "poolStats").mockImplementation(async (symbol: string) => ({ asset_symbol: symbol, available_liquidity: "1000" }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan() } }]]));
+    const res = await chat(PROMPT);
+    expect(res.kind).toBe("plan_preview");
+    expect(Number(res.plan?.steps[1].amount)).toBeLessThanOrEqual(1000 * 0.99);
+    expect(JSON.stringify(res.plan)).toMatch(/what the USDC pool can lend/);
+  });
+
+  it("will not size against more than the account holds plus this plan deposits", async () => {
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: plan("50") } }]]));
+    const res = await chat("Deposit 5 JupSOL as collateral, borrow what i can against 50 jupSol");
+    expect(res.kind).toBe("clarification");
+    expect(res.message).toMatch(/this plan deposits 5 JupSOL/);
+  });
+
+  it("caps a whole-account max borrow at the pool's available liquidity", async () => {
+    vi.spyOn(mcp, "poolStats").mockImplementation(async (symbol: string) => ({ asset_symbol: symbol, available_liquidity: "100" }));
+    setLlmClient(scripted([[{ name: "propose_actions", args: { actions: [
+      { op: "borrow", asset: "USDC", sizing: { kind: "max_safe" }, source_quote: "borrow the max usdc" },
+    ] } }]]));
+    const res = await chat("borrow the max usdc");
+    expect(res.kind).toBe("preview");
+    expect(Number(res.preview?.slots.amount)).toBeLessThanOrEqual(99);
   });
 });
 

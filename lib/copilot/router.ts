@@ -22,6 +22,8 @@ import {
   validateWrite,
   unofferedMessage,
   perpMarketOf,
+  vaultOf,
+  extractAssets,
   type Asset,
   type AskOption,
   type Intent,
@@ -51,6 +53,12 @@ const refuse = (message: string): Intent => ({ lane: "refuse", reason: "guard", 
 
 const FARM_HINT = /\b(?:kamino|farm|farming|farmed|unfarm)\b/;
 /** A perps message phrased as a question or a preview reads; anything else with a trade verb trades. */
+/** A request for yield that names no product: "best yield", "where should I put my USDC", "passive income". */
+const YIELD_ASK = /\b(?:best|highest|top|better|compare|comparison|options?|where\s+(?:should|can|do)\s+i|ways?\s+to)\b[^.?!]*\b(?:yield|apy|apr|returns?|interest|earn(?:ing)?|income)\b|\b(?:passive\s+income|put\s+(?:it|my\s+\w+|them)\s+to\s+work|grow\s+my\s+\w+|stake\s+my\s+\w+|best\s+place\s+(?:for|to\s+put)\s+my\s+\w+|earn\s+(?:on|with|from)\s+my\s+\w+)\b/;
+/** A product named in the message: then it is not a generic yield question. */
+const PRODUCT_NAMED = /\b(?:earn\s+pool|lending\s+pool|kamino|farm|vaults?|basis|perena|junior|delta[\s-]?neutral)\b|usd\*/;
+/** Basis / Perena vaults: "vault", "basis", "delta neutral", "perena", "USD*", "junior", the vb share tickers. */
+const VAULT_HINT = /\b(?:vaults?|basis|delta[\s-]?neutral|perena|junior|vb(?:sol|eth|btc|tsla|meta))\b|usd\*/;
 const PERP_QUESTION = /\b(?:what\s+(?:if|would|happens|are|is)|preview|simulate|look\s+like|how\s+(?:much|many|close|far)|would\s+(?:it|a|an|my|i)|show|list|tell\s+me|which|can\s+i|could\s+i)\b|\?\s*$/;
 /** Phoenix perps: "perp", "perps", "perpetuals", "SOL-PERP", "phoenix". */
 const PERP_HINT = /\b(?:perps?|perpetuals?|phoenix)\b|\b(?:sol|eth|btc|tsla|meta)-?perp\b/;
@@ -548,7 +556,64 @@ function perpsRead(lower: string): Intent | null {
   return read({ kind: "perps_markets" });
 }
 
+/** The vault a message names: "ETH basis", "basis eth", "vbETH", "USD* junior", "USD*", "perena". */
+function vaultIn(lower: string): ReturnType<typeof vaultOf> {
+  const basis = lower.match(/\b(sol|eth|btc|tsla|meta)\s+basis\b|\bbasis\s+(sol|eth|btc|tsla|meta)\b|\bvb(sol|eth|btc|tsla|meta)\b/);
+  if (basis) return vaultOf(`basis-${basis[1] ?? basis[2] ?? basis[3]}`);
+  if (/\bjunior\b/.test(lower)) return "perena-junior";
+  if (/usd\*|\bperena\b|\busdstar\b/.test(lower)) return "perena-usdstar";
+  return null;
+}
+
+/**
+ * Basis and Perena vaults (the keyword fallback when Gemini is unavailable): a question or a preview reads; an
+ * instruction ("deposit 20 USDC into ETH basis", "withdraw my USD*") trades.
+ */
+function vaultsRead(lower: string): Intent | null {
+  // "Kamino vault" is the Kamino farm.
+  if (!VAULT_HINT.test(lower) || /\bkamino\b/.test(lower)) return null;
+  const read = (r: ReadIntent): Intent => {
+    const v = validateRead(r);
+    return v.ok ? { lane: "read", read: v.value } : refuse(v.message);
+  };
+  const write = (w: WriteIntent): Intent => {
+    const v = validateWrite(w);
+    return v.ok ? { lane: "write", write: v.value } : ask(v.message);
+  };
+  const vault = vaultIn(lower);
+  const amount = (lower.match(/(\d+(?:\.\d+)?)/) ?? [])[1] ?? null;
+  const question = PERP_QUESTION.test(lower);
+  const withdrawing = /\b(?:withdraw|exit|redeem|take\s+out|pull\s+out|cash\s+out)\b/.test(lower);
+  if (!question && /\bmove\b.*\bshares?\b/.test(lower)) return write({ op: "vault_move_shares", asset: null, vault, amount: { kind: "all" } });
+  if (!question && withdrawing) {
+    const pct = /\bhalf\b/.test(lower) ? 50 : Number((lower.match(/(\d+(?:\.\d+)?)\s*%/) ?? [])[1] ?? NaN);
+    const spec = Number.isFinite(pct) && pct < 100 ? { kind: "pct" as const, pct } : amount && !/\ball\b/.test(lower) ? { kind: "exact" as const, value: amount } : { kind: "all" as const };
+    return write({ op: "vault_withdraw", asset: null, vault, amount: spec });
+  }
+  if (!question && /\b(?:deposit|put|add|invest|supply|enter)\b/.test(lower)) {
+    return write({ op: "vault_deposit", asset: null, vault, amount: amount ? { kind: "exact", value: amount } : null });
+  }
+  if (vault && amount && /\b(?:preview|simulate|would|if)\b/.test(lower)) {
+    return read({ kind: "vault_preview", vault, call: withdrawing ? "withdraw" : "deposit", amount });
+  }
+  if (/\b(?:my|mine|i\s+have|do\s+i|positions?|holdings?)\b/.test(lower)) return read({ kind: "vaults_positions" });
+  return read({ kind: "vaults_list" });
+}
+
+/** "Where should I put my USDC for yield?": every way to earn on it, side by side (the user then picks). */
+function yieldRead(lower: string): Intent | null {
+  if (!YIELD_ASK.test(lower) || PRODUCT_NAMED.test(lower)) return null;
+  const asset = extractAssets(lower).assets[0] ?? null;
+  const r: ReadIntent = { kind: "yield_options", asset };
+  const v = validateRead(r);
+  return v.ok ? { lane: "read", read: v.value } : refuse(v.message);
+}
+
 export function keywordRoute(message: string): Intent {
+  const yieldAsk = yieldRead(message.toLowerCase());
+  if (yieldAsk) return yieldAsk;
+  const vaults = vaultsRead(message.toLowerCase());
+  if (vaults) return vaults;
   const perps = perpsRead(message.toLowerCase());
   if (perps) return perps;
   const clauses = expandAmountList(message) ?? splitClauses(message);
@@ -625,6 +690,7 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
     if (a.kind === "exact" || a.kind === "out" || a.kind === "usd") return typedAs(a.value);
     if (a.kind === "hf") return typedAs(String(a.target));
     if (a.kind === "lev" && a.base) return typedAs(a.base.value);
+    if (a.kind === "against") return typedAs(a.base.value);
     return true;
   };
   switch (intent.lane) {
@@ -643,7 +709,7 @@ export function amountsAreTyped(intent: Intent, message: string, history: Array<
 
 /** The keyword router is trusted when it resolved the request or refused it. A question it asked only because
  * its patterns could not read the sentence (an amount list, a missing amount in a chain) is given to the model. */
-const INFO_READS = new Set(["price", "pool", "earn_position", "farm_markets", "farm_positions", "positions", "wallet", "debt", "collateral", "history", "protocol", "perps_markets", "perps_positions", "perps_preview"]);
+const INFO_READS = new Set(["price", "pool", "earn_position", "farm_markets", "farm_positions", "positions", "wallet", "debt", "collateral", "history", "protocol", "perps_markets", "perps_positions", "perps_preview", "vaults_list", "vaults_positions", "vault_preview", "yield_options"]);
 const AMOUNT_OF_ASSET = /\d[\d.,]*k?\s*(?:sol|usdc|usdt|jitosol|jupsol|ksol|kusdc|kusdt)\b/i;
 
 /**

@@ -7,10 +7,12 @@
  *
  * Data: Kamino reserve metrics (`useFarmPools`, GET /api/farm/pools), the margin account's Kamino
  * cTokens and their earnings / net APY ({@link useFarmAccount}), farm history decoded from the margin
- * account's on-chain events (`useMarginHistory`). Basis and Perena rows use deployed vault state
- * (./vault-rows.tsx), in the same row / sortable-header style as the Kamino rows.
+ * account's on-chain events (`useMarginHistory`). Basis rows use deployed vault state
+ * (./vault-rows.tsx), in the same row / sortable-header style as the Kamino rows; Perena vaults get
+ * their own table under the Kamino one (Lending/Single Assets), with Perena's published APY.
  */
 import "./farm-v3.css";
+import { apyText } from "@/lib/farm/yield";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Banner, Info, Seg, StatStrip } from "@/components/v3/ui";
@@ -21,9 +23,8 @@ import { explorerUrl } from "@/lib/solana/config";
 import { isFarmListed } from "@/lib/solana/farm";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { useVaults, useVaultAccount } from "@/lib/farm/use-vaults";
-import { positionOf, vaultHref } from "@/lib/farm/basis-live";
-import { VaultTable } from "./vault-rows";
-import { PerenaCards } from "./perena/perena-cards";
+import { perenaProduct, positionOf, usePerenaMarket, vaultHref } from "@/lib/farm/basis-live";
+import { VaultTable, useBasisApys } from "./vault-rows";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { Cell, CheckDropdown, SortHead, Venue, sortRows, useOutside, type SortState } from "./fm-ui";
 
@@ -61,7 +62,10 @@ export function FarmList() {
   const [thr, setThr] = useState("");
   const [thrOpen, setThrOpen] = useState(false);
   const [sort, setSort] = useState<SortState>(null);
+  const [perenaSort, setPerenaSort] = useState<SortState>(null);
   const liveVaults = useVaults();
+  const basisApys = useBasisApys();
+  const perenaMarket = usePerenaMarket();
   const thrRef = useOutside(thrOpen, () => setThrOpen(false));
 
   // "Back to pools" from a basis vault lands on /farm?category=delta-neutral.
@@ -97,11 +101,27 @@ export function FarmList() {
   // ---- Stats strip (connected): live margin holdings across Kamino, Basis and Perena. ----
   const t = farm.totals;
   const hf = farm.hf;
+  // Basis / Perena positions in the strip: their earnings (value now − net USDC in, from the margin
+  // account's history) and their APY (Basis: realized 7D or the Phoenix-funding estimate; Perena:
+  // Perena's published 7D APY), weighted by value together with the Kamino positions.
+  const vaultPos = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0)).map((v) => {
+    const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
+    const apy = v.kind === "basis" ? basisApys[v.id]?.value ?? null : perenaProduct(perenaMarket, v.id).apy7 ?? null;
+    return { value: p.valueUsd, earned: p.earnedUsd, apy };
+  });
+  const vaultEarned = vaultPos.reduce((sum, p) => sum + (p.earned ?? 0), 0);
+  const earnedTotal = (t.earned ?? 0) + vaultEarned;
+  const earnedKnown = t.earned !== null || vaultPos.some((p) => p.earned !== null);
+  const kaminoW = t.netApy !== null ? t.tvl : 0;
+  const vaultW = vaultPos.filter((p) => p.apy !== null).reduce((sum, p) => sum + p.value, 0);
+  const netFarmApy =
+    kaminoW + vaultW > 0 ? ((t.netApy ?? 0) * 100 * kaminoW + vaultPos.reduce((sum, p) => sum + (p.apy !== null ? p.apy * p.value : 0), 0)) / (kaminoW + vaultW) : null;
   const netTip =
-    "Yearly yield of your farm positions after borrow cost: the value-weighted Kamino supply APY, minus the Vanna borrow rate on the part of each position funded by your debt in the same token (the smaller of the position's value and that debt). Rates are today's on-chain rates.";
+    "Value-weighted yearly yield of all your farm positions at today's rates: Kamino supply APY after the Vanna borrow rate on the part funded by your debt in the same token; Basis vaults at their realized 7-day APY (or, until a vault has 7 days of history, the estimate from Phoenix funding); Perena at its published 7-day APY.";
   const strip = farm.connected && (
     <div className="fm-fsw">
       <StatStrip
+        center
         n={5}
         items={[
           { icon: IC.wallet, label: "Your Deposit TVL", value: usd(t.tvl + vaultTvl) },
@@ -110,11 +130,11 @@ export function FarmList() {
             label: (
               <>
                 Your Earnings{" "}
-                <Info text="Underlying you can redeem now minus what you supplied (net of withdrawals), from your margin account's on-chain history, at today's price. Shows $0.00 when that history is incomplete." />
+                <Info text="Kamino and vault positions: what you can redeem now minus what you put in (net of withdrawals), from your margin account's on-chain history, at today's price." />
               </>
             ),
-            value: usd(vaultHoldings.length > 0 || t.earned === null ? 0 : t.earned),
-            valueClass: t.earned !== null && t.earned > 0 ? "pos" : "",
+            value: sUsd(earnedKnown ? earnedTotal : 0),
+            valueClass: earnedKnown && earnedTotal > 0 ? "pos" : earnedKnown && earnedTotal < 0 ? "neg" : "",
           },
           {
             icon: IC.pct,
@@ -123,9 +143,8 @@ export function FarmList() {
                 Net Farm APY <Info text={netTip} />
               </>
             ),
-            value: pct(vaultHoldings.length > 0 || t.netApy === null ? 0 : t.netApy * 100),
-            valueClass: t.netApy !== null && t.netApy < 0 ? "neg" : "",
-            sub: t.grossApy === null ? (farm.rows.length || vaultHoldings.length ? "" : "No farm positions") : `${pct(t.grossApy * 100)} before borrow cost`,
+            value: pct(netFarmApy ?? 0),
+            valueClass: netFarmApy !== null && netFarmApy < 0 ? "neg" : "",
           },
           {
             icon: IC.spark,
@@ -144,7 +163,8 @@ export function FarmList() {
               </>
             ),
             value: hfFmt(hf),
-            valueClass: hf === null ? "" : hfZone(hf),
+            // Same colouring as Margin: green "No debt", zone colour otherwise.
+            valueClass: hf === null ? "z-ok" : hfZone(hf),
           },
         ]}
       />
@@ -206,17 +226,84 @@ export function FarmList() {
     );
   };
 
-  const dnTable = () => <VaultTable kind="basis" query={q} keepAsset={keepAsset} sort={sort} onSort={setSort} />;
-  const perenaTable = () => <PerenaCards query={q} keepAsset={keepAsset} />;
+  // Perena vaults: their own table under the Kamino one (a vault has no borrow side, so it gets its
+  // own columns), in the same row / pill / sortable-header style.
+  const perenaTable = () => {
+    const query = q.trim().toLowerCase();
+    const items = VAULTS.filter((v) => v.kind === "perena" && (!query || `${v.name} ${v.symbol} perena usdc`.toLowerCase().includes(query)) && keepAsset(v.asset)).map((v) => {
+      const st = liveVaults.data.find((x) => x.id === v.id);
+      const product = perenaProduct(perenaMarket, v.id);
+      const apy = product.apy7 ?? 0;
+      const tvl = st?.navUsd ?? 0;
+      const px = st?.sharePriceUsd ?? 0;
+      const supply = px > 0 ? tvl / px : 0;
+      const held = vaultHoldings.find((c) => c.mint === v.mint);
+      return {
+        v: { asset: v.symbol, prot: "Perena", tvl, px, apy, holders: product.holders ?? 0, hold: held?.usd ?? 0 },
+        el: (
+          <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k7" aria-label={`Open ${v.name} vault`}>
+            <Cell
+              v={
+                <span className="fm-tk">
+                  <Icon sym="SOL" className="fm-chn" />
+                  <Icon sym={v.symbol} className="fm-ico16" />
+                  {v.symbol}
+                </span>
+              }
+              mini={["Perena", "Vault"]}
+            />
+            <Cell v={<Venue name="Perena" />} />
+            <Cell v={`${cmp(supply)} ${v.symbol}`} mini={usd(tvl)} />
+            <Cell v={usd(px, 6)} mini="USDC per share" />
+            <Cell v={pct(apy)} cls={apy > 0 ? "pos" : ""} />
+            <Cell v={nf(product.holders ?? 0, 0)} />
+            <Cell v={`${nf(held?.amount ?? 0, 4)} ${v.symbol}`} mini={usd(held?.usd ?? 0)} />
+          </Link>
+        ),
+      };
+    });
+    if (!items.length) return null;
+    return (
+      <>
+        <h2 className="fm-tblh">
+          <Icon sym="Perena" className="fm-ico16 fm-inl" />
+          Perena vaults
+        </h2>
+        <div className="fm-tbl" aria-label="Perena vaults">
+          <SortHead
+            cls="k7"
+            sort={perenaSort}
+            onSort={setPerenaSort}
+            cols={[
+              ["Asset", "asset"],
+              ["Protocol", "prot"],
+              ["Total Value Locked", "tvl", "Receipt supply × share price, read on chain by Vanna."],
+              ["Share Price", "px", "USDC per receipt, from Perena's on-chain price account."],
+              ["APY (7D)", "apy", "Perena's published 7-day APY (api.perena.org), as on app.perena.org/earn."],
+              ["Holders", "holders", "Wallets holding the receipt, from Perena's public API."],
+              ["Holding", "hold"],
+            ]}
+          />
+          {sortRows(items, perenaSort).map((x) => x.el)}
+        </div>
+      </>
+    );
+  };
+
+  const dnTable = () => <VaultTable query={q} keepAsset={keepAsset} keepApy={keepThr} sort={sort} onSort={setSort} />;
 
   const posTable = () => {
     // Kamino cTokens and Basis / Perena receipts held in the margin account, one table.
     const vaultItems = VAULTS.filter((v) => vaultHoldings.some((c) => c.mint === v.mint && c.amount > 0) && keepAsset(v.asset)).map((v) => {
       const p = positionOf(v, vaultAccount.margin, farm.history, farm.historyComplete);
-      const apy = liveVaults.data.find((x) => x.id === v.id)?.apy7 ?? 0;
+      const st = liveVaults.data.find((x) => x.id === v.id);
       const basis = v.kind === "basis";
+      // Basis: realized 7D APY, else the Phoenix-funding estimate (same as the Delta-Neutral list).
+      const basisApy = basis ? basisApys[v.id] : undefined;
+      // Perena: Perena's published 7D APY (the fork has no 7-day history of its own yet).
+      const apy = basisApy ? basisApy.value : perenaProduct(perenaMarket, v.id).apy7 ?? st?.apy7 ?? null;
       return {
-        v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy / 100 },
+        v: { asset: v.name, prot: basis ? "Jupiter · Phoenix" : "Perena", hold: p.valueUsd, earn: p.earnedUsd ?? 0, apy: apy === null ? Number.NEGATIVE_INFINITY : apy / 100 },
         el: (
           <Link key={v.id} href={vaultHref(v.id)} className="fm-tr fm-row k5" aria-label={`Open ${v.name}`}>
             <Cell
@@ -235,7 +322,7 @@ export function FarmList() {
             ) : (
               <Cell v={sUsd(p.earnedUsd)} mini={p.since ? `since ${dateLbl(p.since)}` : undefined} cls={p.earnedUsd >= 0 ? "pos" : "neg"} />
             )}
-            <Cell v={pct(apy)} mini="7D vault APY" />
+            <Cell v={apyText(apy)} mini={basisApy?.source === "launch" ? "Since launch" : basisApy?.estimate ? "Est. · Phoenix funding" : !basis ? "Perena 7D" : st?.apy7Source === "deposit-event" ? "Deposit-event estimate" : "7D vault APY"} />
           </Link>
         ),
       };
@@ -422,7 +509,7 @@ export function FarmList() {
                   </button>
                 )}
               />
-              {!dn && <span className="fm-ddw" ref={thrRef}>
+              <span className="fm-ddw" ref={thrRef}>
                 <button type="button" className="fm-chip" aria-haspopup="dialog" aria-expanded={thrOpen} onClick={() => setThrOpen((o) => !o)}>
                   {dn ? "Vault APY" : "Total Borrow"} <span>{thrLbl}</span>
                 </button>
@@ -460,7 +547,7 @@ export function FarmList() {
                     />
                   </div>
                 )}
-              </span>}
+              </span>
             </div>
           )}
         </div>

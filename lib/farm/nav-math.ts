@@ -4,7 +4,7 @@
  * Every figure is derived from REAL observations only: the hourly share-price points recorded by
  * lib/farm/nav-history.ts and Phoenix's published hourly funding rates (GET /api/farm/funding).
  * When the history is too short for a figure, the function returns null and the UI renders the
- * zero form ("0.00%") — nothing is extrapolated or sampled.
+ * unavailable state — nothing is extrapolated or sampled.
  */
 
 export interface NavPoint {

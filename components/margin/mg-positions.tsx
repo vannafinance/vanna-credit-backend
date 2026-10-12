@@ -15,6 +15,7 @@ import { hfFmt, levFmt, timeFmt, tokFmt, usd } from "@/components/v3/format";
 import { FlashRepayButton } from "@/components/v3/flash-repay";
 import { hfZone, isStable } from "@/lib/account-model";
 import { findToken } from "@/lib/solana/tokens";
+import { VAULTS } from "@/lib/solana/vault-catalogue";
 import { explorerUrl } from "@/lib/solana/config";
 import { accruedInterestBySymbol } from "@/lib/margin/amounts";
 import { useMarginHistory } from "@/hooks/use-margin";
@@ -41,6 +42,8 @@ const BADGE: Record<string, [string, string]> = {
 
 interface Asset {
   sym: string;
+  /** Logo key when it differs from `sym` (a vault receipt shows its underlying / product logo). */
+  icon?: string;
   amt: number;
   usd: number;
   tag?: string;
@@ -61,6 +64,13 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
     const coll: Asset[] = [];
     const idle: Asset[] = [];
     for (const c of snap?.collateral ?? []) {
+      // Basis / Perena vault receipts (vbSOL, USD* …) are tokens too, just not in the swap registry:
+      // show them as themselves, never as the Phoenix venue.
+      const vault = VAULTS.find((v) => v.mint === String(c.mint) || v.symbol === c.symbol);
+      if (vault) {
+        if (c.amount > DUST && c.usd > DUST_USD) coll.push({ sym: c.symbol, icon: vault.kind === "basis" ? vault.asset : vault.symbol, amt: c.amount, usd: c.usd, tag: "vault" });
+        continue;
+      }
       // The Phoenix venue holds no tokens: it is valued by the oracle (collateral + position equity).
       if (!findToken(c.symbol) && !isReceipt(c.symbol)) {
         if (c.usd > DUST_USD) coll.push({ sym: "PHX", amt: 0, usd: c.usd, tag: "perps" });
@@ -95,9 +105,10 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
     ] as [string, string, number][]
   ).filter((x) => x[2] > 0);
 
-  const asset = (a: Asset) => (
-    <div key={`${a.sym}${a.tag ?? ""}`} className="mg-as">
-      <Icon sym={a.sym} />
+  // Keyed by position in the list too: two venue entries can share a symbol + tag.
+  const asset = (a: Asset, i: number) => (
+    <div key={`${a.sym}${a.tag ?? ""}-${i}`} className="mg-as">
+      <Icon sym={a.icon ?? a.sym} />
       <div>
         <div className="mg-an num">
           {a.sym === "PHX" ? "Phoenix perps" : tokFmt(a.amt, a.sym)}
@@ -271,7 +282,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
             const a = amountOf(r);
             return (
               <div key={`${r.signature}${r.type}${r.symbol}`} className="mg-tr2">
-                <div className="mg-td mg-dt num">{timeFmt(r.timestamp)}</div>
+                <div className="mg-td mg-dt num">{timeFmt(Math.floor(r.timestamp / 1000))}</div>
                 <div className="mg-td">{badge(r.type)}</div>
                 <div className="mg-td">
                   {a !== null ? (
@@ -302,7 +313,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
                   {badge(r.type)}
                   <span className="num">{a !== null ? tokFmt(a, r.symbol) : ""}</span>
                 </div>
-                <small className="num">{timeFmt(r.timestamp)}</small>
+                <small className="num">{timeFmt(Math.floor(r.timestamp / 1000))}</small>
               </div>
               {tx(r.signature)}
             </div>

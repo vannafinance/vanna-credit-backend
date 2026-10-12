@@ -459,7 +459,7 @@ html.dark .px-root{
 @media (min-width:1024px){.px-page{padding-inline:120px}}
 .px-err{border:1px solid rgba(252,84,87,.4);background:rgba(252,84,87,.1);color:var(--px-short);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:500}
 
-/* Never let a hidden tooltip (opacity 0, still laid out) widen the page: no sideways scroll / shake. */
+/* Keep terminal content within the viewport; help overlays render outside this container. */
 .px-root{overflow-x:clip}
 
 /*
@@ -495,3 +495,26 @@ html:not(.dark) .px-positions-table .px-tbl th:last-child,html:not(.dark) .px-po
 .px-close-btn{display:inline-flex;align-items:center;justify-content:center;min-width:64px;height:30px;padding:0 14px;border-radius:999px;border:1px solid rgba(252,84,87,.45);background:rgba(252,84,87,.08);font-size:12px;line-height:18px;font-weight:600;color:#fc5457;transition:background .15s,border-color .15s}
 .px-close-btn:hover:not(:disabled){background:rgba(252,84,87,.18);border-color:#fc5457}
 .px-close-btn:disabled{opacity:.5;cursor:not-allowed}
+/* Desktop: no fixed minimum — the eight columns size to their content so the table fits the panel
+   without a horizontal scrollbar; tighter cell padding when the bottom panel is narrow. */
+@media (min-width:1024px){
+  .px-positions-table .px-tbl{min-width:0}
+}
+@container (max-width:779px){
+  .px-positions-table .px-tbl th{padding:10px 6px}
+  .px-positions-table .px-tbl td{padding:16px 6px}
+  .px-positions-table .px-tbl th:last-child,.px-positions-table .px-tbl td:last-child{padding-left:10px}
+}
+/* Narrow bottom panels: the Mark column goes (the mark is already in the market bar and order
+   book), so the rest fits without scrolling. */
+@container (max-width:779px){
+  .px-positions-table .px-tbl th:nth-child(4),.px-positions-table .px-tbl td:nth-child(4){display:none}
+}
+/* Positions: table while the bottom panel is wide enough to show every column without scrolling,
+   cards (.px-pcards) below that — same container query idea as the history cards. */
+.px-pcards{display:none;gap:8px}
+@container (max-width:619px){
+  .px-positions-table{display:none}
+  .px-pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+}
+.px-card-close{margin-left:auto;height:26px;min-width:56px;padding:0 12px}

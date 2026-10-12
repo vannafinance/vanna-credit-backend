@@ -1,3 +1,6 @@
+import { basisDepositPrices, basisLaunchedAt, sinceLaunchApy } from "@/lib/solana/server/basis-apy";
+import { forkUnixTimestamp, getConnection } from "@/lib/solana/connection";
+import { eventApy } from "@/lib/farm/yield";
 import { recordNav } from "@/lib/farm/nav-history";
 import { NextRequest, NextResponse } from "next/server";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
@@ -14,6 +17,7 @@ function read(id: string) {
   if (running) return running;
   const request = readLiveVault(VAULTS.find((v) => v.id === id)!)
     .then(async (row) => {
+      row.apyHistoryStatus = row.available && !row.stale ? "collecting" : "unavailable";
       if (
         row.available &&
         !row.stale &&
@@ -24,10 +28,37 @@ function read(id: string) {
           const history = await recordNav(row.id, row.sharePriceUsd);
           row.apy7 = history.apy7;
           row.apy30 = history.apy30;
+          row.apy7Source = row.apy7 !== null ? "history" : null;
+          row.apy30Source = row.apy30 !== null ? "history" : null;
         } catch {
-          /* Durable history can be unavailable without blocking current NAV. */
+          row.apyHistoryStatus = "unavailable";
         }
       }
+      if (id.startsWith("basis-") && row.available && !row.stale && row.sharePriceUsd && (row.navUsd ?? 0) > 1 && (row.apy7 === null || row.apy30 === null)) {
+        const points = await basisDepositPrices(VAULTS.find(v => v.id === id)!);
+        const current = { at: Date.now(), price: row.sharePriceUsd };
+        const seven = eventApy(points, current, 7);
+        const thirty = eventApy(points, current, 30);
+        if (row.apy7 === null && seven) {
+          row.apy7 = seven.value;
+          row.apy7Source = "deposit-event";
+          row.apy7BaselineAt = seven.baselineAt;
+        }
+        if (row.apy30 === null && thirty) {
+          row.apy30 = thirty.value;
+          row.apy30Source = "deposit-event";
+          row.apy30BaselineAt = thirty.baselineAt;
+        }
+      }
+      // Basis: realized APY since launch (share price from 1.0, by the second) — shown until a
+      // 7-day baseline exists, so a new vault never reads 0.00%.
+      if (id.startsWith("basis-") && row.available && row.sharePriceUsd) {
+        const def = VAULTS.find((v) => v.id === id)!;
+        const [launched, now] = await Promise.all([basisLaunchedAt(def), forkUnixTimestamp(getConnection()).then(Number).catch(() => Math.floor(Date.now() / 1000))]);
+        row.launchedAt = launched ? launched * 1000 : null;
+        row.apySinceLaunch = launched ? sinceLaunchApy(row.sharePriceUsd, now - launched) : null;
+      }
+      if (row.apy7 !== null) row.apyHistoryStatus = "available";
       cache.set(id, { at: Date.now(), row });
       return row;
     })

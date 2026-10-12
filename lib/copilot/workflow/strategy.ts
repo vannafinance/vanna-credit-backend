@@ -17,6 +17,7 @@ import { mcp } from "../mcp-client";
 import { loadFreshPrice, loadHealth, type ReadCtx } from "../mcp-facts";
 import { MARGIN_SWAP_BLOCKED_TARGETS, marginSwapBlockedMessage, planWarnings, reportStep, type StepSpec } from "../plan";
 import { DEFAULT_SLIPPAGE_BPS, floorDecimals, num, simulationFrom, sizeLever, tokenDecimals, usdToUnits } from "../risk";
+import { LIQUIDATION_HF_TEXT } from "../protocol-constants";
 import type { Simulation } from "../types";
 import { walletSpendable } from "./steps";
 
@@ -170,7 +171,7 @@ export async function planLever(intent: LeverIntent, ctx: ReadCtx): Promise<Stra
   const warnings = planWarnings(steps, [
     `Sized with the swap at its worst allowed price (${DEFAULT_SLIPPAGE_BPS / 100}% slippage); health before: ${fmtHf(hfBefore)}.`,
     "Prices move between steps, so the borrow and the swap are each re-checked against your live health factor and pause if they would fall below the floor.",
-    "Leverage magnifies losses: if the price of " + asset + " falls your health factor falls with it, and at 1.10 your account can be liquidated.",
+    "Leverage magnifies losses: if the price of " + asset + ` falls your health factor falls with it, and at ${LIQUIDATION_HF_TEXT} your account can be liquidated.`,
   ]);
   return { ok: true, plan: { summary, steps, warnings, simulation, hfFloor: floor } };
 }

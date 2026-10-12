@@ -1,0 +1,2182 @@
+{
+  "address": "4kFzca1u9TUAVK7BjJZ5vVtfJ2QRATs38vN8Bq6qZwG3",
+  "metadata": {
+    "name": "outcome_yield_pool",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Earns yield on idle YES/NO outcome tokens of World (world.xyz) prediction markets"
+  },
+  "instructions": [
+    {
+      "name": "allow_market",
+      "discriminator": [
+        228,
+        102,
+        116,
+        161,
+        90,
+        159,
+        191,
+        72
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "allowed_market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  101,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_pool",
+      "discriminator": [
+        233,
+        146,
+        209,
+        142,
+        207,
+        104,
+        64,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "allowed_market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  101,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "vanna_reserve"
+        },
+        {
+          "name": "usdc_mint",
+          "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        },
+        {
+          "name": "vanna_share_mint"
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "yes_mint"
+        },
+        {
+          "name": "no_mint"
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "vanna_reserve"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yes_share_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  101,
+                  115,
+                  95,
+                  115,
+                  104,
+                  97,
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "no_share_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  110,
+                  111,
+                  95,
+                  115,
+                  104,
+                  97,
+                  114,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pool"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_cash",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_yes",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "yes_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_no",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "no_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_usdc",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "spl_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_vanna_shares",
+          "docs": [
+            "Created here so Vanna's `lender_supply` never has to create it with the pool as payer."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool"
+              },
+              {
+                "kind": "account",
+                "path": "spl_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "vanna_share_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "spl_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "deposit",
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "depositor",
+          "signer": true
+        },
+        {
+          "name": "pool"
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "outcome_mint"
+        },
+        {
+          "name": "depositor_outcome",
+          "writable": true
+        },
+        {
+          "name": "pool_outcome",
+          "writable": true
+        },
+        {
+          "name": "share_mint",
+          "writable": true
+        },
+        {
+          "name": "recipient_shares",
+          "docs": [
+            "Receives the shares; its owner is the depositor's chosen recipient."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vanna",
+          "accounts": [
+            {
+              "name": "vanna_program"
+            },
+            {
+              "name": "vanna_protocol_config"
+            },
+            {
+              "name": "vanna_asset_config"
+            },
+            {
+              "name": "vanna_reserve",
+              "writable": true
+            },
+            {
+              "name": "usdc_mint"
+            },
+            {
+              "name": "vanna_liquidity_vault",
+              "writable": true
+            },
+            {
+              "name": "vanna_share_mint",
+              "writable": true
+            },
+            {
+              "name": "pool_usdc",
+              "writable": true
+            },
+            {
+              "name": "pool_vanna_shares",
+              "writable": true
+            },
+            {
+              "name": "spl_token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            },
+            {
+              "name": "associated_token_program",
+              "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            },
+            {
+              "name": "system_program",
+              "address": "11111111111111111111111111111111"
+            }
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "is_yes",
+          "type": "bool"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "disallow_market",
+      "discriminator": [
+        100,
+        242,
+        235,
+        45,
+        171,
+        54,
+        142,
+        175
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "allowed_market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  108,
+                  108,
+                  111,
+                  119,
+                  101,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "allowed_market.market",
+                "account": "AllowedMarket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_config",
+      "discriminator": [
+        208,
+        127,
+        21,
+        1,
+        194,
+        190,
+        196,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program",
+          "address": "4kFzca1u9TUAVK7BjJZ5vVtfJ2QRATs38vN8Bq6qZwG3"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "resolver",
+          "type": "pubkey"
+        },
+        {
+          "name": "keeper",
+          "type": "pubkey"
+        },
+        {
+          "name": "max_swap_loss_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "merge_and_deposit",
+      "discriminator": [
+        213,
+        158,
+        92,
+        208,
+        61,
+        132,
+        150,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anyone. The config's keeper alone may accept a CASH -> USDC price below par."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "docs": [
+            "Writable because prediCt requires its `merge` signer to be, and so does Vanna's `lender_supply`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "predict",
+          "accounts": [
+            {
+              "name": "market",
+              "writable": true
+            },
+            {
+              "name": "collateral_mint"
+            },
+            {
+              "name": "yes_mint",
+              "writable": true
+            },
+            {
+              "name": "no_mint",
+              "writable": true
+            },
+            {
+              "name": "market_cash_vault",
+              "writable": true
+            },
+            {
+              "name": "pool_cash",
+              "writable": true
+            },
+            {
+              "name": "pool_yes",
+              "writable": true
+            },
+            {
+              "name": "pool_no",
+              "writable": true
+            },
+            {
+              "name": "predict_program"
+            }
+          ]
+        },
+        {
+          "name": "vanna",
+          "accounts": [
+            {
+              "name": "vanna_program"
+            },
+            {
+              "name": "vanna_protocol_config"
+            },
+            {
+              "name": "vanna_asset_config"
+            },
+            {
+              "name": "vanna_reserve",
+              "writable": true
+            },
+            {
+              "name": "usdc_mint"
+            },
+            {
+              "name": "vanna_liquidity_vault",
+              "writable": true
+            },
+            {
+              "name": "vanna_share_mint",
+              "writable": true
+            },
+            {
+              "name": "pool_usdc",
+              "writable": true
+            },
+            {
+              "name": "pool_vanna_shares",
+              "writable": true
+            },
+            {
+              "name": "spl_token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            },
+            {
+              "name": "associated_token_program",
+              "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            },
+            {
+              "name": "system_program",
+              "address": "11111111111111111111111111111111"
+            }
+          ]
+        },
+        {
+          "name": "jupiter_program"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "swap_data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "redeem",
+      "discriminator": [
+        184,
+        12,
+        86,
+        149,
+        70,
+        196,
+        97,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "The share account's owner, or a delegate approved on it."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pool",
+          "docs": [
+            "Writable because prediCt requires its `split` signer to be."
+          ],
+          "writable": true
+        },
+        {
+          "name": "share_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_shares",
+          "writable": true
+        },
+        {
+          "name": "recipient_outcome",
+          "writable": true
+        },
+        {
+          "name": "predict",
+          "accounts": [
+            {
+              "name": "market",
+              "writable": true
+            },
+            {
+              "name": "collateral_mint"
+            },
+            {
+              "name": "yes_mint",
+              "writable": true
+            },
+            {
+              "name": "no_mint",
+              "writable": true
+            },
+            {
+              "name": "market_cash_vault",
+              "writable": true
+            },
+            {
+              "name": "pool_cash",
+              "writable": true
+            },
+            {
+              "name": "pool_yes",
+              "writable": true
+            },
+            {
+              "name": "pool_no",
+              "writable": true
+            },
+            {
+              "name": "predict_program"
+            }
+          ]
+        },
+        {
+          "name": "vanna",
+          "accounts": [
+            {
+              "name": "vanna_program"
+            },
+            {
+              "name": "vanna_protocol_config"
+            },
+            {
+              "name": "vanna_asset_config"
+            },
+            {
+              "name": "vanna_reserve",
+              "writable": true
+            },
+            {
+              "name": "usdc_mint"
+            },
+            {
+              "name": "vanna_liquidity_vault",
+              "writable": true
+            },
+            {
+              "name": "vanna_share_mint",
+              "writable": true
+            },
+            {
+              "name": "pool_usdc",
+              "writable": true
+            },
+            {
+              "name": "pool_vanna_shares",
+              "writable": true
+            },
+            {
+              "name": "spl_token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            },
+            {
+              "name": "associated_token_program",
+              "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            },
+            {
+              "name": "system_program",
+              "address": "11111111111111111111111111111111"
+            }
+          ]
+        },
+        {
+          "name": "jupiter_program"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "is_yes",
+          "type": "bool"
+        },
+        {
+          "name": "shares",
+          "type": "u64"
+        },
+        {
+          "name": "swap_data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "redeem_settled",
+      "discriminator": [
+        209,
+        90,
+        120,
+        86,
+        171,
+        127,
+        181,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "pool"
+        },
+        {
+          "name": "share_mint",
+          "writable": true
+        },
+        {
+          "name": "owner_shares",
+          "writable": true
+        },
+        {
+          "name": "outcome_mint",
+          "docs": [
+            "still holds tokens of this side, which means the mint is still live."
+          ]
+        },
+        {
+          "name": "pool_outcome",
+          "writable": true
+        },
+        {
+          "name": "recipient_outcome",
+          "writable": true
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "pool_cash",
+          "writable": true
+        },
+        {
+          "name": "recipient_cash",
+          "writable": true
+        },
+        {
+          "name": "recipient_usdc",
+          "writable": true
+        },
+        {
+          "name": "vanna",
+          "accounts": [
+            {
+              "name": "vanna_program"
+            },
+            {
+              "name": "vanna_protocol_config"
+            },
+            {
+              "name": "vanna_asset_config"
+            },
+            {
+              "name": "vanna_reserve",
+              "writable": true
+            },
+            {
+              "name": "usdc_mint"
+            },
+            {
+              "name": "vanna_liquidity_vault",
+              "writable": true
+            },
+            {
+              "name": "vanna_share_mint",
+              "writable": true
+            },
+            {
+              "name": "pool_usdc",
+              "writable": true
+            },
+            {
+              "name": "pool_vanna_shares",
+              "writable": true
+            },
+            {
+              "name": "spl_token_program",
+              "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            },
+            {
+              "name": "associated_token_program",
+              "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+            },
+            {
+              "name": "system_program",
+              "address": "11111111111111111111111111111111"
+            }
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "is_yes",
+          "type": "bool"
+        },
+        {
+          "name": "shares",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_admin",
+      "discriminator": [
+        251,
+        163,
+        0,
+        52,
+        91,
+        194,
+        187,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_resolver",
+      "discriminator": [
+        137,
+        108,
+        27,
+        51,
+        202,
+        16,
+        33,
+        119
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_resolver",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_swap_policy",
+      "discriminator": [
+        115,
+        160,
+        165,
+        250,
+        223,
+        234,
+        171,
+        27
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "keeper",
+          "type": "pubkey"
+        },
+        {
+          "name": "max_swap_loss_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "settle",
+      "discriminator": [
+        175,
+        42,
+        185,
+        87,
+        144,
+        131,
+        102,
+        212
+      ],
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true
+        },
+        {
+          "name": "market"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "settle_by_resolver",
+      "discriminator": [
+        149,
+        94,
+        52,
+        76,
+        224,
+        129,
+        201,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "resolver",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "writable": true
+        },
+        {
+          "name": "market"
+        }
+      ],
+      "args": [
+        {
+          "name": "yes_won",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AllowedMarket",
+      "discriminator": [
+        24,
+        17,
+        63,
+        79,
+        230,
+        161,
+        222,
+        140
+      ]
+    },
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "Pool",
+      "discriminator": [
+        241,
+        154,
+        109,
+        4,
+        17,
+        177,
+        109,
+        188
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "Deposit",
+      "discriminator": [
+        62,
+        205,
+        242,
+        175,
+        244,
+        169,
+        136,
+        52
+      ]
+    },
+    {
+      "name": "MarketAllowed",
+      "discriminator": [
+        105,
+        86,
+        175,
+        124,
+        200,
+        95,
+        175,
+        101
+      ]
+    },
+    {
+      "name": "MarketDisallowed",
+      "discriminator": [
+        6,
+        115,
+        186,
+        207,
+        175,
+        218,
+        86,
+        181
+      ]
+    },
+    {
+      "name": "MergeAndDeposit",
+      "discriminator": [
+        152,
+        137,
+        202,
+        50,
+        179,
+        180,
+        127,
+        101
+      ]
+    },
+    {
+      "name": "PoolCreated",
+      "discriminator": [
+        202,
+        44,
+        41,
+        88,
+        104,
+        220,
+        157,
+        82
+      ]
+    },
+    {
+      "name": "PoolSettled",
+      "discriminator": [
+        71,
+        220,
+        136,
+        147,
+        65,
+        185,
+        90,
+        47
+      ]
+    },
+    {
+      "name": "Redeem",
+      "discriminator": [
+        251,
+        40,
+        155,
+        2,
+        18,
+        221,
+        176,
+        73
+      ]
+    },
+    {
+      "name": "RedeemSettled",
+      "discriminator": [
+        252,
+        5,
+        7,
+        82,
+        12,
+        122,
+        154,
+        28
+      ]
+    },
+    {
+      "name": "SwapPolicySet",
+      "discriminator": [
+        24,
+        17,
+        219,
+        215,
+        56,
+        143,
+        109,
+        49
+      ]
+    },
+    {
+      "name": "Swapped",
+      "discriminator": [
+        217,
+        52,
+        52,
+        83,
+        147,
+        135,
+        96,
+        109
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Signer is not the config admin"
+    },
+    {
+      "code": 6001,
+      "name": "NotResolver",
+      "msg": "Signer is not the config resolver"
+    },
+    {
+      "code": 6002,
+      "name": "NotPredictMarket",
+      "msg": "Account is not a prediCt Market"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidCollateral",
+      "msg": "Market collateral is not CASH"
+    },
+    {
+      "code": 6004,
+      "name": "OutcomeMintMismatch",
+      "msg": "Mint does not match the market's outcome mint"
+    },
+    {
+      "code": 6005,
+      "name": "VannaAccountMismatch",
+      "msg": "Account is not the pool's Vanna reserve or one of its accounts"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidVannaReserve",
+      "msg": "Account is not Vanna's USDC reserve"
+    },
+    {
+      "code": 6007,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "ZeroShares",
+      "msg": "Deposit is too small to mint a share"
+    },
+    {
+      "code": 6009,
+      "name": "PoolSettled",
+      "msg": "Pool has already been settled"
+    },
+    {
+      "code": 6010,
+      "name": "PoolNotSettled",
+      "msg": "Pool has not been settled yet"
+    },
+    {
+      "code": 6011,
+      "name": "MarketNotResolved",
+      "msg": "Market has not been resolved yet"
+    },
+    {
+      "code": 6012,
+      "name": "UnsupportedOutcome",
+      "msg": "Market resolved to a non-binary payout, which the pool does not support"
+    },
+    {
+      "code": 6013,
+      "name": "MarketStillOpen",
+      "msg": "Market account still exists; settle from it instead"
+    },
+    {
+      "code": 6014,
+      "name": "MergeAmountMismatch",
+      "msg": "prediCt merge returned a different amount of CASH than it burned"
+    },
+    {
+      "code": 6015,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6016,
+      "name": "MarketResolved",
+      "msg": "Market has been resolved; settle the pool instead"
+    },
+    {
+      "code": 6017,
+      "name": "SwapNotAllowed",
+      "msg": "Swap is not an allowed Jupiter route"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidSwapAccounts",
+      "msg": "Swap accounts reach pool funds outside the swap"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidSwapResult",
+      "msg": "Swap moved funds other than it declared"
+    },
+    {
+      "code": 6020,
+      "name": "SwapAmountMismatch",
+      "msg": "Swap input does not match what the pool needs to convert"
+    },
+    {
+      "code": 6021,
+      "name": "SwapBelowMinimum",
+      "msg": "Swap returned less than the pool accepts"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidSwapPolicy",
+      "msg": "Swap loss tolerance exceeds the cap"
+    }
+  ],
+  "types": [
+    {
+      "name": "AllowedMarket",
+      "docs": [
+        "Marks a World market as eligible for pools. Closing it stops new pools; existing pools keep working."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": [
+        "Program-wide configuration. The admin only curates which World markets may get a pool and the swap policy; it has",
+        "no control over any pool's funds. The resolver can settle a pool only after World has closed the pool's market",
+        "account."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "resolver",
+            "type": "pubkey"
+          },
+          {
+            "name": "keeper",
+            "docs": [
+              "The only caller whose CASH -> USDC swaps may return less than par, by at most `max_swap_loss_bps`. Every",
+              "other swap must be at par or better, so no caller can route pool funds through a venue it prices."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_swap_loss_bps",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Deposit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "is_yes",
+            "type": "bool"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "docs": [
+              "Owner of the share account the shares were minted into."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "assets",
+            "type": "u64"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketAllowed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketDisallowed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MergeAndDeposit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "complete_sets",
+            "type": "u64"
+          },
+          {
+            "name": "usdc_supplied",
+            "docs": [
+              "USDC supplied to Vanna: the swap's output plus any USDC that was idle in the pool."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Pool",
+      "docs": [
+        "One pool per (World market, Vanna reserve). Holds the market's funds in associated token accounts it owns, so",
+        "markets are isolated physically: a pool can only ever move tokens out of its own accounts, and its stake in the",
+        "shared Vanna reserve is its own share balance."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "The prediCt Market account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_reserve",
+            "docs": [
+              "Vanna's USDC reserve and the accounts `lender_supply` / `lender_redeem` need, read once at creation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_protocol_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_asset_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_liquidity_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_share_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "collateral_mint",
+            "docs": [
+              "Read from the prediCt Market once at creation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "no_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_cash_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_share_mint",
+            "docs": [
+              "This pool's share mints, one per side. Mint authority is the pool."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "no_share_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_cash",
+            "docs": [
+              "The pool's own associated token accounts, recorded so every instruction can check them by key."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_yes",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_no",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_usdc",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_vanna_shares",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "PoolStatus"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "vanna_reserve",
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_share_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "no_share_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "yes_won",
+            "type": "bool"
+          },
+          {
+            "name": "by_resolver",
+            "docs": [
+              "True when the resolver settled a pool whose market account was already closed."
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Settled",
+            "fields": [
+              {
+                "name": "yes_won",
+                "type": "bool"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Redeem",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "is_yes",
+            "type": "bool"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "on_behalf",
+            "docs": [
+              "Owner of the share account the shares were burned from."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "docs": [
+              "Owner of the token account the outcome tokens were paid into."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          },
+          {
+            "name": "assets",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "is_yes",
+            "type": "bool"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "on_behalf",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          },
+          {
+            "name": "tokens_out",
+            "docs": [
+              "Outcome tokens paid out."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cash_out",
+            "docs": [
+              "CASH paid out."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usdc_out",
+            "docs": [
+              "USDC paid out."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SwapPolicySet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "keeper",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_swap_loss_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Swapped",
+      "docs": [
+        "One CASH <-> USDC swap through Jupiter. `amount_out - amount_in` is what the pool gained (or lost) against par."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "cash_to_usdc",
+            "type": "bool"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_in",
+            "type": "u64"
+          },
+          {
+            "name": "amount_out",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

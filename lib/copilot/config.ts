@@ -19,6 +19,8 @@ function envNumber(key: string, fallback: number): number {
 
 export type McpAuthMode = "workos" | "none";
 
+let warnedStoreSecret = false;
+
 export const copilotConfig = {
   get isProduction(): boolean {
     return process.env.NODE_ENV === "production" || !!process.env.K_SERVICE;
@@ -63,9 +65,19 @@ export const copilotConfig = {
   get sessionSecret(): string {
     return env("COPILOT_SESSION_SECRET");
   },
-  /** Record-encryption secret; falls back to the session secret so one value is enough. */
+  /**
+   * Record-encryption secret. The record and session keys are separate HKDF derivations either way; a distinct
+   * secret also lets the session secret rotate without making saved plans unreadable. Falling back to the session
+   * secret still works (development needs only one value), but production warns once.
+   */
   get storeSecret(): string {
-    return env("COPILOT_STORE_SECRET") || env("COPILOT_SESSION_SECRET");
+    const own = env("COPILOT_STORE_SECRET");
+    if (own) return own;
+    if (this.isProduction && !warnedStoreSecret) {
+      warnedStoreSecret = true;
+      console.warn("[copilot] COPILOT_STORE_SECRET is not set; records are encrypted under a key derived from COPILOT_SESSION_SECRET. Set a separate value.");
+    }
+    return env("COPILOT_SESSION_SECRET");
   },
   get publicOrigin(): string {
     return env("COPILOT_PUBLIC_ORIGIN").replace(/\/$/, "");

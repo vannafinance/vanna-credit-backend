@@ -11,15 +11,16 @@
  */
 import "./farm-v3.css";
 import { useState } from "react";
-import { Icon, IC } from "@/components/v3/icons";
-import { Info, Seg } from "@/components/v3/ui";
+import { Icon } from "@/components/v3/icons";
+import { Info } from "@/components/v3/ui";
 import { cmp, nf, pct, tokFmt, usd } from "@/components/v3/format";
 import { explorerUrl } from "@/lib/solana/config";
 import { useFarmPool } from "@/lib/farm/use-farm";
 import type { FarmPoolConfig } from "@/lib/farm/pools";
 import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { KaminoAction } from "./kamino-action";
-import { BackLink, Cell, CheckDropdown, HowItWorks, TabsBox, Tiles, Venue, VTag, YieldList, useOutside } from "./fm-ui";
+import { BackLink, Cell, HowItWorks, TabsBox, Tiles, Venue, VTag, YieldList } from "./fm-ui";
+import { PositionTxPanel } from "./position-tx";
 
 const COLS = {
   current: [
@@ -37,7 +38,6 @@ const COLS = {
     ["Tx Hash", "1fr"],
   ],
 } as const;
-type TxTab = keyof typeof COLS;
 
 const m = (v: number | null, kind: "pct" | "usd") => (kind === "pct" ? pct(v !== null && Number.isFinite(v) ? v * 100 : 0) : usd(v !== null && Number.isFinite(v) ? v : 0));
 
@@ -150,40 +150,33 @@ function Analytics({ pool }: { pool: FarmPoolConfig }) {
 }
 
 function Transactions({ pool, position, farm }: { pool: FarmPoolConfig; position: FarmPositionRow | null; farm: ReturnType<typeof useFarmAccount> }) {
-  const [tab, setTab] = useState<TxTab>("current");
-  const [types, setTypes] = useState<string[]>([]);
-  const [hide, setHide] = useState<Record<TxTab, string[]>>({ current: [], history: [] });
-  const [custOpen, setCustOpen] = useState(false);
-  const [cq, setCq] = useState("");
-  const custRef = useOutside(custOpen, () => setCustOpen(false));
-
   const history = farm.history
     .filter((r) => (r.type === "farm-deposit" || r.type === "farm-withdraw") && r.symbol === pool.symbol)
-    .map((r) => ({ ...r, label: r.type === "farm-deposit" ? "Supply" : "Withdraw" }))
-    .filter((r) => !types.length || types.includes(r.label));
+    .map((r) => ({ ...r, label: r.type === "farm-deposit" ? "Supply" : "Withdraw" }));
 
-  const cells = {
-    current: position
-      ? [
-          [
-            <Cell
-              key="a"
-              v={
-                <span className="fm-tk">
-                  <Icon sym={pool.symbol} className="fm-ico16" />
-                  {pool.symbol}
-                </span>
-              }
-              mini="Vault"
-            />,
-            <Cell key="p" v={<Venue name="Kamino" />} />,
-            <Cell key="s" v={tokFmt(position.underlying, pool.symbol)} mini={usd(position.liquidityUsd)} />,
-            <Cell key="r" v={`${nf(position.receipts, 6)} ${pool.receiptSymbol}`} />,
-            <Cell key="y" v={m(pool.supplyApy, "pct")} />,
-          ],
-        ]
-      : [],
-    history: history.map((r) => [
+  const current = position
+    ? [
+        [
+          <Cell
+            key="a"
+            v={
+              <span className="fm-tk">
+                <Icon sym={pool.symbol} className="fm-ico16" />
+                {pool.symbol}
+              </span>
+            }
+            mini="Vault"
+          />,
+          <Cell key="p" v={<Venue name="Kamino" />} />,
+          <Cell key="s" v={tokFmt(position.underlying, pool.symbol)} mini={usd(position.liquidityUsd)} />,
+          <Cell key="r" v={`${nf(position.receipts, 6)} ${pool.receiptSymbol}`} />,
+          <Cell key="y" v={m(pool.supplyApy, "pct")} />,
+        ],
+      ]
+    : [];
+  const rows = history.map((r) => ({
+    label: r.label,
+    cells: [
       <Cell key="d" v={new Date(r.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} mini={new Date(r.timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })} />,
       <Cell key="t" v={r.label} />,
       <Cell key="m" v={tokFmt(Number(r.amount), pool.symbol)} />,
@@ -196,125 +189,21 @@ function Transactions({ pool, position, farm }: { pool: FarmPoolConfig; position
           </a>
         }
       />,
-    ]),
-  };
+    ],
+  }));
 
-  const show = COLS[tab].map((c, i) => [c, i] as const).filter(([c]) => !hide[tab].includes(c[0]));
-  const grid = { gridTemplateColumns: show.map(([c]) => c[1]).join(" "), minWidth: Math.max(240, show.length * 110) };
-  const rows = cells[tab];
-  const empty = tab === "current" ? "No position in this vault yet" : types.length ? `No ${types.join(" or ").toLowerCase()} in this vault yet` : "No activity in this vault yet";
-  const custCols = COLS[tab].filter(([l]) => !cq.trim() || l.toLowerCase().includes(cq.trim().toLowerCase()));
-
+  // Layout, filters and column visibility live in the shared panel (also used by the Perena page).
   return (
-    <>
-      <dl className="fm-position-summary num">
-        <div><dt>Position value</dt><dd>{usd(position ? position.liquidityUsd : 0)}</dd></div>
-        <div><dt>Receipt balance</dt><dd>{`${nf(position ? position.receipts : 0, 6)} ${pool.receiptSymbol}`}</dd></div>
-        <div><dt>Earned yield</dt><dd>{usd(position?.earnedUsd ?? 0)}</dd>
-          {position?.since && <small>Since {new Date(position.since).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>}
-        </div>
-      </dl>
-      <div className="fm-ath">
-        <h2>{tab === "current" ? "Your Position" : "Position History"}</h2>
-        <div className="fm-athr">
-          <span className="fm-vl">{types.length ? types.join(", ") : "All"}:</span>
-          <CheckDropdown
-            right
-            withIcons={false}
-            options={["Supply", "Withdraw"]}
-            selected={types}
-            onChange={(next) => {
-              setTypes(next);
-              if (next.length) setTab("history");
-            }}
-            placeholder="Search types"
-            trigger={(open, toggle) => (
-              <button type="button" className={`fm-all ${types.length ? "set" : ""}`} aria-haspopup="listbox" aria-expanded={open} aria-label="Filter transactions by type" onClick={toggle}>
-                <svg width="17" height="12" viewBox="0 0 17 12" aria-hidden="true">
-                  <path d="M1 1h15M4 6h9M7 11h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
-          />
-          <span className="fm-ddw" ref={custRef}>
-            <button type="button" className="fm-cust" aria-haspopup="menu" aria-expanded={custOpen} onClick={() => setCustOpen((o) => !o)}>
-              {EYE}Customize {IC.chev}
-            </button>
-            {custOpen && (
-              <div className="pop r fm-cpop" role="menu">
-                <label className="fm-psearch">
-                  {IC.search}
-                  <input placeholder="Search for customize" value={cq} onChange={(e) => setCq(e.target.value)} aria-label="Search columns" autoComplete="off" />
-                </label>
-                <div className="fm-cl">
-                  {custCols.length ? (
-                    custCols.map(([l]) => {
-                      const on = !hide[tab].includes(l);
-                      return (
-                        <button
-                          key={l}
-                          type="button"
-                          className={`fm-co eye ${on ? "on" : ""}`}
-                          role="menuitemcheckbox"
-                          aria-checked={on}
-                          onClick={() => setHide((h) => ({ ...h, [tab]: on ? h[tab].concat(l) : h[tab].filter((z) => z !== l) }))}
-                        >
-                          {on ? EYE : EYE_OFF}
-                          {l}
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <p className="fm-cnone">No match</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </span>
-        </div>
-      </div>
-      <Seg<TxTab>
-        className="fm-seg-l"
-        value={tab}
-        options={[
-          ["current", "Current Position"],
-          ["history", "Position History"],
-        ]}
-        onChange={setTab}
-      />
-      <section className="fm-itbl">
-        {!show.length ? (
-          <p className="fm-it-e">All columns are hidden. Turn one on in Customize.</p>
-        ) : rows.length ? (
-          <>
-            <div className="fm-it-h" style={grid}>
-              {show.map(([c]) => (
-                <span key={c[0]}>{c[0]}</span>
-              ))}
-            </div>
-            {rows.map((r, k) => (
-              <div key={k} className="fm-it-r num" style={grid}>
-                {show.map(([, i]) => r[i])}
-              </div>
-            ))}
-          </>
-        ) : (
-          <p className="fm-it-e">{empty}</p>
-        )}
-      </section>
-    </>
+    <PositionTxPanel
+      summary={[
+        ["Position value", usd(position ? position.liquidityUsd : 0)],
+        ["Receipt balance", `${nf(position ? position.receipts : 0, 6)} ${pool.receiptSymbol}`],
+        ["Earned yield", usd(position?.earnedUsd ?? 0), position?.since ? `Since ${new Date(position.since).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined],
+      ]}
+      cols={COLS}
+      current={current}
+      history={rows}
+      typeOptions={["Supply", "Withdraw"]}
+    />
   );
 }
-
-const EYE = (
-  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M1 8s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z" stroke="currentColor" strokeWidth="1.4" fill="none" />
-    <circle cx="8" cy="8" r="2" fill="currentColor" />
-  </svg>
-);
-const EYE_OFF = (
-  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M1 8s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z" stroke="currentColor" strokeWidth="1.4" fill="none" opacity=".45" />
-    <path d="M2.5 13.5l11-11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-  </svg>
-);

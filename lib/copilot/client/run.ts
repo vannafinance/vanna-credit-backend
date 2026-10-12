@@ -188,6 +188,8 @@ export function createRunController(opts: RunOptions): RunController {
       try {
         const res = await confirmStep(current.workflowId, { step_n: stepN });
         setPlan(res.plan);
+        // A one-time setup (the wallet's lookup table) landed and the step went back to pending: build it now.
+        if (res.status === "pending") return "settled";
         if (TERMINAL_STEP.has(res.status)) {
           if (res.status === "confirmed" || res.status === "done") {
             opts.onSettled?.(res.plan);

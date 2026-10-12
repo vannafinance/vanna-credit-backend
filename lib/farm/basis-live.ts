@@ -207,7 +207,7 @@ export interface VaultView {
     days: FundingDay[];
     stats: FundingStats;
   } | null;
-  /** Share of NAV held short (0–1), from the live legs; null without a NAV. */
+  /** Short notional per dollar of NAV (can exceed 1), from the live legs; null without a NAV. */
   hedgeShare: number | null;
   /** Price rise (%) to the short's liquidation; null without a short. */
   shortLiqRise: number | null;
@@ -234,7 +234,7 @@ export function useVaultView(id: string): VaultView | null {
       apyDays: dailyApy(days),
       stats: navStats(history.points),
       funding: basis ? { now: fundingNowApr(def.asset, liveFunding, funding), days: fundingDaysList, stats: fundingStats(fundingDaysList) } : null,
-      hedgeShare: state?.navUsd && state.navUsd > 0 && state.shortUsd !== null ? Math.min(1, state.shortUsd / state.navUsd) : null,
+      hedgeShare: state?.navUsd && state.navUsd > 0 && state.shortUsd !== null ? state.shortUsd / state.navUsd : null,
       shortLiqRise: shortLiquidationRise(state?.shortUsd ?? null, state?.phoenixEffectiveUsd ?? null, state?.phoenixMaintenanceUsd ?? null),
     };
   }, [def, id, live.data, live.isLoading, history.points, funding, liveFunding, basis]);

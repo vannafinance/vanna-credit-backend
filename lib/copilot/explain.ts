@@ -5,6 +5,7 @@
 
 import { MCPError } from "./mcp-client";
 import { LEND_BORROW_ASSETS, PRODUCT_ASSETS } from "./intent";
+import { LIQUIDATION_HF_TEXT } from "./protocol-constants";
 
 export function fmtUsd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -54,6 +55,9 @@ const SIM_PATTERNS: Array<[RegExp, string]> = [
   // large because the health check names every asset the margin account holds.
   [/(?:margin swap|swap route|route \(account cap)[\s\S]*(?:too large|exceeds)|(?:too large|exceeds)[\s\S]*(?:margin swap|swap route|route hops)/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
   [/transaction_too_large|size limit|exceeds Solana|too large for one|VersionedTransaction too large|max: 1232/i, "This step's transaction is larger than one Solana transaction allows: the health check names every asset your margin account holds. Nothing was sent. Try again in a moment; withdrawing collateral you no longer use also makes it smaller."],
+  // A Basis vault on a stock market (TSLA, META) refuses deposits outside that market's session (the vault program's
+  // MarketAfterHours); the MCP checks it before building, this catches it if a simulation still reports it.
+  [/MarketAfterHours/i, "Deposits into this vault are closed while its market is outside its trading session or reopening. Try again when the session is open."],
   [/asset_not_offered/i, "That asset is not offered for this action."],
   [/insufficient pool liquidity/i, "The pool does not have enough available liquidity for that."],
   [/borrow_cap|supply_cap|cap exceeded/i, "That would exceed the pool's cap."],
@@ -90,9 +94,9 @@ export function humanizeMcpError(err: unknown): { code: string; message: string;
 
 export const CONCEPTS: Record<string, string> = {
   health_factor:
-    "Your health factor (HF) is your margin collateral's USD value divided by your debt's USD value. Above 1.10 the protocol leaves you alone; at or below 1.10 your account can be liquidated. The Copilot keeps every action at 1.15 or above, and with no debt there is no health factor.",
+    `Your health factor (HF) is your margin collateral's USD value divided by your debt's USD value. Above ${LIQUIDATION_HF_TEXT} the protocol leaves you alone; at or below ${LIQUIDATION_HF_TEXT} your account can be liquidated. The Copilot keeps every action at 1.15 or above, and with no debt there is no health factor.`,
   liquidation:
-    "Liquidation is whole-account: when HF falls to 1.10 or below, a liquidator can repay all your debt and take all your collateral. I can tell you whether you are close, but I never execute a liquidation. Repaying debt or adding collateral raises your HF.",
+    `Liquidation is whole-account: when HF falls to ${LIQUIDATION_HF_TEXT} or below, a liquidator can repay all your debt and take all your collateral. I can tell you whether you are close, but I never execute a liquidation. Repaying debt or adding collateral raises your HF.`,
   leverage:
     "Leverage here means borrowing a stable asset (USDC or USDT) against your collateral, swapping it into the asset you want more of, and keeping that as collateral. \"2x\" means exposure of twice your equity. The Copilot sizes it so your health factor stays at or above 1.15 even if the swap fills at its worst allowed price.",
   collateral:

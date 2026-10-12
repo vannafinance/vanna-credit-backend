@@ -1,9 +1,7 @@
 import { isFarmListed, KAMINO_RECEIPTS } from "../solana/kamino";
 import { findToken, TOKENS } from "../solana/tokens";
 import { copilotConfig } from "./config";
-
-/** The protocol's liquidation line (program `risk_engine.rs`; also `risk.ts` `LIQUIDATION_HF`). */
-const LIQUIDATION_HF_LINE = 1.1;
+import { LIQUIDATION_HF, LIQUIDATION_HF_TEXT } from "./protocol-constants";
 
 /**
  * Intents: what a user sentence means, as typed data.
@@ -108,7 +106,13 @@ export type AmountSpec =
    * "borrow until my health factor is 1.5", "repay enough to get back to 2": sized when the step is built, from the account
    * as it is then, so the step leaves the health factor at `target` (borrow, withdraw: down to it; repay, deposit: up to it).
    */
-  | { kind: "hf"; target: number };
+  | { kind: "hf"; target: number }
+  /**
+   * borrow only: "borrow what I can against 5 JupSOL". The largest borrow that the named holding alone supports at the
+   * health floor (the borrowed asset stays in the account as collateral), never more than the whole account allows. Sized
+   * by the server from live prices (workflow/leverage-borrow.ts `sizeBorrowAgainst`).
+   */
+  | { kind: "against"; base: { asset: Asset; value: string } };
 
 const MAX_AMOUNT = 1e12;
 /** More fractional digits than any token the product handles (SOL and the SOL LSTs have 9; the stables 6). */
@@ -209,9 +213,70 @@ export type WriteOp =
   | "perp_close"
   | "perp_withdraw"
   /** The first Phoenix trade's extra step (creates the Phoenix trading account); added by the server, never asked for. */
-  | "perp_register";
+  | "perp_register"
+  /**
+   * Basis (delta-neutral) and Perena vaults (the app's Farm page): USDC in, vault shares held in the margin account as
+   * collateral; a withdrawal pays USDC. SOL Basis takes its deposit from the wallet, then `vault_move_shares` puts the
+   * shares into the margin account (added by the server, never asked for).
+   */
+  | "vault_deposit"
+  | "vault_withdraw"
+  | "vault_move_shares";
+
+/** The ops a model may name in a plan (the server adds perp_register and vault_move_shares itself). */
+export const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw", "vault_deposit", "vault_withdraw"];
 
 export const PERP_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["perp_open", "perp_close", "perp_withdraw", "perp_register"]);
+export const VAULT_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["vault_deposit", "vault_withdraw", "vault_move_shares"]);
+
+/** The vaults Vanna lists (the app's VAULTS, `lib/solana/vault-catalogue.ts`). */
+export const VAULT_IDS = ["basis-sol", "basis-eth", "basis-btc", "basis-tsla", "basis-meta", "perena-usdstar", "perena-junior"] as const;
+export type VaultId = (typeof VAULT_IDS)[number];
+export const VAULT_NAMES: Record<VaultId, { name: string; symbol: string }> = {
+  "basis-sol": { name: "SOL Basis", symbol: "vbSOL" },
+  "basis-eth": { name: "ETH Basis", symbol: "vbETH" },
+  "basis-btc": { name: "BTC Basis", symbol: "vbBTC" },
+  "basis-tsla": { name: "TSLA Basis", symbol: "vbTSLA" },
+  "basis-meta": { name: "META Basis", symbol: "vbMETA" },
+  "perena-usdstar": { name: "USD*", symbol: "USD*" },
+  "perena-junior": { name: "USD* Junior", symbol: "USD* Junior" },
+};
+
+/**
+ * Which product a request means. Shared, word for word, by the investigation prompt and the router prompt so Gemini
+ * reads "vault", "farm", "earn" and "yield" the same way everywhere. `compare` names the tool that shows all of them.
+ */
+export function productWordsGuide(compare: string): string {
+  return `WHICH PRODUCT: FOUR WAYS TO EARN, AND WHAT THE WORDS MEAN
+- Vanna Earn (earn_supply / earn_redeem): lends SOL, USDC or USDT from the WALLET into Vanna's own lending pools and earns the pool's supply APR. It is not margin collateral. Words: "earn", "lend", "supply", "lending pool", "Earn pool", "lend to Vanna".
+- Kamino farm (farm_deposit / farm_redeem): lends one token on Kamino Lend from the MARGIN balance and earns Kamino's live supply APY; the receipt (kSOL, kUSDC, ...) stays margin collateral. Words: "farm", "Kamino", "Kamino vault", "Kamino lend", "kSOL". "Kamino vault" means the Kamino farm, never a Basis or Perena vault.
+- Perena vaults (vault_deposit / vault_withdraw; perena-usdstar, perena-junior): USDC into Perena's stablecoin yield pool. USD* is the senior share; USD* Junior is the higher-yield tranche that takes losses first and charges a 1% instant-exit fee. Words: "Perena", "USD*", "USD star", "junior", "stable vault", "stablecoin vault".
+- Basis vaults (vault_deposit / vault_withdraw; basis-sol, basis-eth, basis-btc, basis-tsla, basis-meta): delta-neutral - the vault holds the asset and shorts the same amount on Phoenix, so the asset's price moves cancel out, and it earns the funding rate. Deposits are USDC (SOL Basis from the wallet). Words: "basis", "delta neutral", "hedged", "funding rate", "vbETH", "ETH basis", "the META vault".
+- Phoenix perps are trading, not a yield product.
+- "Vault" on its own names no product: ask which, listing the vaults. "Vault" together with Kamino is the Kamino farm.
+- A request for yield that names no product ("where should I put my USDC", "best yield", "earn on my SOL", "passive income", "put it to work", "stake my USDC"): do not pick a product for the user and build nothing. Show the comparison (${compare}, with the asset if one is named), then ask which product, one option per product that fits that asset. Earn shows an APR, Kamino a live APY, Perena its own published 7-day APY, and a Basis vault Phoenix's funding rate for its market (what the short is paid, annualised; not the vault's net yield, and it can turn negative); the app's own vault APY replaces these when it has one: from the vault's share-price history, or an approximate estimate from past deposits (always call that one an estimate). They are different measures: say which is which, never rank by a figure you computed or assumed, and never invent an APY.
+- "Stake SOL": there is no staking product here. JitoSOL and JupSOL are liquid-staking tokens the user can swap into; Earn and the Kamino farm also take SOL.
+- Withdrawals follow the product: "redeem" or "withdraw from Earn" = earn_redeem; "withdraw from Kamino / the farm" = farm_redeem; "withdraw from the vault / basis / USD*" = vault_withdraw; "withdraw collateral" = withdraw. When the product is unclear, ask.`;
+}
+
+/** "basis-eth", "vbETH", "ETH basis", "USD*", "junior" -> the vault id, else null. */
+export function vaultOf(x: unknown): VaultId | null {
+  if (typeof x !== "string") return null;
+  const key = x.toLowerCase().replace(/[^a-z0-9*]/g, "");
+  if (!key) return null;
+  for (const id of VAULT_IDS) {
+    const { name, symbol } = VAULT_NAMES[id];
+    const names = [id, name, symbol, id.split("-")[1]!];
+    if (id.startsWith("basis-")) {
+      const asset = id.slice(6);
+      names.push(`${asset}basis`, `basis${asset}`);
+    }
+    if (id === "perena-usdstar") names.push("usdstar", "usd*", "perena");
+    if (id === "perena-junior") names.push("junior", "usd*junior", "usdstarjunior", "perenajunior");
+    if (names.some((n) => n.toLowerCase().replace(/[^a-z0-9*]/g, "") === key)) return id;
+  }
+  return null;
+}
 
 /** A swap's route: Jupiter or Titan, like the app's Spot page. */
 export type SwapProvider = "jupiter" | "titan";
@@ -233,6 +298,8 @@ export interface WriteIntent {
   side?: "long" | "short" | null;
   /** perp_open: Phoenix leverage (1 up to the market's max). Collateral is `amount` in USDC. */
   leverage?: number | null;
+  /** vault_deposit / vault_withdraw / vault_move_shares: which vault. A deposit's amount is USDC, a withdrawal's shares. */
+  vault?: VaultId | null;
 }
 
 /** "via Titan", "using Jupiter", "on titan": the swap route named in the user's own words, if exactly one is. */
@@ -275,6 +342,12 @@ export type ReadIntent =
   | { kind: "perps_markets" }
   | { kind: "perps_positions" }
   | { kind: "perps_preview"; market: PerpMarket; side: "long" | "short"; collateral: string; leverage: number }
+  /** Basis and Perena vaults: the list (NAV, share price, APY when the app has history), the user's shares, a preview. */
+  | { kind: "vaults_list" }
+  | { kind: "vaults_positions" }
+  | { kind: "vault_preview"; vault: VaultId; call: "deposit" | "withdraw"; amount: string }
+  /** Every way to earn on an asset side by side (Earn, Kamino farm, Perena and Basis vaults), for a request naming none. */
+  | { kind: "yield_options"; asset: Asset | null }
   | { kind: "concept"; topic: ConceptTopic }
   | { kind: "help" };
 
@@ -372,6 +445,9 @@ const OP_ASSETS: Record<WriteOp, "none" | "lend" | "any"> = {
   perp_close: "none",
   perp_withdraw: "none",
   perp_register: "none",
+  vault_deposit: "none",
+  vault_withdraw: "none",
+  vault_move_shares: "none",
 };
 
 export function unofferedMessage(asset: string): string {
@@ -414,7 +490,7 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
     if (!w.market || !(PERP_MARKETS as readonly string[]).includes(w.market)) return fail(`Which perps market? ${PERP_MARKETS.join(", ")}.`);
     if (w.side !== "long" && w.side !== "short") return fail("Long or short?");
     if (!(typeof w.leverage === "number" && w.leverage >= 1)) return fail("At what leverage? Phoenix markets go from 1x up to their own cap.");
-    if (!w.amount || (w.amount.kind !== "exact" && w.amount.kind !== "usd")) return fail("How much USDC should back the position?");
+    if (!w.amount || !["exact", "usd", "all", "pct"].includes(w.amount.kind)) return fail("How much USDC should back the position (an amount, a percentage of your USDC, or all)?");
   }
   if (w.op === "perp_close") {
     if (!w.market || !(PERP_MARKETS as readonly string[]).includes(w.market)) return fail(`Which perps position? ${PERP_MARKETS.join(", ")}.`);
@@ -422,6 +498,15 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
   }
   if (w.op === "perp_withdraw" && w.amount && w.amount.kind !== "all" && w.amount.kind !== "exact" && w.amount.kind !== "usd") {
     return fail("How much USDC should come back from Phoenix (an amount, or all)?");
+  }
+  if (w.op === "vault_deposit" || w.op === "vault_withdraw" || w.op === "vault_move_shares") {
+    if (!w.vault || !(VAULT_IDS as readonly string[]).includes(w.vault)) {
+      return fail(`Which vault? ${VAULT_IDS.map((v) => VAULT_NAMES[v].name).join(", ")}.`);
+    }
+    if (w.op === "vault_deposit" && (!w.amount || !["exact", "usd", "all", "pct"].includes(w.amount.kind))) return fail("How much USDC should go into the vault (an amount, a percentage of your USDC, or all)?");
+    if (w.op === "vault_withdraw" && w.amount && w.amount.kind !== "all" && w.amount.kind !== "exact" && w.amount.kind !== "pct") {
+      return fail("How many shares should come out (an amount, a percentage, or all)?");
+    }
   }
   if (w.op === "swap") {
     if (!w.to_asset) return fail("Which asset do you want to swap into?");
@@ -444,6 +529,11 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
         if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the leverage is taken on is not valid.");
       }
     }
+    if (w.amount.kind === "against") {
+      if (w.op !== "borrow") return fail("Only a borrow can be sized against a holding.");
+      if (!(PRODUCT_ASSETS as readonly string[]).includes(w.amount.base.asset)) return fail(unofferedMessage(String(w.amount.base.asset)));
+      if (parseDecimalString(w.amount.base.value) === null) return fail("The amount the borrow is taken against is not valid.");
+    }
     if (w.amount.kind === "usd") {
       if (!w.asset) return fail("Which asset should that dollar amount buy or move?");
       if (parseDecimalString(w.amount.value) === null) return fail("That dollar amount is not valid.");
@@ -452,7 +542,7 @@ export function validateWrite(w: WriteIntent): GuardResult<WriteIntent> {
     if (w.amount.kind === "hf") {
       const t = w.amount.target;
       if (!["borrow", "withdraw", "repay", "deposit"].includes(w.op)) return fail("A health-factor target can size a borrow, a withdrawal, a repayment or a collateral deposit.");
-      if (!Number.isFinite(t) || t <= LIQUIDATION_HF_LINE || t > 100) return fail(`A health factor target has to be above the ${LIQUIDATION_HF_LINE.toFixed(2)} liquidation line.`);
+      if (!Number.isFinite(t) || t <= LIQUIDATION_HF || t > 100) return fail(`A health factor target has to be above the ${LIQUIDATION_HF_TEXT} liquidation line.`);
       if ((w.op === "borrow" || w.op === "withdraw") && t < copilotConfig.minHealthFactor) {
         return fail(`I keep every borrow and withdrawal at a health factor of ${copilotConfig.minHealthFactor.toFixed(2)} or above, so I can't size one down to ${t}.`);
       }
@@ -498,8 +588,14 @@ export function validateRead(r: ReadIntent): GuardResult<ReadIntent> {
       const tooFine = decimalsProblem(r.amount, r.asset);
       if (tooFine) return fail(tooFine);
     }
-    if (r.target_hf !== null && !(r.target_hf > 1.1 && r.target_hf <= 100)) return fail("A health factor target has to be above the 1.10 liquidation line.");
+    if (r.target_hf !== null && !(r.target_hf > LIQUIDATION_HF && r.target_hf <= 100)) return fail(`A health factor target has to be above the ${LIQUIDATION_HF_TEXT} liquidation line.`);
     if (r.amount === null && r.target_hf === null) return fail("Give me an amount or a health factor target.");
+  }
+  if (r.kind === "yield_options" && r.asset && !(PRODUCT_ASSETS as readonly string[]).includes(r.asset)) return fail(unofferedMessage(r.asset));
+  if (r.kind === "vault_preview") {
+    if (!(VAULT_IDS as readonly string[]).includes(r.vault)) return fail(`Vaults: ${VAULT_IDS.map((v) => VAULT_NAMES[v].name).join(", ")}.`);
+    if (r.call !== "deposit" && r.call !== "withdraw") return fail("A deposit or a withdrawal?");
+    if (parseDecimalString(r.amount) === null) return fail(r.call === "deposit" ? "How much USDC?" : "How many shares?");
   }
   if (r.kind === "perps_preview") {
     if (!(PERP_MARKETS as readonly string[]).includes(r.market)) return fail(`Perps markets: ${PERP_MARKETS.join(", ")}.`);

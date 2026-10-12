@@ -94,6 +94,16 @@ export interface UnsignedTx {
   /** MCP-side simulation result; a failed simulation is never handed to the wallet. */
   simulation_success: boolean;
   summary?: string;
+  /**
+   * A one-time setup the MCP returns in place of the action (since the 2026-10-09 program upgrade: the wallet's own
+   * lookup table, which margin transactions now need to fit). Once it lands, the same step is built again.
+   */
+  prerequisite?: boolean;
+  /**
+   * What the prerequisite is, when the MCP says: "phoenix_fund" = a perps open too large for one transaction, whose
+   * USDC moves into Phoenix first; the order is then built with `funded` (workflow/steps.ts).
+   */
+  prerequisite_kind?: string;
 }
 
 export interface Preview {
