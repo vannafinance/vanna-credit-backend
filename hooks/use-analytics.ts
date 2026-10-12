@@ -8,6 +8,8 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchWithTimeout } from "@/lib/async";
 import type { AccountFilter, AccountSortKey, AccountsSummary, AccountView, Coverage } from "@/lib/analytics/types";
+import type { Standing } from "@/lib/analytics/risk";
+import type { ActivityResponse } from "@/app/api/analytics/accounts/[owner]/activity/route";
 import type { ProtocolOverview, StoreState } from "@/lib/analytics/server/store";
 import type { ProgramEvent } from "@/lib/analytics/server/events";
 
@@ -141,5 +143,35 @@ export function useScenarioBaseline() {
     queryFn: () => getJson<{ state: StoreState; baseline: ScenarioBaseline | null }>("/api/analytics/scenario-input"),
     staleTime: Infinity,
     refetchOnMount: "always",
+  });
+}
+
+export interface AccountResponse { row: AccountView; standing: Standing }
+
+/** One account for its own page (`address` is the margin account address or the wallet). A missing account is an error with the server's message. */
+export function useAccountPage(address: string) {
+  return useQuery({
+    queryKey: ["analytics", "account", address],
+    queryFn: async (): Promise<AccountResponse> => {
+      const res = await fetchWithTimeout(`/api/analytics/accounts/${encodeURIComponent(address)}`, { cache: "no-store" });
+      const body = (await res.json()) as Partial<AccountResponse> & { error?: string };
+      if (!res.ok || !body.row || !body.standing) throw new Error(body.error ?? "Account could not be read");
+      return { row: body.row, standing: body.standing };
+    },
+    retry: false,
+    placeholderData: keepPreviousData,
+    refetchInterval: POLL_MS,
+    staleTime: 5_000,
+  });
+}
+
+/** The account's real transactions (decoded program events), newest first. Read once and refreshed slowly. */
+export function useAccountActivity(address: string) {
+  return useQuery({
+    queryKey: ["analytics", "account-activity", address],
+    queryFn: () => getJson<ActivityResponse>(`/api/analytics/accounts/${encodeURIComponent(address)}/activity`),
+    retry: false,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }

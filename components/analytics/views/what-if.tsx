@@ -11,6 +11,8 @@ import { poolRows } from "@/lib/analytics/pools";
 import { simulate, simulateWithdrawal, WHATIF_MODEL, type SimulationResult } from "@/lib/analytics/whatif";
 import { clock, hfText, num, pct, short, usd, usdC } from "@/lib/analytics/format";
 import { reasonText } from "@/lib/analytics/reasons";
+import Link from "next/link";
+import { accountHref } from "@/lib/analytics/links";
 import { AssetCell, Badge, Empty, Icon, InfoTip, Notice, Panel, YouPill } from "../ui";
 import { ViewHead } from "../shell";
 
@@ -115,7 +117,7 @@ export function WhatIfView() {
                   <div className="an-table-wrap"><table className="an-t">
                     <thead><tr><th>Wallet</th><th className="an-r">Health before</th><th className="an-r">Health after</th><th className="an-r">Debt</th><th className="an-r">Bad debt after</th><th>After</th></tr></thead>
                     <tbody>{worst.map((a) => (
-                      <tr key={a.address}><td title={a.owner}>{short(a.owner, 5, 5)}<YouPill value={a.owner} /></td><td className="an-r">{hfText(a.baseline.health)}</td><td className="an-r">{hfText(a.result.health)}</td><td className="an-r">{usd(a.result.debt)}</td><td className="an-r">{usd(a.result.shortfall)}</td>
+                      <tr key={a.address}><td title={a.owner}><Link href={accountHref(a.address, "whatif")} className="an-acct-link">{short(a.owner, 5, 5)}</Link><YouPill value={a.owner} /></td><td className="an-r">{hfText(a.baseline.health)}</td><td className="an-r">{hfText(a.result.health)}</td><td className="an-r">{usd(a.result.debt)}</td><td className="an-r">{usd(a.result.shortfall)}</td>
                         <td>{a.result.shortfall > 0 ? <Badge tone="danger">Bad debt</Badge> : a.result.eligible ? <Badge tone="danger">Can be liquidated</Badge> : <Badge tone="ok">Above the line</Badge>}</td></tr>
                     ))}</tbody></table></div>
                 </Panel>
@@ -124,7 +126,7 @@ export function WhatIfView() {
             {baseline && baseline.excluded.length > 0 && (
               <Panel title="Left out of the baseline" sub={`${baseline.excluded.length} of ${total} accounts - results describe the ${baseline.covered.length} covered accounts only`}>
                 <div className="an-table-wrap"><table className="an-t"><thead><tr><th>Wallet</th><th>Why</th></tr></thead>
-                  <tbody>{baseline.excluded.slice(0, 12).map((x) => <tr key={x.address}><td title={x.owner}>{short(x.owner, 5, 5)}<YouPill value={x.owner} /></td><td>{x.reasons.length ? x.reasons.map(reasonText).join(" ") : x.venueHeld ? "Holds a Phoenix perps account, which is valued as one lump, so its positions can't be repriced individually." : "Not valued."}</td></tr>)}</tbody></table></div>
+                  <tbody>{baseline.excluded.slice(0, 12).map((x) => <tr key={x.address}><td title={x.owner}><Link href={accountHref(x.address, "whatif")} className="an-acct-link">{short(x.owner, 5, 5)}</Link><YouPill value={x.owner} /></td><td>{x.reasons.length ? x.reasons.map(reasonText).join(" ") : x.venueHeld ? "Holds a Phoenix perps account, which is valued as one lump, so its positions can't be repriced individually." : "Not valued."}</td></tr>)}</tbody></table></div>
                 {baseline.excluded.length > 12 && <p className="an-panel-foot">…and {baseline.excluded.length - 12} more with the same kinds of reasons.</p>}
               </Panel>
             )}

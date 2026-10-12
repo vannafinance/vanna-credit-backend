@@ -275,3 +275,30 @@ export function liquidationPrices(row: AccountRow, prices: Record<string, number
   }
   return out.sort((a, b) => Math.abs(a.change) - Math.abs(b.change));
 }
+
+/** Where one account stands among all the accounts the dashboard has valued. */
+export interface Standing {
+  /** 1 = owes the most. Null when the account has no debt or is not valued. */
+  debtRank: number | null;
+  /** Accounts with debt (the denominator for the debt rank). */
+  borrowers: number;
+  /** Share of all debt this account owes (0..1), or null. */
+  debtShare: number | null;
+  /** 1 = closest to liquidation among accounts with debt. Null without debt. */
+  healthRank: number | null;
+  /** All accounts found, valued or not. */
+  accounts: number;
+}
+
+export function standingOf(rows: AccountRow[], row: AccountRow): Standing {
+  const borrowers = rows.filter((r) => r.valued && (r.debtUsd ?? 0) > 0);
+  const mine = row.valued && (row.debtUsd ?? 0) > 0;
+  const totalDebt = borrowers.reduce((a, r) => a + (r.debtUsd ?? 0), 0);
+  return {
+    debtRank: mine ? 1 + borrowers.filter((r) => (r.debtUsd ?? 0) > (row.debtUsd ?? 0)).length : null,
+    borrowers: borrowers.length,
+    debtShare: mine && totalDebt > 0 ? (row.debtUsd ?? 0) / totalDebt : null,
+    healthRank: mine && row.healthFactor !== null ? 1 + borrowers.filter((r) => (r.healthFactor ?? Infinity) < (row.healthFactor ?? Infinity)).length : null,
+    accounts: rows.length,
+  };
+}

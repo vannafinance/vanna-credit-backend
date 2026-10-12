@@ -48,7 +48,7 @@ export function CollateralView() {
             })}</tbody></table></div>
         ) : <Empty title={protocol ? "No assets registered" : "Loading…"} text={protocol ? "No asset configuration was found on-chain." : undefined} />}
       </section>
-      <p className="an-muted" style={{ fontSize: 12.5 }}>Token units held in margin-account vaults. Dollar values use each asset's last on-chain price; an asset with no price shows token units only ({usdC(sum?.summary?.collateralUsd ?? null)} valued in total).</p>
+      <p className="an-muted" style={{ fontSize: 12.5 }}>Token units held in margin-account vaults. Dollar values use each asset&apos;s last on-chain price; an asset with no price shows token units only ({usdC(sum?.summary?.collateralUsd ?? null)} valued in total).</p>
     </>
   );
 }

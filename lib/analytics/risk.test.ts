@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classify, derivedFigures, inBand, liquidationPrices, matchesFilter, protocolsOf, searchRows, sortRows, summarize } from "./risk";
+import { classify, derivedFigures, inBand, liquidationPrices, matchesFilter, protocolsOf, searchRows, sortRows, standingOf, summarize } from "./risk";
 import type { AccountRow } from "./types";
 
 /** Test fixtures only - never shipped to the UI. */
@@ -128,5 +128,25 @@ describe("liquidationPrices", () => {
   });
   it("describes where collateral is deployed", () => {
     expect(protocolsOf({ ...r, composition: { direct: 10, receipt: 5, venue: 0 } })).toEqual(["Kamino", "Held in account"]);
+  });
+});
+
+describe("standingOf", () => {
+  const rows = [
+    row({ owner: "a", collateralUsd: 300, debtUsd: 100, healthFactor: 3 }),
+    row({ owner: "b", collateralUsd: 150, debtUsd: 100, healthFactor: 1.5 }),
+    row({ owner: "c", collateralUsd: 120, debtUsd: 50, healthFactor: 2.4 }),
+    row({ owner: "d", collateralUsd: 70, debtUsd: 0 }),
+    row({ owner: "e", valued: false }),
+  ];
+  it("ranks by debt and by closeness to liquidation among accounts with debt", () => {
+    const s = standingOf(rows, rows[2]);
+    expect(s).toMatchObject({ debtRank: 3, borrowers: 3, healthRank: 2, accounts: 5 });
+    expect(s.debtShare).toBeCloseTo(50 / 250);
+    expect(standingOf(rows, rows[1]).healthRank).toBe(1);
+  });
+  it("gives no rank to accounts without debt or not valued", () => {
+    expect(standingOf(rows, rows[3])).toMatchObject({ debtRank: null, debtShare: null, healthRank: null });
+    expect(standingOf(rows, rows[4]).debtRank).toBeNull();
   });
 });

@@ -6,12 +6,14 @@
  * what the API returns; the only maths here is pure helpers from lib/analytics/risk.
  */
 import { Fragment, useEffect, useState } from "react";
+import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lookupWallet, useAnalyticsAccounts, useAnalyticsProtocol, type AccountsQuery } from "@/hooks/use-analytics";
 import { hfText, levText, num, pct, pct1, short, usd, usdC } from "@/lib/analytics/format";
 import { inBand, liquidationPrices, matchesFilter, protocolsOf } from "@/lib/analytics/risk";
 import { reasonText } from "@/lib/analytics/reasons";
+import { accountHref } from "@/lib/analytics/links";
 import type { AccountFilter, AccountSortKey, AccountView } from "@/lib/analytics/types";
 import { Addr, AssetCell, Empty, Icon, InfoTip, StatusBadge, statusTone, ForkTime, YouPill } from "./ui";
 import { SERIES, Sparkline, StackBar } from "./charts";
@@ -208,7 +210,15 @@ function Pager({ page, pages, total, per, onPage }: { page: number; pages: numbe
 
 /** Row-expansion wrapper. */
 function AccountDetail({ row, colSpan, prices }: { row: AccountView; colSpan: number; prices: Record<string, number | null> }) {
-  return <tr className="an-detail"><td colSpan={colSpan}><AccountDetailBody row={row} prices={prices} /></td></tr>;
+  return (
+    <tr className="an-detail"><td colSpan={colSpan}>
+      <AccountDetailBody row={row} prices={prices} />
+      <div className="an-detail-foot">
+        <span>Liquidation price, price scenarios, how it ranks and its transactions are on the full page.</span>
+        <Link className="an-btn an-primary" href={accountHref(row.address, "overview")}>View full details <Icon name="arrow" /></Link>
+      </div>
+    </td></tr>
+  );
 }
 
 /** A looked-up account as a card: status, the six numbers that matter, then the full detail. */
@@ -235,38 +245,11 @@ export function AccountCard({ row, prices }: { row: AccountView; prices: Record<
 
 /** Everything about one account: breakdown, liquidation prices, collateral and debt lines. */
 export function AccountDetailBody({ row, prices }: { row: AccountView; prices: Record<string, number | null> }) {
-  const total = row.collateralUsd || 1;
-  const kind = (k: string) => (k === "receipt" ? "Deposit share" : "");
   const fact = (k: React.ReactNode, v: React.ReactNode) => <div><span>{k}</span><b>{v}</b></div>;
   const liq = liquidationPrices(row, prices);
-  // Same split as the Margin page: borrowed tokens still sitting in the vault are "idle" (they belong to the loan);
-  // the rest of that balance was deposited or bought. idle = min(vault balance, debt in the same token).
-  const owed = new Map(row.debts.map((d) => [d.symbol, d.amount]));
-  const DUST_USD = 0.01;
-  const lines = row.collateral.flatMap((l) => {
-    if (l.kind === "venue") return [{ ...l, key: l.symbol, tag: "perps" as const }];
-    const idle = Math.min(l.amount, owed.get(l.symbol) ?? 0);
-    const px = l.amount > 0 ? l.usd / l.amount : 0;
-    return (l.amount - idle) * px > DUST_USD ? [{ ...l, amount: l.amount - idle, usd: (l.amount - idle) * px, key: l.symbol, tag: undefined as "perps" | undefined }] : [];
-  });
-  // Idle funds are the borrowed tokens still in the vault: shown with the loan (Debt), not as collateral, but still counted in health.
-  const vaultAmount = new Map(row.collateral.filter((l) => l.kind !== "venue").map((l) => [l.symbol, l.amount]));
-  const idleOf = (symbol: string) => Math.min(vaultAmount.get(symbol) ?? 0, owed.get(symbol) ?? 0);
-  const idleUsd = row.debts.reduce((s, d) => s + (d.amount > 0 ? idleOf(d.symbol) * (d.usd / d.amount) : 0), 0);
-  const depositedUsd = lines.reduce((s, l) => s + l.usd, 0) || 1;
-  const mix = row.valued && (row.collateralUsd ?? 0) > 0 ? row.composition : null;
   return (
       <div className="an-detail-body">
-        {mix && (
-          <div>
-            <div className="an-eyebrow" style={{ marginBottom: 8 }}>Margin breakdown</div>
-            <div className="an-breakdown">
-              {([["Held in the account", mix.direct, SERIES[0]], ["Kamino deposits", mix.receipt, SERIES[1]], ["Phoenix perps", mix.venue, SERIES[2]]] as const).map(([l, v, c]) => (
-                <div key={l} className="an-bcell"><span><i style={{ background: c }} />{l}</span><b>{usd(v)}</b><small>{pct1(v / total)} of account value</small></div>
-              ))}
-            </div>
-          </div>
-        )}
+        <MarginBreakdown row={row} />
         <div className="an-facts">
           {fact("Owner", <Addr value={row.owner} />)}
           {fact("Margin account", <Addr value={row.address} />)}
@@ -285,37 +268,83 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
             </div>
           </div>
         )}
-        <div className="an-detail-cols">
-          <section className="an-dcard"><h4>Collateral</h4>
-            {row.collateral.length ? (
-              <table className="an-t"><thead><tr><th>Asset</th><th className="an-r">Amount</th><th className="an-r">Value</th><th className="an-r">Share</th></tr></thead>
-                <tbody>{lines.map((l) => (
-                  <tr key={l.key}>
-                    <td className="an-nowrap">
-                      <span className="an-assetrow">
-                      <AssetCell symbol={l.symbol} sub={l.kind === "receipt" ? kind(l.kind) : ""} size="sm" />
-                      {l.tag && <span className="an-tag" data-tip="The Phoenix perps account, valued as one lump." tabIndex={0}>{l.tag}</span>}
-                      </span>
-                    </td>
-                    <td className="an-r">{l.kind === "venue" ? "-" : num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct1(l.usd / depositedUsd)}</td>
-                  </tr>
-                ))}</tbody></table>
-            ) : <p className="an-muted an-dcard-empty">{row.valued ? "No active collateral." : "Not valued right now."}</p>}
-          </section>
-          <section className="an-dcard"><h4>Debt</h4>
-            {row.debts.length ? (
-              <table className="an-t"><thead><tr><th>Asset</th><th className="an-r">Debt</th><th className="an-r">Value</th><th className="an-r">APR</th></tr></thead>
-                <tbody>{row.debts.map((l) => (
-                  <tr key={l.symbol}><td className="an-nowrap"><span className="an-assetrow"><AssetCell symbol={l.symbol} sub="" size="sm" />
-                    {idleOf(l.symbol) * (l.amount > 0 ? l.usd / l.amount : 0) > DUST_USD && <span className="an-tag" data-tip="Borrowed funds still in the account. They count toward health until used or repaid." tabIndex={0}>{num(idleOf(l.symbol))} idle</span>}</span></td><td className="an-r">{num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct(l.borrowApr)}</td></tr>
-                ))}</tbody></table>
-            ) : <p className="an-muted an-dcard-empty">{row.valued ? "No outstanding debt." : "Not valued right now."}</p>}
-          </section>
-        </div>
-        {idleUsd > DUST_USD && <p className="an-panel-foot" style={{ padding: 0 }}>The account value above also includes {usd(idleUsd)} of borrowed funds still idle in the account (shown with the debt). They count toward health until they are used or repaid.</p>}
-        {row.reasons.length > 0 && <p className="an-panel-foot" style={{ color: "var(--warn)", padding: 0 }}>{row.reasons.map(reasonText).join(" ")}</p>}
-        {!!row.stalePrices?.length && <p className="an-panel-foot" style={{ padding: 0 }}>Valued at the last on-chain price of {row.stalePrices.join(", ")}, which had not been updated recently when this was read. It refreshes as soon as the price does.</p>}
-        {row.venueHeld && row.valued && <p className="an-panel-foot" style={{ padding: 0 }}>Its Phoenix perps account is counted as one lump value (collateral plus position equity). Individual positions are not shown, so this account is left out of What-if scenarios.</p>}
+        <CollateralDebt row={row} />
       </div>
+  );
+}
+
+/** Where the account's value sits: held in the account, Kamino deposits, Phoenix perps. Nothing for an account with no value. */
+export function MarginBreakdown({ row }: { row: AccountView }) {
+  const total = row.collateralUsd || 1;
+  const mix = row.valued && (row.collateralUsd ?? 0) > 0 ? row.composition : null;
+  if (!mix) return null;
+  return (
+    <div>
+      <div className="an-eyebrow" style={{ marginBottom: 8 }}>Margin breakdown</div>
+      <div className="an-breakdown">
+        {([["Held in the account", mix.direct, SERIES[0]], ["Kamino deposits", mix.receipt, SERIES[1]], ["Phoenix perps", mix.venue, SERIES[2]]] as const).map(([l, v, c]) => (
+          <div key={l} className="an-bcell"><span><i style={{ background: c }} />{l}</span><b>{usd(v)}</b><small>{pct1(v / total)} of account value</small></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the account holds and owes, as two tables, plus the notes that go with them (idle funds, prices not
+ * updated, why an account is not valued). Shared by the Overview dropdown and the account page.
+ */
+export function CollateralDebt({ row }: { row: AccountView }) {
+  const kind = (k: string) => (k === "receipt" ? "Deposit share" : "");
+  // Same split as the Margin page: borrowed tokens still sitting in the vault are "idle" (they belong to the loan);
+  // the rest of that balance was deposited or bought. idle = min(vault balance, debt in the same token).
+  const owed = new Map(row.debts.map((d) => [d.symbol, d.amount]));
+  const DUST_USD = 0.01;
+  const lines = row.collateral.flatMap((l) => {
+    if (l.kind === "venue") return [{ ...l, key: l.symbol, tag: "perps" as const }];
+    const idle = Math.min(l.amount, owed.get(l.symbol) ?? 0);
+    const px = l.amount > 0 ? l.usd / l.amount : 0;
+    return (l.amount - idle) * px > DUST_USD ? [{ ...l, amount: l.amount - idle, usd: (l.amount - idle) * px, key: l.symbol, tag: undefined as "perps" | undefined }] : [];
+  });
+  // Idle funds are the borrowed tokens still in the vault: shown with the loan (Debt), not as collateral, but still counted in health.
+  const vaultAmount = new Map(row.collateral.filter((l) => l.kind !== "venue").map((l) => [l.symbol, l.amount]));
+  const idleOf = (symbol: string) => Math.min(vaultAmount.get(symbol) ?? 0, owed.get(symbol) ?? 0);
+  const idleUsd = row.debts.reduce((s, d) => s + (d.amount > 0 ? idleOf(d.symbol) * (d.usd / d.amount) : 0), 0);
+  const depositedUsd = lines.reduce((s, l) => s + l.usd, 0) || 1;
+
+  return (
+    <>
+      <div className="an-detail-cols">
+        <section className="an-dcard"><h4>Collateral</h4>
+          {row.collateral.length ? (
+            <table className="an-t"><thead><tr><th>Asset</th><th className="an-r">Amount</th><th className="an-r">Value</th><th className="an-r">Share</th></tr></thead>
+              <tbody>{lines.map((l) => (
+                <tr key={l.key}>
+                  <td className="an-nowrap">
+                    <span className="an-assetrow">
+                    <AssetCell symbol={l.symbol} sub={l.kind === "receipt" ? kind(l.kind) : ""} size="sm" />
+                    {l.tag && <span className="an-tag" data-tip="The Phoenix perps account, valued as one lump." tabIndex={0}>{l.tag}</span>}
+                    </span>
+                  </td>
+                  <td className="an-r">{l.kind === "venue" ? "-" : num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct1(l.usd / depositedUsd)}</td>
+                </tr>
+              ))}</tbody></table>
+          ) : <p className="an-muted an-dcard-empty">{row.valued ? "No active collateral." : "Not valued right now."}</p>}
+        </section>
+        <section className="an-dcard"><h4>Debt</h4>
+          {row.debts.length ? (
+            <table className="an-t"><thead><tr><th>Asset</th><th className="an-r">Debt</th><th className="an-r">Value</th><th className="an-r">APR</th></tr></thead>
+              <tbody>{row.debts.map((l) => (
+                <tr key={l.symbol}><td className="an-nowrap"><span className="an-assetrow"><AssetCell symbol={l.symbol} sub="" size="sm" />
+                  {idleOf(l.symbol) * (l.amount > 0 ? l.usd / l.amount : 0) > DUST_USD && <span className="an-tag" data-tip="Borrowed funds still in the account. They count toward health until used or repaid." tabIndex={0}>{num(idleOf(l.symbol))} idle</span>}</span></td><td className="an-r">{num(l.amount)}</td><td className="an-r">{usd(l.usd)}</td><td className="an-r">{pct(l.borrowApr)}</td></tr>
+              ))}</tbody></table>
+          ) : <p className="an-muted an-dcard-empty">{row.valued ? "No outstanding debt." : "Not valued right now."}</p>}
+        </section>
+      </div>
+      {idleUsd > DUST_USD && <p className="an-panel-foot" style={{ padding: 0 }}>The account value above also includes {usd(idleUsd)} of borrowed funds still idle in the account (shown with the debt). They count toward health until they are used or repaid.</p>}
+      {row.reasons.length > 0 && <p className="an-panel-foot" style={{ color: "var(--warn)", padding: 0 }}>{row.reasons.map(reasonText).join(" ")}</p>}
+      {!!row.stalePrices?.length && <p className="an-panel-foot" style={{ padding: 0 }}>Valued at the last on-chain price of {row.stalePrices.join(", ")}, which had not been updated recently when this was read. It refreshes as soon as the price does.</p>}
+      {row.venueHeld && row.valued && <p className="an-panel-foot" style={{ padding: 0 }}>Its Phoenix perps account is counted as one lump value (collateral plus position equity). Individual positions are not shown, so this account is left out of What-if scenarios.</p>}
+    </>
   );
 }

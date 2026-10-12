@@ -439,3 +439,51 @@ html.dark .v3 .an-root { --an-card-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
 .v3 .an-root .an-t.an-fit th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
 .v3 .an-root .an-t.an-fit td small { white-space: normal; }
 .v3 .an-root .an-t.an-fit td { overflow-wrap: anywhere; }
+
+/* Overview dropdown: the link to the account's full page. */
+.v3 .an-root .an-detail-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 20px 18px 20px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 12.5px; }
+.v3 .an-root .an-detail-foot .an-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+.v3 .an-root .an-detail-foot .an-btn svg { width: 15px; height: 15px; }
+
+/* ---------- account page ---------- */
+.v3 .an-root .an-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.v3 .an-root .an-crumbs a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.v3 .an-root .an-crumbs a:hover { text-decoration: underline; }
+.v3 .an-root .an-crumb-sep { color: var(--ink-3); }
+.v3 .an-root .an-crumb-current { font-weight: 700; }
+.v3 .an-root .an-acct-link { font-weight: 700; color: inherit; text-decoration: none; }
+.v3 .an-root .an-acct-link:hover { color: var(--accent); text-decoration: underline; }
+.v3 .an-root .an-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.v3 .an-root .an-link:hover { text-decoration: underline; }
+.v3 .an-root .an-acct-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.v3 .an-root .an-acct-id { display: grid; gap: 6px; min-width: 0; }
+.v3 .an-root .an-acct-title { font-size: 28px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; color: var(--title); display: flex; align-items: center; }
+.v3 .an-root .an-acct-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.v3 .an-root .an-acct-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-radius: 14px; border: 1px dashed var(--line-strong); background: var(--surface-2); }
+.v3 .an-root .an-acct-banner.an-mine { background: var(--accent-soft); border: 1px solid var(--accent); }
+.v3 .an-root .an-acct-banner .an-btn { text-decoration: none; }
+.v3 .an-root .an-kpi-grid.an-cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1360px) { .v3 .an-root .an-kpi-grid.an-cols-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .v3 .an-root .an-kpi-grid.an-cols-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.v3 .an-root .an-acct-stack { display: grid; gap: 16px; }
+.v3 .an-root .an-acct-foot { font-size: 12.5px; }
+
+/* Health meter + price slider */
+.v3 .an-root .an-hmeter { position: relative; height: 14px; border-radius: 999px; margin: 38px 8px 30px; background: linear-gradient(90deg, var(--danger-bar) 0 10%, var(--critical-bar) 10% 30%, var(--warn-bar) 30% 50%, var(--ok-bar) 50% 100%); }
+.v3 .an-root .an-hmeter-line { position: absolute; top: -6px; bottom: -6px; border-left: 2px dashed var(--danger-bar); }
+.v3 .an-root .an-hmeter-mark { position: absolute; top: -8px; width: 4px; height: 30px; margin-left: -2px; background: var(--ink); border-radius: 2px; transition: left .12s; }
+.v3 .an-root .an-hmeter-mark span { position: absolute; top: -24px; left: 50%; transform: translateX(-50%); font-weight: 800; font-size: 13px; white-space: nowrap; font-style: normal; }
+.v3 .an-root .an-hmeter-tick { position: absolute; top: 20px; transform: translateX(-50%); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.v3 .an-root .an-hmeter-tick.an-liq { color: var(--danger); }
+.v3 .an-root .an-scn-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.v3 .an-root .an-scn-price { font-size: 28px; font-weight: 800; }
+.v3 .an-root .an-scn-scale { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 14px; }
+.v3 .an-root input.an-range { width: 100%; accent-color: var(--accent); }
+
+/* Status bar: a slim strip, so the page content starts higher. */
+.v3 .an-statusbar { gap: 10px; padding: 3px 4px 3px 12px; font-size: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, .05); }
+html.dark .v3 .an-statusbar { box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
+.v3 .an-statusbar .an-live { gap: 6px; font-size: 12px; }
+.v3 .an-statusbar .an-sep { height: 12px; }
+.v3 .an-statusbar .an-meta { padding-right: 4px; }
+.v3 .an-root .an-statusbar .an-btn { min-height: 24px; height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }

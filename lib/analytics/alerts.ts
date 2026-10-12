@@ -6,6 +6,7 @@
  */
 import { DISPLAY_BANDS, LIQUIDATION_LINE } from "./risk";
 import { usd } from "./format";
+import { accountHref } from "./links";
 import type { AccountView, AccountsSummary, Coverage } from "./types";
 import type { ProtocolOverview } from "./server/store";
 
@@ -28,10 +29,10 @@ export function deriveAlerts(input: {
   if (input.serviceError) out.push({ id: "service", priority: "P1", title: "The analytics service can't be reached", detail: "Numbers on this page may be out of date until it is back.", metric: "Service" });
 
   if (you) {
-    if (!you.valued) out.push({ id: "you-unvalued", priority: "P2", yours: true, title: "Your account can't be valued right now", detail: "A price it depends on hasn't been updated recently.", metric: "Your account", link: "/analytics#accounts" });
-    else if (you.liquidatable) out.push({ id: "you-liq", priority: "P0", yours: true, title: "Your account can be liquidated now", detail: `Health ${you.healthFactor?.toFixed(2)} is at or below the liquidation line (${LIQUIDATION_LINE.toFixed(2)}).`, metric: "Health", link: "/analytics#accounts" });
-    else if (you.healthFactor !== null && you.healthFactor < 1.2) out.push({ id: "you-crit", priority: "P1", yours: true, title: "Your account is close to liquidation", detail: `Health ${you.healthFactor.toFixed(2)} - the liquidation line is ${LIQUIDATION_LINE.toFixed(2)}.`, metric: "Health", link: "/analytics#accounts" });
-    else if (you.healthFactor !== null && you.healthFactor < DISPLAY_BANDS.warning) out.push({ id: "you-warn", priority: "P2", yours: true, title: "Your account health is getting low", detail: `Health ${you.healthFactor.toFixed(2)} (below ${DISPLAY_BANDS.warning.toFixed(2)}).`, metric: "Health", link: "/analytics#accounts" });
+    if (!you.valued) out.push({ id: "you-unvalued", priority: "P2", yours: true, title: "Your account can't be valued right now", detail: "A price it depends on hasn't been updated recently.", metric: "Your account", link: accountHref(you.address, "alerts") });
+    else if (you.liquidatable) out.push({ id: "you-liq", priority: "P0", yours: true, title: "Your account can be liquidated now", detail: `Health ${you.healthFactor?.toFixed(2)} is at or below the liquidation line (${LIQUIDATION_LINE.toFixed(2)}).`, metric: "Health", link: accountHref(you.address, "alerts") });
+    else if (you.healthFactor !== null && you.healthFactor < 1.2) out.push({ id: "you-crit", priority: "P1", yours: true, title: "Your account is close to liquidation", detail: `Health ${you.healthFactor.toFixed(2)} - the liquidation line is ${LIQUIDATION_LINE.toFixed(2)}.`, metric: "Health", link: accountHref(you.address, "alerts") });
+    else if (you.healthFactor !== null && you.healthFactor < DISPLAY_BANDS.warning) out.push({ id: "you-warn", priority: "P2", yours: true, title: "Your account health is getting low", detail: `Health ${you.healthFactor.toFixed(2)} (below ${DISPLAY_BANDS.warning.toFixed(2)}).`, metric: "Health", link: accountHref(you.address, "alerts") });
   }
 
   if (s && s.valued > 0) {

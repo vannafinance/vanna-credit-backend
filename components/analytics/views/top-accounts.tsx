@@ -2,10 +2,13 @@
 
 /** Top accounts: how concentrated the debt is, the largest borrowers, and a feed of recent activity. */
 import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAnalyticsAccounts, useAnalyticsEvents, useAnalyticsSummary } from "@/hooks/use-analytics";
 import { hfText, levText, num, pct1, short, usd } from "@/lib/analytics/format";
 import type { ProgramEvent } from "@/lib/analytics/server/events";
-import { Addr, Badge, Empty, Kpi, Panel, StatusBadge, ForkTime, YouPill } from "../ui";
+import { accountHref } from "@/lib/analytics/links";
+import { Badge, Empty, Kpi, Panel, StatusBadge, ForkTime, YouPill } from "../ui";
 import { ViewHead } from "../shell";
 
 const WAIT = "Waiting for accounts";
@@ -32,6 +35,7 @@ function detail(e: ProgramEvent): string {
 
 export function TopAccountsView() {
   const { data: sum } = useAnalyticsSummary();
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [feed, setFeed] = useState("all");
   const { data } = useAnalyticsAccounts({ filter: "withdebt", sort: "debt", dir: "desc", q: "", page, per: 10, band: null, you: null });
@@ -50,15 +54,16 @@ export function TopAccountsView() {
         <Kpi label="Concentration index" tip="hhi" value={ok && c?.hhi != null ? Math.round(c.hhi).toLocaleString("en-US") : "-"} na={!ok} sub={ok ? "0 = spread out · 10,000 = one borrower" : WAIT} />
       </div>
 
-      <section className="an-panel an-flush">
+      <section className="an-panel an-flush" id="borrowers">
         <div className="an-panel-head"><div><h2 className="an-panel-title">Largest borrowers</h2><p className="an-panel-sub">Accounts that could be valued, by debt</p></div></div>
         <div className="an-table-wrap"><table className="an-t">
           <thead><tr><th>#</th><th>Wallet</th><th className="an-r">Debt</th><th className="an-r">Share of debt</th><th className="an-r">Health</th><th className="an-r">Leverage</th><th>Status</th></tr></thead>
           <tbody>
             {(data?.rows ?? []).length ? data!.rows.map((r, i) => (
-              <tr key={r.address}>
+              <tr key={r.address} className="an-row-link" tabIndex={0} role="link" onClick={() => router.push(accountHref(r.address, "top"))}
+                onKeyDown={(e) => { if (e.key === "Enter") router.push(accountHref(r.address, "top")); }}>
                 <td className="an-muted">{(data!.page - 1) * data!.per + i + 1}</td>
-                <td className="an-nowrap"><Addr value={r.owner} /><YouPill value={r.owner} /></td>
+                <td className="an-nowrap"><Link href={accountHref(r.address, "top")} className="an-acct-link" title="Open this account" onClick={(e) => e.stopPropagation()}>{short(r.owner, 5, 5)}</Link><YouPill value={r.owner} /></td>
                 <td className="an-r">{usd(r.debtUsd)}</td>
                 <td className="an-r">{s && s.debtUsd > 0 ? pct1((r.debtUsd ?? 0) / s.debtUsd) : "-"}</td>
                 <td className="an-r">{hfText(r.healthFactor)}</td>

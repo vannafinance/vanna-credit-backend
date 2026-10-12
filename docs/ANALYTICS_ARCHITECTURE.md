@@ -76,6 +76,7 @@ Known limits (documented, not hidden):
 | Alerts | derived live in `lib/analytics/alerts.ts` (own health, prices not updated, pool utilization, liquidations, scan state). Nothing stored; no notification channels |
 | Lending Pools / Collateral / Prices | `/protocol` (pools, rate curve calculated with the contract formula, asset configs, price limits) |
 | What-if Calculator (last) | `/scenario-input` (saved baseline), engine `lib/analytics/whatif.ts` runs in the browser, read-only |
+| Account page `/analytics/accounts/<margin or wallet address>?from=` | `/accounts/[owner]` (the row + where it stands: debt rank, share, closeness to liquidation), `/accounts/[owner]/activity` (its real transactions), `/protocol` (prices for the price slider). Reached from the Overview dropdown ("View full details"), Top accounts, Liquidations, Alerts, Positions lookup and What-if; the breadcrumb follows `?from=` |
 
 Events come from the transactions the registry already inspects (the same `getTransaction` body carries
 the logs), so they cost no extra RPC. Coverage is the registry's scan window.
@@ -83,6 +84,19 @@ the logs), so they cost no extra RPC. Coverage is the registry's scan window.
 Not provided, on purpose: Current PnL (no cost basis on-chain), an insurance fund (the program has none),
 Stellar-style synthetic scenario pages. HF trend is the server's own measurements (one per refresh,
 in memory), labelled as such. "First seen" is the earliest scanned transaction, not creation time.
+
+## Account page
+
+`components/analytics/views/account.tsx`. Header (wallet, margin address, status), a banner ("this is your account" only when the connected
+wallet owns it), six figures, a price slider, where it ranks, collateral and debt, and **real transactions**.
+
+- The price slider reuses the What-if engine (`simulateAccount`) on this account's own lines, for one asset at a time (assets priced at about
+  $1 are not offered). Accounts with a Phoenix lump value, no debt, or not valued show a one-line reason instead.
+- Activity comes from `fetchMarginHistory` (the Margin page's own reader: the owner wallet's signatures, each transaction's Anchor events
+  decoded), worded by `lib/analytics/activity.ts`, cached 30 s per owner and shared between viewers. It reads at most the wallet's 200 latest
+  signatures and says when older ones are not shown. Each row links to the explorer.
+- Ranks (`standingOf` in `lib/analytics/risk.ts`) are over the accounts the dashboard has valued.
+- `?from=` (validated against a fixed list) only chooses the breadcrumb: Overview > Accounts, Top accounts > Largest borrowers, and so on.
 
 ## UI / logic separation
 
