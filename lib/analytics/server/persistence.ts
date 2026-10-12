@@ -62,6 +62,23 @@ const project = process.env.ANALYTICS_FIRESTORE_PROJECT;
 const database = process.env.ANALYTICS_FIRESTORE_DATABASE ?? "(default)";
 const collection = process.env.ANALYTICS_FIRESTORE_COLLECTION ?? "solana_analytics";
 const CHUNK = 400_000; // chars per Firestore document (limit is 1 MiB)
+const MAX_CHUNKS = 12;
+
+/**
+ * Splits the saved state into Firestore-sized pieces. The cached account rows are only a convenience (shown at once
+ * after a restart), so if the whole state would not fit they are dropped rather than losing the scan state, which is
+ * the expensive part to rebuild. Throws only when even the scan state alone is too large.
+ */
+export function encodeState(state: PersistedState): { parts: string[]; rowsDropped: boolean } {
+  const split = (json: string) => Array.from({ length: Math.ceil(json.length / CHUNK) }, (_, i) => json.slice(i * CHUNK, (i + 1) * CHUNK));
+  let parts = split(JSON.stringify(state));
+  if (parts.length <= MAX_CHUNKS) return { parts, rowsDropped: false };
+  if (state.rows) {
+    parts = split(JSON.stringify({ ...state, rows: undefined, rowsAt: undefined, rowsForkTime: undefined }));
+    if (parts.length <= MAX_CHUNKS) return { parts, rowsDropped: true };
+  }
+  throw new Error("state_too_large");
+}
 
 class FileStore implements Store {
   backend = "file" as const;
@@ -105,17 +122,15 @@ class FirestoreStore implements Store {
     const meta = await this.get("state_meta");
     if (!meta) return null;
     const { chunks } = JSON.parse(meta) as { chunks: number };
-    if (!Number.isInteger(chunks) || chunks < 1 || chunks > 12) return null;
+    if (!Number.isInteger(chunks) || chunks < 1 || chunks > MAX_CHUNKS) return null;
     const parts: string[] = [];
     for (let i = 0; i < chunks; i++) { const part = await this.get(`state_${i}`); if (part === null) return null; parts.push(part); }
     return JSON.parse(parts.join("")) as PersistedState;
   }
   async save(state: PersistedState) {
-    const json = JSON.stringify(state);
-    const chunks = Math.ceil(json.length / CHUNK);
-    if (chunks > 12) throw new Error("state_too_large");
-    for (let i = 0; i < chunks; i++) await this.put(`state_${i}`, json.slice(i * CHUNK, (i + 1) * CHUNK));
-    await this.put("state_meta", JSON.stringify({ chunks, savedAt: state.savedAt })); // last: readers never see a half-written set
+    const { parts } = encodeState(state);
+    for (let i = 0; i < parts.length; i++) await this.put(`state_${i}`, parts[i]);
+    await this.put("state_meta", JSON.stringify({ chunks: parts.length, savedAt: state.savedAt })); // last: readers never see a half-written set
   }
 }
 

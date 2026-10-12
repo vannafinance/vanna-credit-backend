@@ -54,6 +54,28 @@ A saved state is trusted only if the schema and program id match **and** its new
 exists on the fork (a fork reset discards it). Saves are throttled (15 s) and only when something changed.
 Measured locally: restart → ready with all 192 accounts / 1,499 transactions in ~10 s (was ~150 s).
 
+### Setting up Firestore for the deployed site
+
+Analytics needs its own Firestore in the project the site runs in (it does not share the Copilot's, which lives in another project).
+One-time, then it needs no more attention. Region is permanent, so pick the Cloud Run region.
+
+```sh
+PROJECT=vanna-credit-solana-test; REGION=us-central1; SERVICE=vanna-credit-solana-test
+gcloud firestore databases list --project=$PROJECT            # skip the create if a (default) database already exists
+gcloud services enable firestore.googleapis.com --project=$PROJECT
+gcloud firestore databases create --project=$PROJECT --database='(default)' --location=$REGION --type=firestore-native
+SA=$(gcloud run services describe $SERVICE --region=$REGION --project=$PROJECT --format='value(spec.template.spec.serviceAccountName)')
+# empty = the default compute account: $(gcloud projects describe $PROJECT --format='value(projectNumber)')-compute@developer.gserviceaccount.com
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role=roles/datastore.user --condition=None
+gcloud run services update $SERVICE --region=$REGION --project=$PROJECT --update-env-vars=ANALYTICS_FIRESTORE_PROJECT=$PROJECT
+```
+
+`--update-env-vars` merges (never `--set-env-vars` / `--clear-env-vars`, which would drop the access code and the Copilot settings).
+No Firestore security rules are needed: the server reads and writes with its service account. If the store is unreachable the
+dashboard keeps working from memory and `/api/analytics/summary` reports `persistence.error`. Saved state is a few documents
+(`state_meta`, `state_0..n`) in the `solana_analytics` collection, rewritten at most every 15 s (rows every 2 min).
+If the whole state ever exceeds 12 chunks the cached rows are dropped and only the scan state is saved.
+
 Optional env: `ANALYTICS_FIRESTORE_PROJECT`, `ANALYTICS_FIRESTORE_DATABASE` (default `(default)`),
 `ANALYTICS_FIRESTORE_COLLECTION` (default `solana_analytics`). The runtime service account needs Firestore
 read/write on that project.
