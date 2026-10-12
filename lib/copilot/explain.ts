@@ -53,7 +53,9 @@ const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/account_not_found|AccountNotInitialized|3012/i, "You do not have a margin account yet."],
   // Too large for one Solana transaction (1232 bytes): only a margin swap's route is about the pair; any other step is
   // large because the health check names every asset the margin account holds.
-  [/(?:margin swap|swap route|route \(account cap)[\s\S]*(?:too large|exceeds)|(?:too large|exceeds)[\s\S]*(?:margin swap|swap route|route hops)/i, "That swap route is too large for one Solana transaction on this network. Try a different pair, or swap in your wallet instead of inside the margin account."],
+  // A Titan route that doesn't fit with the margin instruction: Jupiter's route (which the MCP sizes to fit) still can.
+  [/Titan margin swap[\s\S]*(?:too large|exceeds)/i, "Titan's route for this swap inside the margin account is too large for one Solana transaction right now. Jupiter can build this swap: ask again and pick Jupiter."],
+  [/(?:margin swap|swap route|route \(account cap)[\s\S]*(?:too large|exceeds)|(?:too large|exceeds)[\s\S]*(?:margin swap|swap route|route hops)/i, "That swap route is too large for one Solana transaction on this network. Try a smaller amount, or swap in your wallet instead of inside the margin account."],
   [/transaction_too_large|size limit|exceeds Solana|too large for one|VersionedTransaction too large|max: 1232/i, "This step's transaction is larger than one Solana transaction allows: the health check names every asset your margin account holds. Nothing was sent. Try again in a moment; withdrawing collateral you no longer use also makes it smaller."],
   // A Basis vault on a stock market (TSLA, META) refuses deposits outside that market's session (the vault program's
   // MarketAfterHours); the MCP checks it before building, this catches it if a simulation still reports it.

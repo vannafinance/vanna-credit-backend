@@ -553,7 +553,18 @@ describe("swap route: Jupiter or Titan", () => {
     const res = await chat("swap 100 USDC to SOL");
     expect(res.kind).not.toBe("clarification");
     expect(res.plan?.steps[0]?.slots?.provider).toBeUndefined();
+    // The card's "You receive" shows the quote (it was empty before).
+    expect(res.preview?.slots).toMatchObject({ expected_out: "0.831", min_out: "0.822" });
     expect(JSON.stringify(res)).toMatch(/Titan has no route/);
+  });
+
+  it("a margin swap pinned to Titan whose route no longer fits is refused before anything is built, pointing to Jupiter", async () => {
+    vi.spyOn(mcp, "swapQuote").mockImplementation(async () => quote([{ provider: "jupiter", out_amount: "0.831", min_out_amount: "0.822", best: true }], "too-large"));
+    const call = vi.spyOn(mcp, "call");
+    const res = await chat("swap 100 USDC to SOL in my margin account via titan");
+    expect(res.kind).toBe("blocked");
+    expect(res.message).toMatch(/Titan's route .* too large[^]*Jupiter can build this swap/);
+    expect(call.mock.calls.some((c) => c[0] === "vanna_swap")).toBe(false);
   });
 });
 

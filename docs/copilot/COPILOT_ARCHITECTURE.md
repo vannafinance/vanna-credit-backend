@@ -593,8 +593,10 @@ environment.
 2. Production: repeat WorkOS and hosting in the production environment; decide whether to tighten the MCP (VPC
    Service Controls or hosting it in the app's project) instead of `ingress=all`.
 3. Deploys from `main` by a trigger or a single agreed procedure, so the live site always matches `main`.
-4. The deployed site's Predict trade builder refuses to sell pooled shares ("Redeem pooled YES simulation failed:
-   owner does not match") while the same request built by current `main` works. The hosted Copilot can only trade what
-   the deployed app builds, so the app needs a redeploy (or its Predict settings checked) before hosted Predict sells work.
+4. Fixed (2026-10-12, `lib/predict/trade.server.ts`): a sell failed with "owner does not match" whenever the app's maker
+   already held the other side of a market in a World Group (a match). The sell then merged the maker's YES + NO back
+   to CASH, but a group's outcomes share one CASH vault owned by the group, which the market can't sign for. The merge is
+   now added only when the market owns its vault (read on chain, `LegMarket.mergeable`); in a group the maker keeps
+   both sides. It looked site-dependent because each site's maker holds different inventory.
 5. At the next MCP deploy set `APP_ACCESS_CODE` on both services, and `ENABLE_TEST_FAUCET=true` on the private one for
    the Copilot's test CASH.

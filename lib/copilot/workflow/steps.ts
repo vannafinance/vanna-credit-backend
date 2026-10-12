@@ -36,6 +36,8 @@ export interface Prepared {
   /** Exact amount this build will use ("all" resolved), for the card and audit trail. */
   resolvedAmount: string | null;
   notes: string[];
+  /** A swap's live quote for the card: what it should receive and the minimum enforced. */
+  estimate?: { out: string; min: string | null } | null;
 }
 
 export type PreflightResult =
@@ -404,6 +406,7 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
   let usd = 0;
   let call: McpCall;
   let hfAfterValue: number | null | undefined = health?.hf ?? undefined;
+  let estimate: Prepared["estimate"] = null;
   let collateralAfter = health?.collateralUsd ?? 0;
   let debtAfter = health?.debtUsd ?? 0;
 
@@ -550,10 +553,18 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
       const buildArgs = provider ? { ...swapArgs, provider } : swapArgs;
       try {
         const q = await mcp.swapQuote({ ...swapArgs, authority: wallet, mode: step.slots.mode === "margin" ? "margin" : "wallet" }, ctx);
+        // The MCP leaves out a Titan route that can't fit one margin transaction: a swap the user pinned to Titan can't
+        // be built now, which is said before anything is built (Jupiter still can).
+        if (provider === "titan" && q.titan_status === "too-large") {
+          return fail("invalid", `Titan's route for this swap inside the margin account is too large for one Solana transaction right now (its route changed since it was quoted). Jupiter can build this swap: the user can ask again and pick Jupiter.`);
+        }
         const quotes = Array.isArray(q.providers) ? (q.providers as Record<string, unknown>[]) : [];
         const shown = (provider ? quotes.find((p) => p.provider === provider) : null) ?? q;
         const via = providerName(provider ?? (typeof q.provider === "string" ? q.provider : "jupiter"));
-        if (num(shown.out_amount) !== null) notes.push(`Quote via ${via}: about ${shown.out_amount} ${to} (minimum ${shown.min_out_amount}).`);
+        if (num(shown.out_amount) !== null) {
+          notes.push(`Quote via ${via}: about ${shown.out_amount} ${to} (minimum ${shown.min_out_amount}).`);
+          estimate = { out: String(shown.out_amount), min: num(shown.min_out_amount) !== null ? String(shown.min_out_amount) : null };
+        }
       } catch {
         /* the build below is the authoritative route check */
       }
@@ -635,7 +646,7 @@ export async function preflightStep(step: StoredStep, ctx: ReadCtx): Promise<Pre
         asset,
         marginApplicable: false,
       });
-  return { ok: true, prepared: { usd, call, risk, simulation, resolvedAmount: amount, notes } };
+  return { ok: true, prepared: { usd, call, risk, simulation, resolvedAmount: amount, notes, estimate } };
 }
 
 export type BuildResult =

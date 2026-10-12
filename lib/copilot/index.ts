@@ -774,7 +774,14 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
   const preview: Preview = {
     template_id: step.op,
     human_summary: planSummary,
-    slots: { op: step.op, asset: step.asset, amount: resolved ?? step.amount, ...(step.slots.to_asset ? { to_asset: String(step.slots.to_asset) } : {}) },
+    slots: {
+      op: step.op,
+      asset: step.asset,
+      amount: resolved ?? step.amount,
+      ...(step.slots.to_asset ? { to_asset: String(step.slots.to_asset) } : {}),
+      // A swap's live quote, so the card's "You receive" shows a figure (the build re-quotes; the minimum is enforced).
+      ...(pre.prepared.estimate ? { expected_out: pre.prepared.estimate.out, ...(pre.prepared.estimate.min ? { min_out: pre.prepared.estimate.min } : {}) } : {}),
+    },
     risk: pre.prepared.risk,
     simulation: pre.prepared.simulation,
     requires_signature: true,

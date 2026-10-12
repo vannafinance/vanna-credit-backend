@@ -95,6 +95,12 @@ interface LegMarket {
   yes: PublicKey;
   no: PublicKey;
   vault: PublicKey;
+  /**
+   * A market-level `merge` (YES + NO back to CASH) can run: the CASH vault is owned by the market itself. Every
+   * outcome of a World Group shares one vault owned by the group, so the market cannot sign for it and a merge fails
+   * with "owner does not match"; such a set is never merged here.
+   */
+  mergeable: boolean;
 }
 
 /** Reads the market on the fork (cloning it from mainnet on first touch) and checks its layout. */
@@ -107,7 +113,12 @@ async function forkMarket(info: MarketInfo): Promise<LegMarket> {
   const yes = key(MARKET_OFFSETS.yesMint);
   const no = key(MARKET_OFFSETS.noMint);
   if (yes.toBase58() !== info.yesMint || no.toBase58() !== info.noMint) throw new TradeError("Market accounts do not match.");
-  return { info, market: new PublicKey(info.id), yes, no, vault: key(MARKET_OFFSETS.vault) };
+  const vault = key(MARKET_OFFSETS.vault);
+  const market = new PublicKey(info.id);
+  // Who owns the CASH vault (token account owner, bytes 32..64): the market, or the World Group it belongs to.
+  const vaultAcct = await getConnection().getAccountInfo(vault, "confirmed");
+  const vaultOwner = vaultAcct && vaultAcct.data.length >= 64 ? new PublicKey(vaultAcct.data.subarray(32, 64)) : null;
+  return { info, market, yes, no, vault, mergeable: Boolean(vaultOwner?.equals(market)) };
 }
 
 const kindOf = (m: MarketInfo) => (m.startMs !== null && m.endMs !== null ? "updown" : "binary");
@@ -285,7 +296,8 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
           createAssociatedTokenAccountIdempotentInstruction(maker.publicKey, ata(m.yes, maker.publicKey), maker.publicKey, m.yes, TOKEN_2022_PROGRAM_ID),
           createAssociatedTokenAccountIdempotentInstruction(maker.publicKey, ata(m.no, maker.publicKey), maker.publicKey, m.no, TOKEN_2022_PROGRAM_ID),
           transfer(want, owner, maker.publicKey, owner, amount),
-          ...(makerOther >= amount ? [completeSetIx("merge", maker.publicKey, m.market, m.yes, m.no, m.vault, amount)] : []),
+          // The maker recovers CASH from a complete set it now holds, only where the market can merge (see LegMarket).
+          ...(makerOther >= amount && m.mergeable ? [completeSetIx("merge", maker.publicKey, m.market, m.yes, m.no, m.vault, amount)] : []),
           transfer(CASH, maker.publicKey, owner, maker.publicKey, proceeds),
         ],
         computeUnits: 140_000,
