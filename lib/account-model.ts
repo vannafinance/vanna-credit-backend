@@ -86,7 +86,11 @@ export interface AccountNumbers {
   debt: number;
   equity: number;
   hf: number;
-  /** Gross market exposure (volatile collateral + perp notional at the index) ÷ equity. */
+  /**
+   * Gross position value ÷ equity: every token held (stables and idle borrowed funds included) plus
+   * the larger of the Phoenix account's value and its open perp notional. 1× with no debt; a 5× perp
+   * reads 5×. Same basis as Analytics (collateral ÷ equity).
+   */
   leverage: number;
   perpsValue: number;
 }
@@ -94,8 +98,9 @@ export interface AccountNumbers {
 export function accountNumbers(s: ModelState): AccountNumbers {
   const { holdings, debt } = totals(s);
   const equity = holdings - debt;
-  const exposure =
-    s.collateral.filter((c) => !isStable(c.symbol)).reduce((t, c) => t + c.usd, 0) + s.perps.reduce((t, p) => t + Math.abs(p.tokens * p.index), 0);
+  const tokens = s.collateral.reduce((t, c) => t + c.usd, 0);
+  const notional = s.perps.reduce((t, p) => t + Math.abs(p.tokens * p.index), 0);
+  const exposure = tokens + Math.max(venueValue(s), notional);
   return {
     holdings,
     debt,

@@ -265,7 +265,7 @@ export function BottomPanel({
             <Kv k="Health factor" tip="How safe the whole margin account is: holdings ÷ debt. It can be liquidated at 1.10 or below." cls={hfZone(hf)}>
               {hfFmt(now ? now.hf : Infinity)}
             </Kv>
-            <Kv k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity).">
+            <Kv k="Account leverage" tip="Everything the account holds (borrowed funds included, open perps at their full size) divided by your own money (equity). 1.00x means no borrowing.">
               {levFmt(now ? now.leverage : 0)}
             </Kv>
             <Kv k="Total collateral" tip="Everything the margin account holds, including the Phoenix account, at the oracle prices.">

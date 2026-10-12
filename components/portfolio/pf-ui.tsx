@@ -21,7 +21,7 @@ export const TT = {
   value: "Everything in your margin account (tokens, farm receipts and the Phoenix account) before subtracting what it owes.",
   coll: "Collateral you deposited into the margin account (deposits minus withdrawals), at today's prices.",
   borrowed: "Everything your margin account owes, interest included, at today's prices.",
-  lev: "Total market exposure (volatile collateral and perp positions) divided by your account equity.",
+  lev: "Everything the account holds (borrowed funds included, open perps at their full size) divided by your account equity. 1.00x means no borrowing.",
   ratio: "What the account owes as a share of everything it holds.",
   left: "Value the account can lose before the health factor reaches 1.10.",
   room: "The smallest single price move that takes the health factor to 1.10, with every other price unchanged.",
@@ -37,7 +37,7 @@ export const TT = {
   spotSize: "Market value of every token your margin account holds (deposits, swapped tokens, Kamino and vault receipts), at today's prices.",
   spotLS: "Value of the tokens you hold long, and of the tokens you borrowed and sold short.",
   spotPnl: "Profit or loss on open spot positions with an on-chain entry price, at today's price, before fees and interest.",
-  farmApy: "Kamino supply APY of your farm positions weighted by their value, before the borrow cost of any loan that funds them.",
+  farmApy: "APY of all your farm positions weighted by their value (Kamino supply APY, Basis vaults' 7-day APY, Perena's published APY), before the borrow cost of any loan that funds them.",
   farmShare: "Farm positions as a share of everything in your margin account.",
   farmEarned: "Underlying redeemable now minus what was supplied (from the margin's on-chain farm history).",
 };

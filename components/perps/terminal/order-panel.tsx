@@ -334,7 +334,7 @@ export function OrderPanel(p: OrderPanelProps) {
             {a1 && <i className="px-hfm-aft" style={{ left: `${hfPos(a1.hf)}%` }} />}
           </div>
         )}
-        <SimRow on={live} k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity)." v0={levFmt(now ? now.leverage : 0)} v1={a1 ? levFmt(a1.leverage) : null} />
+        <SimRow on={live} k="Account leverage" tip="Everything the account holds (borrowed funds included, open perps at their full size) divided by your own money (equity). 1.00x means no borrowing." v0={levFmt(now ? now.leverage : 0)} v1={a1 ? levFmt(a1.leverage) : null} />
         <SimRow on={live} k="Available USDC" tip="Idle USDC in your margin account; this order takes its collateral from here." v0={nf(p.available, 2)} v1={a1 ? nf(p.available - o.c, 2) : null} />
         <SimRow
           on={live}

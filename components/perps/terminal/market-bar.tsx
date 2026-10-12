@@ -229,7 +229,7 @@ export function AccountStrip({
         <StripItem on={on} k="Health factor" tip="How safe the whole margin account is: holdings ÷ debt. It can be liquidated at 1.10 or below." cls={hfZone(hf)}>
           {hfFmt(hf)}
         </StripItem>
-        <StripItem on={on} k="Account leverage" tip="Your market exposure (volatile collateral plus perp size) divided by your own money (equity).">
+        <StripItem on={on} k="Account leverage" tip="Everything the account holds (borrowed funds included, open perps at their full size) divided by your own money (equity). 1.00x means no borrowing.">
           {levFmt(leverage)}
         </StripItem>
         <StripItem

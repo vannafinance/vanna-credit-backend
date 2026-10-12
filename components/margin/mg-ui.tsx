@@ -311,7 +311,7 @@ export function LevSlider({ lev, max, onChange }: { lev: number; max: number; on
 /** Tooltip copy shared by the screen (the program's real rules, not the design's sample ones). */
 export const TIPS = {
   hf: "Health factor: everything in your margin account (collateral, idle funds and the Phoenix perps account) divided by everything it owes, unweighted. At 1.10 or below the account can be liquidated; actions that would take it below 1.15 are blocked.",
-  lev: "Account leverage: total market exposure (volatile collateral plus perp size) divided by equity.",
+  lev: "Account leverage: everything the account holds (borrowed funds included, open perps at their full size) divided by your equity (holdings minus debt). 1.00x means no borrowing.",
   borrowed: "Borrowed: everything your margin account owes, at today's on-chain prices, including interest accrued so far.",
   equity: "Equity: everything in your margin account minus what it owes.",
   value: "Account value: everything in your margin account (collateral, idle funds and the Phoenix perps account) before subtracting debt.",
