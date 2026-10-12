@@ -26,8 +26,7 @@ async function main() {
   for (const r of rows) {
     const snap = await fetchMarginSnapshot(new PublicKey(r.owner));
     const close = (a: number | null, b: number | null) => (a === null || b === null ? a === b : Math.abs(a - b) <= Math.max(0.01, Math.abs(b) * 5e-4)); // two reads a moment apart: prices and the fork clock tick
-    // The site's reader values a stale-priced collateral at $0; this one (allowStale) keeps its value, so such accounts differ by design.
-    if (snap.stalePrices.length) { console.log(`SKIP ${r.owner.slice(0, 8)}… the site's snapshot has stale prices (${snap.stalePrices.join(",")}): C=${snap.totalCollateralUsd} vs batch ${r.collateralUsd}`); continue; }
+    // The site's reader now also keeps a stale-priced collateral at its last on-chain price (it only reports it in `stalePrices`), so stale accounts are compared too.
     const ok = close(r.collateralUsd, snap.totalCollateralUsd) && close(r.debtUsd, snap.totalDebtUsd) && close(r.healthFactor, snap.healthFactor);
     console.log(`${ok ? "OK  " : "DIFF"} ${r.owner.slice(0, 8)}… batch C=${r.collateralUsd} D=${r.debtUsd} HF=${r.healthFactor} | snapshot C=${snap.totalCollateralUsd} D=${snap.totalDebtUsd} HF=${snap.healthFactor}`);
     if (!ok) bad++;

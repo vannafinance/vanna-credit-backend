@@ -28,10 +28,10 @@ so accounts are found from the program's own transactions and then **verified** 
 
 | Concern | What we do |
 | --- | --- |
-| Account discovery | `lib/analytics/server/registry.ts`. Walks program signatures backwards in bounded ticks (`ANALYTICS_TICK_BUDGET`, default 120 tx/tick) up to a look-back window (`ANALYTICS_MAX_SIGNATURES`, default 1500). Later ticks only fetch signatures newer than the newest seen (`until`). Each transaction is fetched once; each candidate key is verified once (owner = Vanna program, `MarginAccount` discriminator, PDA matches its authority); negative results are remembered. |
+| Account discovery | `lib/analytics/server/registry.ts`. Walks program signatures backwards in bounded ticks (`ANALYTICS_TICK_BUDGET`, default 120 tx/tick) up to a look-back window (`ANALYTICS_MAX_SIGNATURES`, default 5000). Later ticks only fetch signatures newer than the newest seen (`until`). Each transaction is fetched once; each candidate key is verified once (owner = Vanna program, `MarginAccount` discriminator, PDA matches its authority); negative results are remembered. |
 | Honest coverage | `Coverage` is returned with every summary: accounts found, transactions scanned/pending, oldest scanned time, `complete`. The UI says "found in recent activity", never "all accounts". |
 | Reading accounts | `lib/analytics/server/accounts.ts`. Shared state (asset configs, pools, oracle accounts, fork clock) is read **once** per pass; then 2 batched phases of `getMultipleAccounts` (100/chunk - the fork rejects JSON-RPC batching): margin accounts → vaults/debt positions of **active** indexes only. Same math/rounding as `margin.ts` (collateral rounds down, debt up). Checked against `fetchMarginSnapshot` by `scripts/analytics-parity.ts`. |
-| Refreshing | `lib/analytics/server/store.ts`: stale-while-revalidate + single-flight. A request returns the last snapshot in ms and, if it is older than `ANALYTICS_REFRESH_SECONDS` (default 20) or discovery has backlog, kicks a background pass. While there is backlog, passes only read *new* accounts and publish partial results (honest coverage); when idle, all known accounts are re-read in one batch. Browser tabs only poll the server snapshot (15 s; 3 s while warming), so RPC load does not grow with viewers. |
+| Refreshing | `lib/analytics/server/store.ts`: stale-while-revalidate + single-flight. A request returns the last snapshot in ms and, if it is older than `ANALYTICS_REFRESH_SECONDS` (default 45) or discovery has backlog, kicks a background pass. While there is backlog, passes only read *new* accounts and publish partial results (honest coverage); when idle, all known accounts are re-read in one batch. Browser tabs only poll the server snapshot (15 s; 3 s while warming), so RPC load does not grow with viewers. |
 | Paging | `/api/analytics/accounts` filters, sorts, searches and pages **server-side** (max 100 rows/page); the browser never receives the full list. Summary aggregates are computed over all accounts on the server. |
 | What-if input | `/api/analytics/scenario-input` - fetched only when the calculator opens; the calculator runs in the browser and writes nothing. |
 | Failures | Provider errors are reduced to an error class (RPC messages can embed keyed URLs). A failed pass keeps serving the previous snapshot; failures back off (≥5 s between attempts). |
@@ -108,7 +108,8 @@ of the site. There is no separate theme button.
 
 ## Env
 
-`ANALYTICS_MAX_SIGNATURES`, `ANALYTICS_TICK_BUDGET`, `ANALYTICS_REFRESH_SECONDS` (all optional). RPC
+`ANALYTICS_MAX_SIGNATURES` (5000), `ANALYTICS_TICK_BUDGET` (120), `ANALYTICS_REFRESH_SECONDS` (45),
+`ANALYTICS_TX_CONCURRENCY` (3), `ANALYTICS_BACKLOG_PAUSE_MS` (2000) - all optional, defaults in brackets. RPC
 comes from the existing `FORK_RPC_URL` / `NEXT_PUBLIC_SOLANA_RPC_URL`.
 
 ## Verify
