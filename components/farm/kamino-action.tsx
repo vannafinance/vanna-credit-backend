@@ -21,7 +21,7 @@ import { receiptPreview } from "@/lib/farm/receipt-preview";
 import { BeforeAfter, Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
 import { hfFmt, nf, pct, tokFmt, usd } from "@/components/v3/format";
-import { accountNumbers, hfZone, LIQ_HF, SAFE_HF, WARN_HF, type ModelState } from "@/lib/account-model";
+import { accountNumbers, LIQ_HF, SAFE_HF, WARN_HF, type ModelState } from "@/lib/account-model";
 import { useV3Account } from "@/hooks/use-v3-account";
 import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
@@ -257,16 +257,7 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
               <span>Projected monthly earnings</span>
               <span className="pos">{usd(apy === null || !price ? 0 : (amount * price * apy) / 12)}</span>
             </div>
-            {hf && (
-              <div className="kv">
-                <span>
-                  Net Health Factor <Info text="Your margin account's health factor before and after. The Kamino receipt replaces the supplied asset at the same value, so it barely moves." />
-                </span>
-                <span>
-                  <BeforeAfter a={hfFmt(hf.h0)} b={hfFmt(hf.h1)} za={hfZone(hf.h0)} zb={hfZone(hf.h1)} />
-                </span>
-              </div>
-            )}
+            {/* No health-factor row: the Kamino receipt replaces the supplied asset at the same value. */}
           </div>
           {hf && <HfNote h0={hf.h0} h1={hf.h1} />}
         </>
@@ -281,7 +272,6 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
 
 function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmPosition | null }) {
   const userAddress = useUserStore((s) => s.address);
-  const account = useV3Account();
   // Entered as a percentage of the position (0–100).
   const [value, setValue] = useState("");
   const [pctOn, setPctOn] = useState(0);
@@ -291,12 +281,6 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
   const valid = Number.isFinite(percent) && percent > 0 && percent <= 100;
   const withdraw = useFarmWithdraw();
   const isPending = withdraw.isPending;
-
-  const hf = useMemo(() => {
-    if (!account.state || !account.now || !position) return null;
-    const h1 = valid ? accountNumbers(afterMove(account.state, pool.symbol, pool.receiptSymbol, -(position.liquidityUsd * percent) / 100)).hf : account.now.hf;
-    return { h0: account.now.hf, h1 };
-  }, [account.state, account.now, position, valid, percent, pool.symbol, pool.receiptSymbol]);
 
   const submit = () => {
     if (!position) return;
@@ -388,14 +372,7 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
             <span>You receive</span>
             <span>{tokFmt(out, pool.symbol)} to margin account</span>
           </div>
-          {hf && (
-            <div className="kv">
-              <span>Net Health Factor</span>
-              <span>
-                <BeforeAfter a={hfFmt(hf.h0)} b={hfFmt(hf.h1)} za={hfZone(hf.h0)} zb={hfZone(hf.h1)} />
-              </span>
-            </div>
-          )}
+          {/* No health-factor row: the withdrawn asset replaces the receipt at the same value. */}
         </div>
       )}
       {txError && <p className="fm-warnn dg">{txError}</p>}

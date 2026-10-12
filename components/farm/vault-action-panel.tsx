@@ -29,10 +29,9 @@ import { projectHealthFactor } from "@/lib/solana/margin";
 import { LIQUIDATION_HEALTH_FACTOR, NETWORK_LABEL } from "@/lib/solana/config";
 import { fromRaw } from "@/lib/solana/math";
 import { explorerUrl } from "@/lib/solana/config";
-import { BeforeAfter, Icon } from "@/components/v3/icons";
+import { Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
-import { hfFmt, nf, pct, usd } from "@/components/v3/format";
-import { hfZone } from "@/lib/account-model";
+import { nf, pct, usd } from "@/components/v3/format";
 import { TabsBox } from "./fm-ui";
 
 export interface VaultAccountInputs {
@@ -112,7 +111,9 @@ export function VaultActionPanel({
       ? `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
       : `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} · own USDC, no borrow cost`;
   const sharePx = state?.sharePriceUsd ?? 0;
-  const hfNow = (account.debtUsd > 0 ? projectHealthFactor(account.collateralUsd, account.debtUsd) : null) ?? Infinity;
+  // No health-factor row: the receipt (deposit) or the USDC (withdraw) comes back into the margin
+  // account at about the value that left it, so the settled HF does not move. The routed SOL Basis
+  // dip above is only the mid-transaction low point, still warned about when it nears liquidation.
   void apyEstimate;
   void apyNote;
   void formula;
@@ -225,16 +226,6 @@ export function VaultActionPanel({
                 <span className={(perYear ?? 0) >= 0 ? "pos" : "n"}>{usd((perYear ?? 0) / 12)}</span>
               </div>
             </>
-          )}
-          {account.debtUsd > 0 && (
-            <div className="kv">
-              <span>
-                Net Health Factor <Info text="Your margin account's health factor before and after. The vault receipt replaces the USDC at about the same value, so it barely moves." />
-              </span>
-              <span>
-                <BeforeAfter a={hfFmt(hfNow)} b={hfFmt(routedHf ?? hfNow)} za={hfZone(hfNow)} zb={hfZone(routedHf ?? hfNow)} />
-              </span>
-            </div>
           )}
         </div>
       )}
