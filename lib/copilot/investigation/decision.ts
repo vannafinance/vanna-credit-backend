@@ -448,7 +448,7 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
   }
   const intent: Intent = steps.length === 1 && "write" in steps[0] ? { lane: "write", write: steps[0].write } : { lane: "chain", steps };
   if (!amountsAreTyped(intent, ctx.message, ctx.history, wordAmounts)) {
-    return { ok: false, reason: "a literal, usd or receive amount, or a health_target, is not a number the user gave. Use them only for numbers in the user's messages (digits, or words copied into as_written); otherwise use a sizing word, or ask_user for the amount" };
+    return { ok: false, reason: "a literal, usd or receive amount, or a health_target, is not a number the user gave. Use them only for numbers in the user's messages (digits, or words copied into as_written); otherwise use a sizing word, or ask_user for the amount. The whole of something the user holds or owes ('my positions', 'my shares', 'everything', 'all of it') is sizing all: never copy a balance from the evidence into a literal" };
   }
   return { ok: true, intent };
 }

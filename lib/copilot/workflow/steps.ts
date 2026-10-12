@@ -183,6 +183,18 @@ async function preflightVault(step: StoredStep, ctx: ReadCtx, notes: string[]): 
   return done({ action: "withdraw", amount }, 0, amount);
 }
 
+/**
+ * A Predict trade the app refused to build (its own simulation of the transactions failed, e.g. a pool redeem): the
+ * app's reason in one line, not the generic "the network rejected it", so the user knows where it failed.
+ */
+function predictAppError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!/simulation failed|Program log/i.test(raw)) return humanizeMcpError(err).message;
+  const first = (raw.split("\n")[0] ?? "").replace(/:\s*\{.*$/, "").trim();
+  const log = /Program log: Error: ([^\n]+)/.exec(raw)?.[1]?.trim();
+  return `The website's Predict service couldn't build this trade: ${first}${log ? ` (${log})` : ""}. Nothing was built or sent.`;
+}
+
 /** The shares of one outcome side the user holds in Predict: in the wallet plus in Vanna's pool (sell), or wallet only (deposit). */
 function predictHeld(pos: Record<string, unknown>, leg: PredictStepLeg): number {
   const rows = Array.isArray(pos.positions) ? (pos.positions as Array<Record<string, unknown>>) : [];
@@ -244,7 +256,7 @@ async function preflightPredict(step: StoredStep, ctx: ReadCtx, notes: string[])
     });
     for (const w of Array.isArray(q.warnings) ? q.warnings : []) notes.push(String(w));
   } catch (err) {
-    return fail("invalid", humanizeMcpError(err).message);
+    return fail("invalid", predictAppError(err));
   }
   notes.push("Predict uses your wallet, not your margin account: your health factor doesn't change.");
   return {

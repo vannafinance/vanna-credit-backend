@@ -410,8 +410,12 @@ async function predictLeg(w: WriteIntent, earlier: StepSpec[], reads: PredictRea
   let amount: string | null = a && (a.kind === "exact" || a.kind === "usd") ? a.value : null;
   let note: string | null = a?.kind === "usd" ? `$${a.value} is ${a.value} CASH (CASH is World's dollar).` : null;
   if (amount === null && (a?.kind === "all" || a?.kind === "pct")) {
-    if (earlier.some((s) => s.op === "predict_trade")) {
-      return { ok: false, message: "That share depends on the Predict trade before it in this request. Give an exact amount for it." };
+    // Sized from the balance as it is now, which is exact unless an earlier leg of this request changes that same
+    // balance: the wallet's CASH (any buy or sell) for a buy, the same outcome's shares for a sell or pool deposit.
+    const before = earlier.flatMap((s) => (s.op === "predict_trade" ? predictLegsOf(s) ?? [] : []));
+    const touched = side === "buy" ? before.some((l) => l.side !== "deposit") : before.some((l) => l.market === id && l.outcome === outcome);
+    if (touched) {
+      return { ok: false, message: `${a.kind === "all" ? "All" : `${a.pct}%`} of that depends on the Predict leg before it in this request, which changes the same ${side === "buy" ? "CASH" : "shares"}. Give an exact amount for it.` };
     }
     if (!reads.positions) {
       try {

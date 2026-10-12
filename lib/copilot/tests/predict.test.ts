@@ -161,6 +161,24 @@ describe("Predict through the Copilot", () => {
     expect(draw.message).toMatch(/Draw .* has no live price/);
   });
 
+  it("'sell my positions' sells all of each one in one trade (selling one outcome doesn't block 'all' of another)", async () => {
+    positions = { ...positions, positions: [...(positions.positions as unknown[]), { event: "Galatasaray vs Barcelona", market_id: GALA, outcome: "Galatasaray", side: "no", label: "No", shares: 5.5, wallet_shares: 0, pooled_shares: 5.5 }] };
+    const sellAll = (market: string, outcome: string) => ({ op: "predict_sell", market_id: market, outcome, sizing: { kind: "all" }, source_quote: "sell my share positions" });
+    setLlmClient(scripted([[{ name: "get_predict_positions", args: {} }], [{ name: "propose_actions", args: { actions: [sellAll(BARCA, "yes"), sellAll(GALA, "no")] } }]]));
+    const res = await chat("can you sell my share positions");
+    expect(res.kind).toBe("preview");
+    const legs = predictLegsOf(workflows.docs.get(res.workflow_id!)!.value.steps[0]!)!;
+    expect(legs.map((l) => [l.name, l.side, l.amount])).toEqual([["Barcelona", "sell", "12.5"], ["Galatasaray", "sell", "5.5"]]);
+  });
+
+  it("asks for an exact amount only when an earlier leg changes the same balance", async () => {
+    const all = { op: "predict_buy", market_id: GALA, outcome: "yes", sizing: { kind: "all" }, source_quote: "the rest on galatasaray" };
+    setLlmClient(scripted([[read], [{ name: "propose_actions", args: { actions: [buy(BARCA, "10", "10 on barcelona"), all] } }]]));
+    const res = await chat("10 on barcelona and the rest on galatasaray");
+    expect(res.kind).toBe("clarification");
+    expect(res.message).toMatch(/changes the same CASH/);
+  });
+
   it("checks the wallet's CASH and the shares before anything is built", async () => {
     positions = { ...positions, wallet: { cash: 3, usdc: 0, sol: 2 } };
     setLlmClient(scripted([[read], [{ name: "propose_actions", args: { actions: [buy(BARCA, "10")] } }]]));
