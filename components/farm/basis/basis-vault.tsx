@@ -16,10 +16,10 @@
  * keep an explicit unavailable state.
  */
 import "../farm-v3.css";
-import { LOW_TVL_USD, apyText, grossFundingApr, sinceLaunchLabel, vaultApy } from "@/lib/farm/yield";
+import { LOW_TVL_USD, apyText, sinceLaunchLabel, vaultApy } from "@/lib/farm/yield";
 import { useState } from "react";
 import { Icon } from "@/components/v3/icons";
-import { nf, pct, spct, usd, usdC } from "@/components/v3/format";
+import { nf, spct, usd, usdC } from "@/components/v3/format";
 import { explorerUrl } from "@/lib/solana/config";
 import { openInterestUsd, useVaultPosition, useVaultView } from "@/lib/farm/basis-live";
 import { BackLink, Cell, HowItWorks, TabsBox, Tiles, Venue, VTag, YieldList } from "../fm-ui";
@@ -73,7 +73,6 @@ export function BasisVaultPage({ id }: { id: string }) {
   const tvl = state?.navUsd ?? 0;
   const apy7 = state?.apy7 ?? null;
   const eventEstimate = state?.apy7Source === "deposit-event";
-  const fundingEstimate = grossFundingApr(funding?.stats.avg7, state?.shortUsd, state?.navUsd);
   // Headline APY: realized 7D when it exists, else the Phoenix-funding estimate (labelled). A
   // since-launch return is never annualised: under 7 days of history one rebalance cost on a small
   // NAV reads as a huge APY, so it is shown raw beside the estimate instead.
@@ -82,7 +81,7 @@ export function BasisVaultPage({ id }: { id: string }) {
   const fundingApr7 = headline.fundingApr;
   const sinceLaunch = sinceLaunchLabel(state?.returnSinceLaunchPct, state?.sinceLaunchDays);
   const launchDay = state?.launchedAt ? new Date(state.launchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
-  const apyTitle = headline.estimate ? "Est. APY (7D funding)" : eventEstimate ? "Vault APY (event estimate)" : "Vault APY (7D)";
+  const apyTitle = "Vault APY (7D)";
   const lowTvlTip = headline.lowTvl
     ? ` TVL is under ${usdC(LOW_TVL_USD)}: a single rebalance, Phoenix fee or entry cost moves the share price more than days of funding, so treat any APY here as an estimate.`
     : "";
@@ -90,7 +89,8 @@ export function BasisVaultPage({ id }: { id: string }) {
   const estTip = `Estimated from what this vault earns: the last 7 days of Phoenix mainnet ${def.asset}-PERP funding (${spct(fundingApr7 ?? 0, 1)} APR) on the share of the vault held short (${nf((view.hedgeShare ?? 0) * 100, 0)}% of NAV). Before Phoenix fees and execution. A few days of share-price history are too short to annualise; it switches to the realized 7-day APY once the vault has 7 days of history.${sinceTip}${lowTvlTip}`;
   // One sub-line under the APY: the real since-launch return (un-annualised) while the headline is the
   // funding estimate. Funding and the low-TVL note are in the tooltip / the Funding stat.
-  const apySub = headline.source !== "7d" && sinceLaunch ? [sinceLaunch] : [];
+  // No chips under the APY (simple, like the Kamino page); the since-launch return is in the tooltip.
+  const apySub: string[] = [];
   const market = view.market;
   const oiUsd = openInterestUsd(market) ?? 0;
   const oiDigits = (market?.markPx ?? 0) > 1e4 ? 3 : 2;
@@ -112,7 +112,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <Cell key="p" v={<Venue name="Jupiter · Phoenix" />} />,
           <Cell key="s" v={usd(position.valueUsd)} mini="USDC value" />,
           <Cell key="r" v={`${nf(position.shares, 6)} ${def.symbol}`} />,
-          <Cell key="y" v={apyLabel} mini={headline.estimate ? "Est." : eventEstimate ? "Event estimate" : undefined} />,
+          <Cell key="y" v={apyLabel} />,
         ],
       ]
     : [];
@@ -159,15 +159,7 @@ export function BasisVaultPage({ id }: { id: string }) {
           <Stat label="Open Interest" value={usd(oiUsd, 0)} sub={[`${nf(market?.openInterest ?? 0, oiDigits)} ${def.asset}`]} tip={oiTip} />
           <Stat label="Total Value Locked" value={usd(tvl)} tip={`Net asset value in the vault now; it accepts up to ${usdC(state?.capUsd ?? 0)} in total.`} />
         </section>
-        {apy7 === null && (
-          <p className="fm-sub" style={{ marginBlock: 12 }}>
-            {fundingEstimate !== null
-              ? `Est. APY ${pct(fundingEstimate, 2)}: the last 7 days of Phoenix mainnet funding (${spct(fundingApr7 ?? 0, 1)} APR) on this vault's short, before fees and execution. The realized APY replaces it once the vault has 7 days of share-price history; fewer days are not annualised.`
-              : "Vault APY appears once the vault has 7 days of share-price history; it then updates day by day."}
-            {sinceLaunch ? ` ${sinceLaunch}${launchDay ? ` (launched ${launchDay})` : ""}, the real share-price change, not annualised.` : ""}
-            {headline.lowTvl ? ` Low TVL (under ${usdC(LOW_TVL_USD)}): one rebalance or entry cost dominates the share price at this size, so the APY is an estimate.` : ""}
-          </p>
-        )}
+        {/* The APY explanation lives in the stat's tooltip; the page stays as simple as the Kamino vault page. */}
         <div className="fm-cols">
           <div className="fm-main">
             <TabsBox

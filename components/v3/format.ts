@@ -31,7 +31,12 @@ export const pct = (n: number, d = 2) => `${n < 0 ? "−" : ""}${nf(Math.abs(n),
 export const spct = (n: number, d = 2) => `${n >= 0 ? "+" : "−"}${nf(Math.abs(n), d)}%`;
 export const price = (n: number) => (n >= 10 ? nf(n, 2) : nf(n, 4));
 export const levFmt = (l: number) => `${nf(Number.isFinite(l) ? l : 0, 2)}x`;
-export const hfFmt = (h: number | null | undefined) => (h !== null && h !== undefined && Number.isFinite(h) && h < 100 ? nf(h, 2) : "No debt");
+/**
+ * Health factor text. "No debt" ONLY when there is no debt (null / non-finite HF); a finite HF is
+ * always a number, and very large ones (tiny debt against big collateral) read ">100" — they used to
+ * read "No debt", which hid a real loan.
+ */
+export const hfFmt = (h: number | null | undefined) => (h === null || h === undefined || !Number.isFinite(h) ? "No debt" : h >= 100 ? ">100" : nf(h, 2));
 export const hfLabel = (h: number) => (!Number.isFinite(h) || h >= 1.5 ? "Safe" : h >= 1.25 ? "Healthy" : h > LIQ_HF ? "At risk" : "Liquidation");
 export const upDn = (v: number) => (v >= 0 ? "pos" : "neg");
 

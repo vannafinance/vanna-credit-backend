@@ -157,8 +157,8 @@ html.dark .v3{
 /* StatStrip `center` — the Margin page's stats strip (components/margin/margin-v3.css .mg-stats). */
 @media (min-width:768px){
   .v3 .fs.c{border-color:var(--line-2)}
-  .v3 .fs.c article{height:auto;min-height:120px;padding:16px 8px;align-items:center;gap:6px}
-  .v3 .fs.c .hd{justify-content:center;gap:6px;width:100%;min-height:42px}
+  .v3 .fs.c article{height:auto;min-height:120px;padding:20px 8px;align-items:center;justify-content:center;gap:10px}
+  .v3 .fs.c .hd{justify-content:center;gap:6px;width:100%;min-height:0}
   .v3 .fs.c .ic{width:24px;height:24px;flex:none}
   .v3 .fs.c .k{font-size:11px;text-align:center;line-height:1.25;justify-content:center}
   .v3 .fs.c .v{font-size:18px;text-align:center}

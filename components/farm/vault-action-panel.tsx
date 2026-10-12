@@ -26,12 +26,13 @@ import { useVaultAction } from "@/lib/farm/use-vault-action";
 import { useVaultAccount } from "@/lib/farm/use-vaults";
 import { usePoolData } from "@/hooks/use-earn";
 import { projectHealthFactor } from "@/lib/solana/margin";
-import { LIQUIDATION_HEALTH_FACTOR } from "@/lib/solana/config";
+import { LIQUIDATION_HEALTH_FACTOR, NETWORK_LABEL } from "@/lib/solana/config";
 import { fromRaw } from "@/lib/solana/math";
 import { explorerUrl } from "@/lib/solana/config";
-import { Icon } from "@/components/v3/icons";
+import { BeforeAfter, Icon } from "@/components/v3/icons";
 import { Info } from "@/components/v3/ui";
-import { nf, pct, usd } from "@/components/v3/format";
+import { hfFmt, nf, pct, usd } from "@/components/v3/format";
+import { hfZone } from "@/lib/account-model";
 import { TabsBox } from "./fm-ui";
 
 export interface VaultAccountInputs {
@@ -110,6 +111,11 @@ export function VaultActionPanel({
     : borrowedShare > 0 && borrow !== null
       ? `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} − ${pct(borrow, 1)} USDC borrow${borrowedShare < 0.999 ? ` on ${nf(borrowedShare * 100, 0)}% of it` : ""}`
       : `${pct(apy7!, 1)} ${apyEstimate ? "est. vault" : "vault"} · own USDC, no borrow cost`;
+  const sharePx = state?.sharePriceUsd ?? 0;
+  const hfNow = (account.debtUsd > 0 ? projectHealthFactor(account.collateralUsd, account.debtUsd) : null) ?? Infinity;
+  void apyEstimate;
+  void apyNote;
+  void formula;
   const overMax = deposit && def.kind === "basis" && state?.maxDepositUsd != null && units > state.maxDepositUsd;
   const closed = deposit && def.kind === "basis" && state?.available && (state.paused || !state.depositsOpen);
 
@@ -178,55 +184,63 @@ export function VaultActionPanel({
         </div>
       </div>
 
-      {deposit && (
-        <div>
-          <div className="fm-net num">
-            <div>
-              <div className="lbl">
-                {state?.apy7Source === "deposit-event" && apyOverride === undefined ? "Net APY (event estimate)" : apyEstimate ? "Est. Net APY" : "Net APY"} <Info text={`${apySource}, minus the Vanna USDC borrow APR on the part of this deposit covered by your USDC debt.${apyNote ? ` ${apyNote}` : ""}`} />
-              </div>
-              <div className={`big ${units && netApy !== null && netApy < 0 ? "n" : ""}`}>{pct(netApy ?? 0, 1)}</div>
-              <div className="f">{formula}</div>
-            </div>
-            <div className="r">
-              <div className="lbl">Est. earnings{apyEstimate ? <Info text="Projected from the estimated APY above (Phoenix funding on the vault's short, before fees and execution), not from realized returns." /> : null}</div>
-              <div className="big">{usd((perYear ?? 0) / 12)}</div>
-              <div className="f">{units && perYear !== null ? `per month · ${usd(perYear, 0)} a year` : ""}</div>
-            </div>
+      {/* Details after an amount is entered — the same box as the Kamino vault panel. */}
+      {a.address && units > 0 && (
+        <div className="fm-pv num">
+          <div className="kv">
+            <span>Network</span>
+            <span>
+              <i className="fm-sq" />
+              {NETWORK_LABEL}
+            </span>
           </div>
-          {apyNote && <p className="fm-note">{apyNote}</p>}
-          <div className="fm-kvs num">
-            <div className="kv">
-              <span>USDC borrow APR</span>
-              <span>{pct(borrow ?? 0, 2)}</span>
-            </div>
-            {routedHf !== null && (
+          <div className="kv">
+            <span>
+              <Icon sym={deposit ? "USDC" : def.kind === "perena" ? def.symbol : def.asset} className="fm-ico14" />
+              {deposit ? "Deposit (USDC)" : `Withdraw (${def.symbol})`}
+            </span>
+            <span>{deposit ? `${nf(units, 2)} USDC` : `${nf(units, 6)} ${def.symbol}`}</span>
+          </div>
+          <div className="kv">
+            <span>
+              {deposit ? "Est. receipt received" : "Est. USDC received"}{" "}
+              <Info text={deposit ? `Your USDC divided by the vault's current share price. The exact amount is set when the transaction executes.` : `Shares times the vault's current share price${def.id === "perena-junior" ? ", less Perena's 1% instant-exit fee" : ""}. The exact amount is set when the transaction executes.`} />
+            </span>
+            <span>{deposit ? `≈ ${nf(sharePx > 0 ? usdIn / sharePx : 0, 6)} ${def.symbol}` : `≈ ${nf(usdIn * (def.id === "perena-junior" ? 0.99 : 1), 2)} USDC`}</span>
+          </div>
+          <div className="kv">
+            <span>Share price</span>
+            <span>{usd(sharePx, 6)}</span>
+          </div>
+          {deposit && (
+            <>
               <div className="kv">
                 <span>
-                  Health factor while USDC moves <Info text="SOL Basis withdraws this USDC from your margin account before the vault deposit and returns the vbSOL in the same transaction. The program checks your health factor at that point; this is an estimate at current prices." />
+                  APY <Info text={`${apySource}${borrowedShare > 0 && borrow !== null ? `, minus the ${pct(borrow, 2)} USDC borrow APR on the part of this deposit covered by your USDC debt` : ""}.`} />
                 </span>
-                <span className={routedHfLow ? "n" : ""}>{nf(Math.max(routedHf, 0), 2)}</span>
+                <span>{pct(netApy ?? 0, 2)}</span>
               </div>
-            )}
-            {def.kind === "basis" && (
               <div className="kv">
-                <span>Max deposit</span>
-                <span>{state?.maxDepositUsd != null ? `${nf(state.maxDepositUsd, 0)} USDC` : "No limit"}</span>
+                <span>Projected monthly earnings</span>
+                <span className={(perYear ?? 0) >= 0 ? "pos" : "n"}>{usd((perYear ?? 0) / 12)}</span>
               </div>
-            )}
-          </div>
+            </>
+          )}
+          {account.debtUsd > 0 && (
+            <div className="kv">
+              <span>
+                Net Health Factor <Info text="Your margin account's health factor before and after. The vault receipt replaces the USDC at about the same value, so it barely moves." />
+              </span>
+              <span>
+                <BeforeAfter a={hfFmt(hfNow)} b={hfFmt(routedHf ?? hfNow)} za={hfZone(hfNow)} zb={hfZone(routedHf ?? hfNow)} />
+              </span>
+            </div>
+          )}
         </div>
       )}
 
-      <p className="fm-note">First use may ask for one extra wallet approval to prepare your account; that setup step does not move funds.</p>
-      {a.routedDeposit && (
-        <p className="fm-note">SOL Basis moves this margin USDC through your wallet into the vault and returns the vbSOL to your margin account, in one approval.</p>
-      )}
       {routedHfLow && (
         <p className="fm-warnn dg">This would take your health factor to {nf(Math.max(routedHf!, 0), 2)} while the USDC is out of your margin account (must stay above 1.10). Deposit less or repay some USDC debt first.</p>
-      )}
-      {def.id === "perena-junior" && !deposit && (
-        <p className="fm-note">Vanna uses Perena&apos;s instant withdrawal, which includes a 1% exit fee (the 7-day cooldown path is not used).</p>
       )}
       {state?.stale && <p className="fm-warnn">Perena NAV is stale on the fork. The deposit refreshes the fork timestamp before it simulates.</p>}
       {!state?.registered && <p className="fm-note">Vault registration is being checked.</p>}
