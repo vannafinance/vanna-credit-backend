@@ -5,7 +5,7 @@ export default defineConfig({
   resolve: { alias: { "@": resolve(__dirname) } },
   test: {
     environment: "node",
-    include: ["lib/**/*.test.ts", "app/**/*.test.ts"],
+    include: ["lib/**/*.test.ts", "app/**/*.test.ts", "bot/**/*.test.ts"],
     testTimeout: 30_000,
   },
 });

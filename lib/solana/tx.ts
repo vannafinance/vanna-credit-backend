@@ -214,3 +214,19 @@ export async function sendInstructions(instructions: TransactionInstruction[], o
     return sendV0(ixs, opts, await prepareTransactionTables(ixs, opts));
   }
 }
+
+/**
+ * Simulates what {@link sendInstructions} would send (same compute budget and lookup tables) and
+ * returns the result with inner instructions, where `emit_cpi!` events live. Signs nothing; may
+ * create the signer's lookup table first, as a send would. Throws like a send on a failed simulation.
+ */
+export async function simulateInstructions(instructions: TransactionInstruction[], opts: SendOptions) {
+  const ixs = withComputeBudget(instructions, opts.computeUnits);
+  const tables = await prepareTransactionTables(ixs, opts);
+  const connection = getConnection();
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  const tx = new VersionedTransaction(new TransactionMessage({ payerKey: opts.signer.publicKey, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message(tables));
+  const simulation = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed", innerInstructions: true });
+  if (simulation.value.err) throw simulationError(opts.label, simulation.value.err, simulation.value.logs);
+  return simulation.value;
+}

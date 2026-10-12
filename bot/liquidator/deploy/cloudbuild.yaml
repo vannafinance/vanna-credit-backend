@@ -1,0 +1,31 @@
+# Build → push the liquidator bot image (the VM pulls it on boot; see deploy/README in bot/liquidator).
+#
+#   gcloud builds submit . --project=vanna-credit-solana-test --region=us-central1 \
+#     --config=bot/liquidator/deploy/cloudbuild.yaml \
+#     --service-account=projects/vanna-credit-solana-test/serviceAccounts/vanna-credit-builder@vanna-credit-solana-test.iam.gserviceaccount.com \
+#     --substitutions=_TAG=$(git rev-parse --short HEAD)
+
+substitutions:
+  _REGION: us-central1
+  _REPO: vanna-credit
+  _IMAGE_NAME: liquidator
+  _TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - bot/liquidator/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:latest
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:latest
