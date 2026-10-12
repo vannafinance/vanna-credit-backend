@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classify, derivedFigures, inBand, liquidationPrices, matchesFilter, protocolsOf, searchRows, sortRows, standingOf, summarize } from "./risk";
+import { classify, DEFAULT_SORT_DIR, derivedFigures, inBand, liquidationPrices, matchesFilter, protocolsOf, searchRows, sortRows, standingOf, summarize } from "./risk";
 import type { AccountRow } from "./types";
 
 /** Test fixtures only - never shipped to the UI. */
@@ -148,5 +148,44 @@ describe("standingOf", () => {
   it("gives no rank to accounts without debt or not valued", () => {
     expect(standingOf(rows, rows[3])).toMatchObject({ debtRank: null, debtShare: null, healthRank: null });
     expect(standingOf(rows, rows[4]).debtRank).toBeNull();
+  });
+});
+
+describe("sorting every column", () => {
+  const mk = (owner: string, collateralUsd: number | null, debtUsd: number | null, valued = true): AccountRow => {
+    const f = collateralUsd !== null && debtUsd !== null ? derivedFigures(collateralUsd, debtUsd) : null;
+    return row({
+      owner, valued, collateralUsd, debtUsd,
+      equityUsd: f?.equityUsd ?? null, healthFactor: f?.healthFactor ?? null, leverage: f?.leverage ?? null, bufferPct: f?.bufferPct ?? null,
+      status: classify({ valued, collateralUsd, debtUsd, healthFactor: f?.healthFactor ?? null, liquidatable: false }),
+    });
+  };
+  const rows = [
+    mk("big", 5000, 2000), mk("small", 300, 100), mk("mid", 900, 600),
+    mk("hodler", 400, 0), mk("empty", 0, 0), mk("unvalued", null, null, false),
+  ];
+  const order = (key: Parameters<typeof sortRows>[1], dir: 1 | -1) => sortRows(rows, key, dir).map((r) => r.owner);
+
+  it("debt: accounts with debt first, in either direction; no-debt and empty accounts never lead", () => {
+    expect(order("debt", 1).slice(0, 3)).toEqual(["small", "mid", "big"]);
+    expect(order("debt", -1).slice(0, 3)).toEqual(["big", "mid", "small"]);
+    expect(order("debt", 1).slice(3)).toEqual(["empty", "hodler", "unvalued"]);
+  });
+  it("collateral and equity: empty accounts do not lead", () => {
+    expect(order("collateral", 1).slice(0, 4)).toEqual(["small", "hodler", "mid", "big"]);
+    expect(order("collateral", 1).slice(4)).toEqual(["empty", "unvalued"]);
+    expect(order("equity", 1)[0]).not.toBe("empty");
+  });
+  it("leverage: an account with no debt has no leverage to rank", () => {
+    expect(order("leverage", 1).slice(0, 3)).toEqual(["big", "mid", "small"].sort((a, b) => (rows.find((r) => r.owner === a)!.leverage ?? 0) - (rows.find((r) => r.owner === b)!.leverage ?? 0)));
+    expect(order("leverage", 1).slice(3)).toEqual(["empty", "hodler", "unvalued"]);
+  });
+  it("status: riskiest first, not-valued last", () => {
+    const s = order("status", 1);
+    expect(s[s.length - 1]).toBe("unvalued");
+    expect(order("status", -1)[order("status", -1).length - 1]).toBe("unvalued");
+  });
+  it("starts money columns biggest-first and risk columns riskiest-first", () => {
+    expect(DEFAULT_SORT_DIR).toMatchObject({ health: 1, buffer: 1, status: 1, debt: -1, collateral: -1, equity: -1, leverage: -1 });
   });
 });

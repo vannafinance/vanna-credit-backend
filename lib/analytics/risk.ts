@@ -183,16 +183,24 @@ export function matchesFilter(row: AccountRow, filter: AccountFilter): boolean {
   }
 }
 
-/** The number an account is sorted on, or null when it has none (no debt, or not valued). */
+/**
+ * The number an account is sorted on, or null when it has nothing to show in that column. "Nothing" means
+ * nothing: a no-debt account has no debt figure (not $0.00) and no meaningful leverage (not 1.00x), an empty
+ * account has no collateral. They then sort after the accounts that do, in either direction, instead of
+ * filling the top of an ascending sort.
+ */
 const SORT_VALUE: Record<AccountSortKey, (r: AccountRow) => number | null> = {
   health: (r) => r.healthFactor,
-  debt: (r) => r.debtUsd,
-  collateral: (r) => r.collateralUsd,
-  equity: (r) => r.equityUsd,
-  leverage: (r) => r.leverage,
+  debt: (r) => ((r.debtUsd ?? 0) > 0 ? r.debtUsd : null),
+  collateral: (r) => ((r.collateralUsd ?? 0) > 0 ? r.collateralUsd : null),
+  equity: (r) => ((r.collateralUsd ?? 0) > 0 || (r.debtUsd ?? 0) > 0 ? r.equityUsd : null),
+  leverage: (r) => ((r.debtUsd ?? 0) > 0 ? r.leverage : null),
   buffer: (r) => r.bufferPct,
-  status: (r) => STATUS_RANK[r.status],
+  status: (r) => (r.status === "incomplete" ? null : STATUS_RANK[r.status]),
 };
+
+/** Direction a column starts in when first clicked: the riskiest or the biggest first. */
+export const DEFAULT_SORT_DIR: Record<AccountSortKey, 1 | -1> = { health: 1, debt: -1, collateral: -1, equity: -1, leverage: -1, buffer: 1, status: 1 };
 
 /**
  * Accounts with a value come first in the chosen direction. Accounts without one always come after them in

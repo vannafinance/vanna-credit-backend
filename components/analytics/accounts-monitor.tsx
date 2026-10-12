@@ -11,7 +11,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lookupWallet, useAnalyticsAccounts, useAnalyticsProtocol, type AccountsQuery } from "@/hooks/use-analytics";
 import { hfText, levText, num, pct, pct1, short, usd, usdC } from "@/lib/analytics/format";
-import { inBand, liquidationPrices, matchesFilter, protocolsOf } from "@/lib/analytics/risk";
+import { DEFAULT_SORT_DIR, inBand, liquidationPrices, matchesFilter, protocolsOf } from "@/lib/analytics/risk";
 import { reasonText } from "@/lib/analytics/reasons";
 import { accountHref } from "@/lib/analytics/links";
 import type { AccountFilter, AccountSortKey, AccountView } from "@/lib/analytics/types";
@@ -78,7 +78,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   const th = (key: AccountSortKey, label: string, cls = "", tip?: Parameters<typeof InfoTip>[0]["k"]) => (
     <th className={cls}>
       <button type="button" className="an-sort" aria-sort={sort === key ? (dir === "asc" ? "ascending" : "descending") : undefined}
-        onClick={() => { if (sort === key) setDir(dir === "asc" ? "desc" : "asc"); else { setSort(key); setDir("asc"); } }}>
+        onClick={() => { if (sort === key) setDir(dir === "asc" ? "desc" : "asc"); else { setSort(key); setDir(DEFAULT_SORT_DIR[key] === 1 ? "asc" : "desc"); } }}>
         {label}{sort === key ? (dir === "asc" ? " ↑" : " ↓") : ""}
       </button>
       {tip && <InfoTip k={tip} />}
