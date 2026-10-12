@@ -129,8 +129,7 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
       data.debts.map((d) => {
         const sh = data.totalDebt > 0 ? Math.round((d.usd / data.totalDebt) * 100) : 0;
         const chip = sh > 0 ? <span className="mg-shp num">{sh}%</span> : null;
-        // Borrowed tokens still in the vault belong to the loan, not to "Collateral Deposited".
-        const idle = data.idle.find((a) => a.sym === d.symbol);
+        void inline;
         return (
           <div key={d.symbol} className="mg-as">
             <Icon sym={d.symbol} />
@@ -138,18 +137,13 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
               <div className="mg-an num">
                 {tokFmt(d.debt, d.symbol)} <Info text={debtTip(d.symbol, d.debt, d.debt > 0 ? d.usd / d.debt : 0)} />
               </div>
+              {/* Share of total debt sits next to the USD value, so the cell doesn't run into the next column.
+                  The "idle" line (borrowed funds still in the account) was removed for a cleaner row. */}
               <div className="mg-au num">
                 {usdL(d.usd)}
-                {inline && chip}
+                {chip}
               </div>
-              {idle && (
-                <div className="mg-au num" style={{ whiteSpace: "nowrap" }} title="Borrowed funds still in your margin account. They count toward its health factor until you use or repay them.">
-                  <span className="mg-tag" style={{ marginLeft: 0, marginRight: 4 }}>idle</span>
-                  {tokFmt(idle.amt, idle.sym)}
-                </div>
-              )}
             </div>
-            {!inline && chip}
           </div>
         );
       })
@@ -190,8 +184,8 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
             <div className="mg-td">
               {data.debts.length ? (
                 data.debts.map((d) => (
-                  <button key={d.symbol} type="button" className="mg-rp" onClick={() => onRepay(d.symbol)}>
-                    Repay{data.debts.length > 1 ? ` ${d.symbol}` : ""}
+                  <button key={d.symbol} type="button" className="mg-rp" aria-label={`Repay ${d.symbol}`} onClick={() => onRepay(d.symbol)}>
+                    Repay <Icon sym={d.symbol} className="ico mg-rp-i" />
                   </button>
                 ))
               ) : (
@@ -232,8 +226,8 @@ export function Positions({ m, flashable, onRepay, onOpen }: { m: MarginScreen; 
           <div className="mg-mra">
             {data.debts.length ? (
               data.debts.map((d) => (
-                <button key={d.symbol} type="button" className="mg-rp" onClick={() => onRepay(d.symbol)}>
-                  Repay {d.symbol}
+                <button key={d.symbol} type="button" className="mg-rp" aria-label={`Repay ${d.symbol}`} onClick={() => onRepay(d.symbol)}>
+                  Repay <Icon sym={d.symbol} className="ico mg-rp-i" />
                 </button>
               ))
             ) : (

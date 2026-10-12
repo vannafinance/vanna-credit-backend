@@ -1,3 +1,4 @@
+import { redactSecrets } from "@/lib/solana/server/json";
 import { fetchWithTimeout } from "../../../../lib/async";
 import { NextRequest, NextResponse } from "next/server";
 import { jupiterBaseUrl, jupiterHeaders } from "@/lib/solana/server/jupiter-api";
@@ -26,6 +27,6 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(await response.json(), { status: response.status });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Jupiter swap failed" }, { status: 502 });
+    return NextResponse.json({ error: error instanceof Error ? redactSecrets(error.message) : "Jupiter swap failed" }, { status: 502 });
   }
 }

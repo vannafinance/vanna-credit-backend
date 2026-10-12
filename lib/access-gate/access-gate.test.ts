@@ -17,7 +17,7 @@ import {
 const saved = { code: process.env.ACCESS_CODE, secret: process.env.ACCESS_COOKIE_SECRET };
 
 beforeEach(() => {
-  delete process.env.ACCESS_CODE;
+  process.env.ACCESS_CODE = "2861";
   delete process.env.ACCESS_COOKIE_SECRET;
 });
 afterEach(() => {
@@ -28,7 +28,15 @@ afterEach(() => {
 });
 
 describe("access code", () => {
-  it("defaults to 2861 and honours ACCESS_CODE", () => {
+  it("fails closed when ACCESS_CODE is unset", () => {
+    delete process.env.ACCESS_CODE;
+    expect(getAccessCode()).toBe("");
+    expect(isValidAccessCode("2861")).toBe(false);
+    expect(isValidAccessCode("x")).toBe(false);
+    expect(verifyAccessToken(createAccessToken())).toBe(false);
+  });
+
+  it("honours ACCESS_CODE", () => {
     expect(getAccessCode()).toBe("2861");
     expect(isValidAccessCode("2861")).toBe(true);
     expect(isValidAccessCode(" 2861 ")).toBe(true);
@@ -67,7 +75,7 @@ describe("access token", () => {
     const t = createAccessToken();
     process.env.ACCESS_CODE = "9999";
     expect(verifyAccessToken(t)).toBe(false);
-    delete process.env.ACCESS_CODE;
+    process.env.ACCESS_CODE = "2861";
     expect(verifyAccessToken(t)).toBe(true);
     process.env.ACCESS_COOKIE_SECRET = "a-different-secret";
     expect(verifyAccessToken(t)).toBe(false);

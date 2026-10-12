@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
 
-/** JSON response that serialises bigint as decimal strings. */
+/**
+ * Strips anything credential-like from text bound for a client. Upstream RPC errors echo their full
+ * request URL (e.g. the Surfpool fork reports `…for url (https://solana-mainnet.g.alchemy.com/v2/<key>)`),
+ * so every URL keeps only its scheme + host, and bare provider keys / `api-key=` params are masked.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/\b((?:https?|wss?):\/\/[^\s/"'()<>]+)[^\s"'()<>]*/gi, "$1/[redacted]")
+    .replace(/\balch_[A-Za-z0-9_-]+/g, "alch_[redacted]")
+    .replace(/((?:api[-_]?key|apikey|token|secret)=)[^&\s"']+/gi, "$1[redacted]");
+}
+
+/** JSON response that serialises bigint as decimal strings; the output is passed through {@link redactSecrets}. */
 export function jsonResponse(body: unknown, init?: ResponseInit) {
-  const text = JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+  const text = redactSecrets(JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
   return new NextResponse(text, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
 }
 

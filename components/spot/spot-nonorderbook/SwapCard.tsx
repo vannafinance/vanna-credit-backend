@@ -28,7 +28,7 @@ import { SWAP_TOKENS, routeTokenForMint } from "./registry-tokens";
 /** Quick-pick chips in the token picker: the majors, JupUSD and the xStocks. */
 const POPULAR_SYMBOLS = ["SOL", "USDC", "USDT", "JupUSD", "NVDAx", "GOOGLx", "AAPLx", "TSLAx"];
 import { onTxStatus, showTxStep, showTxSuccess, showTxError } from "@/lib/tx-progress";
-import { amountFromBalancePercent, getMaxSwappableBalance } from "@/lib/utils/swap-amount";
+import { amountFromBalancePercent } from "@/lib/utils/swap-amount";
 
 type SwapMode = "wallet" | "margin";
 
@@ -478,10 +478,6 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
     [tokenModalTarget, tokenIn, tokenOut],
   );
 
-  const handleMaxClick = useCallback(() => {
-    if (tokenInBalance && tokenIn) setAmountIn(getMaxSwappableBalance(tokenInBalance, 0n, tokenIn.decimals));
-  }, [tokenInBalance, tokenIn]);
-
   // Preset % state
   const [activePercent, setActivePercent] = useState<number | null>(null);
   const handlePercentClick = useCallback(
@@ -642,9 +638,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
               <span className="sp-bal">
                 <span className="num">Swappable: {tokFmtSwap(tokenInBalance, tokenIn.symbol)}</span>
                 <Info text={swappableTip(tokenIn.symbol)} />
-                <button type="button" className="sp-max" onClick={handleMaxClick}>
-                  MAX
-                </button>
+                {/* No MAX link here: the card's 25/50/75/Max buttons above already do it. */}
               </span>
             ) : (
               <span />

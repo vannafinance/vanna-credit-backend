@@ -3,7 +3,7 @@
 /**
  * Spot's "Margin account" card (design spot.js acctPanel): status chip, health factor with the
  * 1.10 liquidation meter, account leverage, borrowed, swappable <token>, <token> liquidation price
- * and room before liquidation — each "now → after this swap" while the card has a quote.
+ * (liquidation price and room before liquidation were removed) — each "now → after this swap" while the card has a quote.
  * Every number comes from `useV3Account()` (program-exact model) and the margin snapshot; the
  * "after" side re-runs the same model on the account with the swap applied (./swap-model).
  */
@@ -11,11 +11,10 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { useMarginAccountInfoStore } from "@/store/margin-account-info-store";
 import { useV3Account } from "@/hooks/use-v3-account";
-import { LIQ_HF, hfPos, hfZone, isStable } from "@/lib/account-model";
-import { FlashRepayButton } from "@/components/v3/flash-repay";
+import { LIQ_HF, hfPos, hfZone } from "@/lib/account-model";
 import { Info } from "@/components/v3/ui";
 import { IC } from "@/components/v3/icons";
-import { hfFmt, hfLabel, levFmt, nf, price, roomSub, roomText, roomZone, tokFmt, usd } from "@/components/v3/format";
+import { hfFmt, hfLabel, levFmt, nf, tokFmt, usd } from "@/components/v3/format";
 import { viewOf, withSwap, type SwapPreview } from "./swap-model";
 import { VannaLoader } from "@/components/v3/vanna-loader";
 
@@ -56,12 +55,6 @@ export function AccountPanel({ preview }: { preview: SwapPreview | null }) {
   const balances = useMarginAccountInfoStore((s) => s.collateralBalances);
   const { state, now, room, priceOf } = acct;
   const from = preview?.from ?? "SOL";
-  const to = preview?.to ?? "USDC";
-  // The volatile token of the pair, for the liquidation-price row.
-  const vol = !isStable(to) ? to : !isStable(from) ? from : null;
-  const debtSyms = useMemo(() => new Set(state?.debts.map((d) => d.symbol) ?? []), [state]);
-  const holds = (s: string) => (state?.collateral ?? []).some((c) => c.symbol === s);
-  const sideOf = (s: string): "long" | "short" => (debtSyms.has(s) && !holds(s) ? "short" : "long");
 
   const after = useMemo(() => {
     if (!state || !preview?.quoted || !(preview.inUsd > 0)) return null;
@@ -97,18 +90,13 @@ export function AccountPanel({ preview }: { preview: SwapPreview | null }) {
   const fromAmt = parseFloat(balances[from]?.amount ?? "0") || 0;
   const fromPx = priceOf(from);
   const fromAfter = after && fromPx > 0 ? Math.max(0, fromAmt - preview!.inUsd / fromPx) : undefined;
-  const volPx = vol ? priceOf(vol) : 0;
-  const lp0 = vol ? acct.liqPriceOf(vol, sideOf(vol)) : null;
-  const lp1 = vol && after ? after.liqPrice(vol, volPx, sideOf(vol)) : undefined;
-  const lpF = (x: number | null) => (x === null ? "None" : `$${price(x)}`);
   const hb = (h: number, cls = "") => <i className={cls} style={{ left: `${hfPos(Math.min(h, 2.5))}%` }} />;
-  const roomEl = (r: typeof room) => <span className={roomZone(r)}>{roomText(r)}</span>;
 
   return (
     <aside className="sp-acct" aria-label="Margin account">
       <div className="sp-ah">
         <span>Margin account</span>
-        <span className={`sp-zone ${hfZone(hf0)}`}>{Number.isFinite(hf0) && hf0 < 100 ? hfLabel(hf0) : "No debt"}</span>
+        <span className={`sp-zone ${hfZone(hf0)}`}>{Number.isFinite(hf0) ? hfLabel(hf0) : "No debt"}</span>
       </div>
       <div className="sp-hfv">
         <span className="lbl">
@@ -151,21 +139,9 @@ export function AccountPanel({ preview }: { preview: SwapPreview | null }) {
           now={tokFmt(fromAmt, from)}
           after={fromAfter !== undefined ? tokFmt(fromAfter, from) : undefined}
         />
-        {vol && <Row k={`${vol} liq. price`} tip={TIPS.liq} now={lpF(lp0)} after={lp1 !== undefined ? lpF(lp1) : undefined} />}
-        <Row
-          k="Room before liquidation"
-          tip={TIPS.room}
-          now={roomEl(room)}
-          after={after ? roomEl(after.room) : undefined}
-          sub={roomSub(after ? after.room : room)}
-        />
+        {/* Liquidation price and room before liquidation were removed here (product request), as on Margin and Portfolio. */}
       </div>
-      <div className="sp-afoot">
-        <Link className="btn-s" href="/margin">
-          Borrow more
-        </Link>
-        <FlashRepayButton className="btn-s" disabled={!(now.debt > 0)} />
-      </div>
+      {/* "Borrow more" and "Flash repay" were removed from Spot; they live on the Margin page. */}
     </aside>
   );
 }

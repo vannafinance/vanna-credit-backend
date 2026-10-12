@@ -495,7 +495,7 @@ returns 502 until the NAT propagates.
 | Runtime SA | `vanna-credit-runtime@vanna-credit-solana-test.iam.gserviceaccount.com` |
 | Builder SA | `vanna-credit-builder@vanna-credit-solana-test.iam.gserviceaccount.com` |
 | Current image | Check with `gcloud run services describe vanna-credit-solana-test`: the last deploy from this work was `app:19255eb` (revision `00050-zpb`, rollback `00049-69g`); the live site has since gained the access gate (backend `aaed5cc`). Revision `00005-dt6` (app without the Copilot) is the oldest rollback target |
-| Access gate | `ACCESS_CODE` (default 2861) and `ACCESS_COOKIE_SECRET` on the service (docs/ACCESS_GATE.md) |
+| Access gate | `ACCESS_CODE` (required, env only) and `ACCESS_COOKIE_SECRET` on the service (docs/ACCESS_GATE.md) |
 | Secrets | Secret Manager: `workos-m2m-client-secret`, `copilot-session-secret`, `copilot-store-secret`, readable by the runtime SA, mounted as env |
 | NAT | `vanna-internal-nat` on router `vanna-internal-router` (subnet `vanna-internal-usc1`) |
 | Custom VPC | `vanna-internal` / subnet `vanna-internal-usc1` `10.50.0.0/24` (Private Google Access on) |

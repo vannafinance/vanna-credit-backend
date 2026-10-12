@@ -402,3 +402,12 @@ html.dark .v3{
 .v3 .mg-tv{display:flex;align-items:center;gap:8px}
 .v3 .mg-tv .mg-tvi{width:22px;height:22px}
 .v3 .mg-srcb .mg-sbi{width:18px;height:18px}
+
+/* Positions table: the two asset columns (Collateral Deposited, Borrowed Assets) get more room than
+   the number columns, so Borrowed doesn't crowd Leverage Taken. */
+.v3 .mg-thr > span:nth-child(-n+2),.v3 .mg-tr2 > .mg-td:nth-child(-n+2){flex:1.5 1 0}
+
+/* Repay button like the Portfolio one: "Repay" + the token's logo with a light ring. */
+.v3 .mg-rp{display:inline-flex;align-items:center;gap:6px;padding:8px 12px}
+.v3 .mg-rp:hover:not(:disabled){filter:brightness(1.06)}
+.v3 .mg-rp .mg-rp-i{width:14px;height:14px;flex:none;border-radius:50%;box-shadow:0 0 0 1.5px rgba(255,255,255,.7)}

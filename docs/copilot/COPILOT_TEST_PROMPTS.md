@@ -9,7 +9,7 @@ with the rows worth running by hand.
 ## 1. How to use this
 
 Open `https://test.solana.vanna.finance/copilot` (or `http://localhost:3000/copilot` for the local stack), enter the
-site's access code once (default 2861; the cookie lasts 30 days), connect a wallet, sign the login message, then type
+site's access code once (the `ACCESS_CODE` env value; the cookie lasts 30 days), connect a wallet, sign the login message, then type
 each prompt **verbatim** and record the result.
 
 - **Pass** means the answer came from a live read (numbers match the app / chain) AND the lane was right.

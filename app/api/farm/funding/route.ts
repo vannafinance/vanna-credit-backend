@@ -4,6 +4,7 @@
  * public, no key) aggregated per UTC day and annualised, plus the latest hourly rate.
  * Cached in memory for 10 minutes; an upstream failure returns 502 and the page shows the zero form.
  */
+import { redactSecrets } from "@/lib/solana/server/json";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchWithTimeout } from "@/lib/async";
 import { fundingDays, type FundingResponse } from "@/lib/farm/nav-math";
@@ -47,6 +48,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(body);
   } catch (e) {
     if (saved) return NextResponse.json(saved.body);
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Funding unavailable" }, { status: 502 });
+    return NextResponse.json({ error: e instanceof Error ? redactSecrets(e.message) : "Funding unavailable" }, { status: 502 });
   }
 }
