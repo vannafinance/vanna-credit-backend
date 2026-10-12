@@ -218,8 +218,9 @@ the wallet when the margin balance is short, and enforces the 8-step cap. Every 
 Basis included (website `82c5a05`): the MCP builds it as one transaction routed through the wallet (margin USDC out, vault
 deposit, vbSOL back into margin), and the preview reports the health factor while that USDC is out of the margin account
 (`health_factor_while_usdc_moves`, which the program checks; a refusal at 1.10 or below comes back in the website's
-wording). `vault_move_shares` is now only a recovery step for vbSOL left in the wallet. A new Basis vault's yield is its
-realized return since launch (`apy_since_launch_pct`) until a 7-day figure exists.
+wording). `vault_move_shares` is now only a recovery step for vbSOL left in the wallet. Until a Basis vault has a 7-day figure,
+its yield shows Phoenix funding plus the raw share-price return since launch (`return_since_launch_pct` over
+`since_launch_days`), never annualised, as the website shows it (backend `aaed5cc`).
 
 ### 3.4 Stage 4: review
 

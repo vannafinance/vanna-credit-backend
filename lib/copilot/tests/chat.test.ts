@@ -599,13 +599,13 @@ describe("Basis and Perena vaults", () => {
     expect(table).toContain("14.42% APY (Perena, 7-day)");
   });
 
-  it("a new Basis vault shows its realized return since launch before the funding figure", async () => {
+  it("a new Basis vault shows its raw return since launch beside the funding figure, never annualised", async () => {
     vi.spyOn(mcp, "vaultsList").mockImplementation(async () => ({
-      vaults: [{ ...list.vaults[0], apy_since_launch_pct: 6.5, launched_at: "2026-10-11", funding: { funding_apr_7d_pct: 2.13 } }],
+      vaults: [{ ...list.vaults[0], return_since_launch_pct: -1.5718, since_launch_days: 5.03, launched_at: "2026-10-07", funding: { funding_apr_7d_pct: 2.13 } }],
     }));
     const table = JSON.stringify((await chat("show me the vaults")).answer?.tables);
-    expect(table).toContain("6.50% APY (realized since launch 2026-10-11, annualised)");
-    expect(table).not.toContain("2.13% funding");
+    expect(table).toContain("2.13% funding (Phoenix, 7-day, annualised); since launch −1.57% over 5 days (not annualised)");
+    expect(table).not.toContain("APY (realized since launch");
   });
 
   it("plans a deposit into ETH basis: tops up the margin USDC from the wallet first", async () => {

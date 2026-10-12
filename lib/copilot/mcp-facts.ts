@@ -552,25 +552,34 @@ function vaultYield(v: VaultRow): string {
     }
     return `${value.toFixed(2)}% APY (Vanna share-price history, ${days}-day)`;
   }
-  // Basis: the realized return since launch (share price from 1.0, annualised), the app's headline until a 7-day figure exists.
-  const sinceLaunch = num(v.apy_since_launch_pct);
-  if (sinceLaunch !== null) {
-    const from = typeof v.launched_at === "string" ? ` ${v.launched_at}` : "";
-    return `${sinceLaunch.toFixed(2)}% APY (realized since launch${from}, annualised)`;
-  }
+  const launch = sinceLaunch(v);
   const published = num(v.published_apy_7d_pct);
   if (published !== null) return `${published.toFixed(2)}% APY (Perena, 7-day)`;
   const funding = (v.funding ?? null) as Record<string, unknown> | null;
   const f7 = num(funding?.funding_apr_7d_pct);
   if (f7 !== null) {
     const neg = num(funding?.negative_days_30);
-    return `${f7.toFixed(2)}% funding (Phoenix, 7-day, annualised)${neg ? `; ${neg} negative day${neg === 1 ? "" : "s"} of 30` : ""}`;
+    return `${f7.toFixed(2)}% funding (Phoenix, 7-day, annualised)${neg ? `; ${neg} negative day${neg === 1 ? "" : "s"} of 30` : ""}${launch ? `; ${launch}` : ""}`;
   }
-  return "no data yet";
+  return launch ?? "no data yet";
+}
+
+/**
+ * Basis, before a 7-day figure exists: the raw share-price return since launch and the days behind it, as the app shows
+ * it beside the funding figure (backend `aaed5cc`, "Since launch -1.57% · 5 days"). Never annualised: a few days on
+ * a small NAV would turn one rebalance cost into a huge APY.
+ */
+function sinceLaunch(v: VaultRow): string | null {
+  const ret = num(v.return_since_launch_pct);
+  const days = num(v.since_launch_days);
+  if (ret === null || days === null) return null;
+  const d = Math.floor(days);
+  const span = days < 1 ? "under 1 day" : `${d} day${d === 1 ? "" : "s"}`;
+  return `since launch ${ret < 0 ? "−" : "+"}${Math.abs(ret).toFixed(2)}% over ${span} (not annualised)`;
 }
 
 const VAULT_NOTE =
-  "Every deposit is USDC and every withdrawal pays USDC; the shares sit in your margin account as collateral. Perena's APY is Perena's own 7-day figure; a Basis vault shows Phoenix's funding for its market (what the short is paid, not the vault's net yield). Where the app has its own vault APY it is shown with its source; one marked approximate is estimated from past deposits, not measured; a new Basis vault shows its realized return since launch until a 7-day figure exists. SOL Basis also deposits margin USDC, routed through your wallet in one transaction, so your health factor is checked while that USDC is out of the margin account.";
+  "Every deposit is USDC and every withdrawal pays USDC; the shares sit in your margin account as collateral. Perena's APY is Perena's own 7-day figure; a Basis vault shows Phoenix's funding for its market (what the short is paid, not the vault's net yield). Where the app has its own vault APY it is shown with its source; one marked approximate is estimated from past deposits, not measured; a new Basis vault also shows its raw share-price return since launch (not annualised) until a 7-day figure exists. SOL Basis also deposits margin USDC, routed through your wallet in one transaction, so your health factor is checked while that USDC is out of the margin account.";
 
 async function readVaultsList(ctx: ReadCtx): Promise<ReadOutcome> {
   let raw: Record<string, unknown>;
