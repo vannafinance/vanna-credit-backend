@@ -141,6 +141,7 @@ async function preflightVault(step: StoredStep, ctx: ReadCtx, notes: string[]): 
     }
     notes.push(
       `About ${String(p.expected_out)} ${String(p.out_token)} (minimum ${String(p.minimum_out)}).` +
+        (p.health_factor_while_usdc_moves ? ` Health factor while the USDC is out of your margin account: ${String(p.health_factor_while_usdc_moves)}.` : "") +
         (p.health_factor_after ? ` Health factor after: ${String(p.health_factor_after)}.` : "") +
         (typeof p.note === "string" ? ` ${p.note}` : ""),
     );

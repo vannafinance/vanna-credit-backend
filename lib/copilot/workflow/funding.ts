@@ -21,8 +21,6 @@ function spendsWallet(s: StepSpec): boolean {
   if (s.op === "repay") return String(s.slots?.source ?? "wallet") !== "margin";
   // A swap's balance lives in `mode` (wallet | margin); a margin swap spends margin collateral, not the wallet.
   if (s.op === "swap") return String(s.slots?.mode ?? "wallet") !== "margin";
-  // The SOL Basis vault takes its USDC from the wallet (every other vault from the margin account).
-  if (s.op === "vault_deposit") return s.slots?.vault === "basis-sol";
   return false;
 }
 

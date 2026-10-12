@@ -599,6 +599,15 @@ describe("Basis and Perena vaults", () => {
     expect(table).toContain("14.42% APY (Perena, 7-day)");
   });
 
+  it("a new Basis vault shows its realized return since launch before the funding figure", async () => {
+    vi.spyOn(mcp, "vaultsList").mockImplementation(async () => ({
+      vaults: [{ ...list.vaults[0], apy_since_launch_pct: 6.5, launched_at: "2026-10-11", funding: { funding_apr_7d_pct: 2.13 } }],
+    }));
+    const table = JSON.stringify((await chat("show me the vaults")).answer?.tables);
+    expect(table).toContain("6.50% APY (realized since launch 2026-10-11, annualised)");
+    expect(table).not.toContain("2.13% funding");
+  });
+
   it("plans a deposit into ETH basis: tops up the margin USDC from the wallet first", async () => {
     vi.spyOn(mcp, "vaultsPositions").mockImplementation(async () => noShares);
     vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "15.0019", out_token: "vbETH", minimum_out: "14.926", health_factor_after: null }));
@@ -610,11 +619,12 @@ describe("Basis and Perena vaults", () => {
     expect(steps.some((s) => s.op === "borrow")).toBe(false);
   });
 
-  it("SOL basis deposits from the wallet and adds the step that moves the shares into margin", async () => {
+  it("SOL basis deposits margin USDC like every vault: tops the margin up from the wallet, no second share move", async () => {
     vi.spyOn(mcp, "vaultsPositions").mockImplementation(async () => noShares);
-    vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "15.27", out_token: "vbSOL", minimum_out: "15.2" }));
+    vi.spyOn(mcp, "vaultsPreview").mockImplementation(async () => ({ expected_out: "15.27", out_token: "vbSOL", minimum_out: "15.2", from: "margin", health_factor_after: null, health_factor_while_usdc_moves: "4.2" }));
     const res = await chat("deposit 15 USDC into the SOL basis vault");
-    expect(res.plan?.steps.map((s) => s.op)).toEqual(["vault_deposit", "vault_move_shares"]);
+    expect(res.plan?.steps.map((s) => s.op)).toEqual(["deposit", "vault_deposit"]);
+    expect(res.plan!.steps[1]).toMatchObject({ amount: "15", slots: { vault: "basis-sol" } });
   });
 
   it("withdraws all the shares of a vault to USDC", async () => {

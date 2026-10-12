@@ -216,14 +216,14 @@ export type WriteOp =
   | "perp_register"
   /**
    * Basis (delta-neutral) and Perena vaults (the app's Farm page): USDC in, vault shares held in the margin account as
-   * collateral; a withdrawal pays USDC. SOL Basis takes its deposit from the wallet, then `vault_move_shares` puts the
-   * shares into the margin account (added by the server, never asked for).
+   * collateral; a withdrawal pays USDC. Every deposit spends the margin account's USDC (SOL Basis routes it through the
+   * wallet inside its one transaction). `vault_move_shares` moves vbSOL left in the wallet into the margin account.
    */
   | "vault_deposit"
   | "vault_withdraw"
   | "vault_move_shares";
 
-/** The ops a model may name in a plan (the server adds perp_register and vault_move_shares itself). */
+/** The ops a model may name in a plan (the server adds perp_register itself). */
 export const WRITE_OPS: WriteOp[] = ["create_account", "close_account", "earn_supply", "earn_redeem", "deposit", "withdraw", "borrow", "repay", "swap", "farm_deposit", "farm_redeem", "perp_open", "perp_close", "perp_withdraw", "vault_deposit", "vault_withdraw"];
 
 export const PERP_OPS: ReadonlySet<WriteOp> = new Set<WriteOp>(["perp_open", "perp_close", "perp_withdraw", "perp_register"]);
@@ -251,7 +251,7 @@ export function productWordsGuide(compare: string): string {
 - Vanna Earn (earn_supply / earn_redeem): lends SOL, USDC or USDT from the WALLET into Vanna's own lending pools and earns the pool's supply APR. It is not margin collateral. Words: "earn", "lend", "supply", "lending pool", "Earn pool", "lend to Vanna".
 - Kamino farm (farm_deposit / farm_redeem): lends one token on Kamino Lend from the MARGIN balance and earns Kamino's live supply APY; the receipt (kSOL, kUSDC, ...) stays margin collateral. Words: "farm", "Kamino", "Kamino vault", "Kamino lend", "kSOL". "Kamino vault" means the Kamino farm, never a Basis or Perena vault.
 - Perena vaults (vault_deposit / vault_withdraw; perena-usdstar, perena-junior): USDC into Perena's stablecoin yield pool. USD* is the senior share; USD* Junior is the higher-yield tranche that takes losses first and charges a 1% instant-exit fee. Words: "Perena", "USD*", "USD star", "junior", "stable vault", "stablecoin vault".
-- Basis vaults (vault_deposit / vault_withdraw; basis-sol, basis-eth, basis-btc, basis-tsla, basis-meta): delta-neutral - the vault holds the asset and shorts the same amount on Phoenix, so the asset's price moves cancel out, and it earns the funding rate. Deposits are USDC (SOL Basis from the wallet). Words: "basis", "delta neutral", "hedged", "funding rate", "vbETH", "ETH basis", "the META vault".
+- Basis vaults (vault_deposit / vault_withdraw; basis-sol, basis-eth, basis-btc, basis-tsla, basis-meta): delta-neutral - the vault holds the asset and shorts the same amount on Phoenix, so the asset's price moves cancel out, and it earns the funding rate. Deposits are the margin account's USDC (SOL Basis too; it checks the health factor while that USDC is briefly out of the margin account). Words: "basis", "delta neutral", "hedged", "funding rate", "vbETH", "ETH basis", "the META vault".
 - Phoenix perps are trading, not a yield product.
 - "Vault" on its own names no product: ask which, listing the vaults. "Vault" together with Kamino is the Kamino farm.
 - A request for yield that names no product ("where should I put my USDC", "best yield", "earn on my SOL", "passive income", "put it to work", "stake my USDC"): do not pick a product for the user and build nothing. Show the comparison (${compare}, with the asset if one is named), then ask which product, one option per product that fits that asset. Earn shows an APR, Kamino a live APY, Perena its own published 7-day APY, and a Basis vault Phoenix's funding rate for its market (what the short is paid, annualised; not the vault's net yield, and it can turn negative); the app's own vault APY replaces these when it has one: from the vault's share-price history, or an approximate estimate from past deposits (always call that one an estimate). They are different measures: say which is which, never rank by a figure you computed or assumed, and never invent an APY.

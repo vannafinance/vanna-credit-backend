@@ -142,7 +142,7 @@ export function labelFor(s: StepSpec): string {
       return s.amount && s.amount !== "all" ? `Move ${s.amount} USDC from Phoenix back to your margin account` : "Move your USDC from Phoenix back to your margin account";
     case "vault_deposit": {
       const v = VAULT_NAMES[s.slots.vault as VaultId]?.name ?? String(s.slots.vault);
-      return s.slots.vault === "basis-sol" ? `Deposit ${s.amount ?? ""} USDC from your wallet into ${v}` : `Deposit ${s.amount ?? ""} USDC from your margin account into ${v}`;
+      return `Deposit ${s.amount ?? ""} USDC from your margin account into ${v}`;
     }
     case "vault_withdraw": {
       const v = VAULT_NAMES[s.slots.vault as VaultId];

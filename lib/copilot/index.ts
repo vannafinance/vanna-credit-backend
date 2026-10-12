@@ -25,7 +25,7 @@ import { debugNote } from "./debug";
 import { CAPABILITY_LINE, evaluateFirewall, historyIsOnDomain } from "./domain-firewall";
 import { fmtAmount, fmtUsd, humanizeMcpError } from "./explain";
 import type { AmountSpec, AskOption, Asset, ChainStep, Intent, SwapProvider, WriteIntent } from "./intent";
-import { isDepositable, PERP_OPS, VAULT_NAMES, VAULT_OPS, withNamedProvider, type VaultId } from "./intent";
+import { isDepositable, PERP_OPS, VAULT_OPS, withNamedProvider } from "./intent";
 import { checkAndConsume, LimitContentionError, recordTokens, spentTodayUsd } from "./limits";
 import { mcp } from "./mcp-client";
 import { loadFreshPrice, loadHealth, runRead, sizeSafeBorrow, type ReadCtx } from "./mcp-facts";
@@ -295,17 +295,9 @@ async function prepareVaults(steps: StepSpec[], t: Turn, extras: string[]): Prom
     const s = steps[i]!;
     if (s.op === "deposit" && s.asset === "USDC" && s.amount && s.amount !== "all") marginUsdc += Number(s.amount);
     if (s.op !== "vault_deposit") continue;
-    const vault = String(s.slots.vault) as VaultId;
+    // Every vault deposit spends the margin account's USDC (SOL Basis too: one transaction routes it through the
+    // wallet and returns the vbSOL to the margin account).
     const need = Number(s.amount ?? 0);
-    if (vault === "basis-sol") {
-      // From the wallet's USDC; then its shares go into the margin account as collateral.
-      if (steps[i + 1]?.op !== "vault_move_shares") {
-        steps.splice(i + 1, 0, { kind: "write", op: "vault_move_shares", asset: null, amount: "all", slots: { vault } });
-        extras.push(`${VAULT_NAMES[vault].name} takes the deposit from your wallet's USDC; a second signature moves the new shares into your margin account.`);
-      }
-      i++;
-      continue;
-    }
     if (need > marginUsdc + 1e-9) {
       const short = (Math.ceil((need - marginUsdc) * 1e6) / 1e6).toFixed(6).replace(/\.?0+$/, "");
       steps.splice(i, 0, stepFromWrite({ op: "deposit", asset: "USDC", amount: { kind: "exact", value: short } }, short));
@@ -408,25 +400,22 @@ async function resolveAmount(w: WriteIntent, earlier: StepSpec[], t: Turn): Prom
 
 /**
  * A vault deposit or perps collateral given as "all" or a percentage of the user's USDC: sized now from the margin
- * account's USDC plus the wallet's (the plan tops the margin up from the wallet), or from the wallet only for SOL Basis,
- * which is wallet-funded. Like any percentage, only when no earlier step of this plan changes that USDC.
+ * account's USDC plus the wallet's (the plan tops the margin up from the wallet). Like any percentage, only when no
+ * earlier step of this plan changes that USDC.
  */
 async function usdcShare(w: WriteIntent, earlier: StepSpec[], t: Turn): Promise<{ ok: true; amount: string; note: string } | { ok: false; message: string }> {
-  const walletOnly = w.op === "vault_deposit" && w.vault === "basis-sol";
   const pct = w.amount?.kind === "pct" ? w.amount.pct : 100;
-  const blocking = earlier.find((s) => s.kind === "write" && balancesTouched(s).some((k) => k === "*" || k === "wallet:USDC" || (!walletOnly && k === "margin:USDC")));
+  const blocking = earlier.find((s) => s.kind === "write" && balancesTouched(s).some((k) => k === "*" || k === "wallet:USDC" || k === "margin:USDC"));
   if (blocking) return { ok: false, message: `${pct === 100 ? "All" : `${pct}% of`} your USDC depends on "${labelFor(blocking)}" running first, so I can't size it yet. Give an exact USDC amount for it.` };
   const inWallet = (await walletSpendable("USDC", t.ctx)) ?? 0;
   let inMargin = 0;
-  if (!walletOnly) {
-    const h = await loadHealth(t.ctx);
-    if (h.kind === "ok") inMargin = h.health.collateral.find((r) => r.symbol === "USDC")?.units ?? 0;
-  }
+  const h = await loadHealth(t.ctx);
+  if (h.kind === "ok") inMargin = h.health.collateral.find((r) => r.symbol === "USDC")?.units ?? 0;
   const total = inWallet + inMargin;
-  if (!(total > 0)) return { ok: false, message: walletOnly ? "Your wallet has no USDC for that." : "You have no USDC in your wallet or margin account for that." };
+  if (!(total > 0)) return { ok: false, message: "You have no USDC in your wallet or margin account for that." };
   const amount = floorDecimals((total * pct) / 100, tokenDecimals("USDC"));
   if (!(Number(amount) > 0)) return { ok: false, message: `${pct}% of your USDC is too small to use. Give an amount instead.` };
-  const where = walletOnly ? `your wallet's ${floorDecimals(inWallet, 6)} USDC` : `your ${floorDecimals(inMargin, 6)} USDC in margin plus ${floorDecimals(inWallet, 6)} in your wallet`;
+  const where = `your ${floorDecimals(inMargin, 6)} USDC in margin plus ${floorDecimals(inWallet, 6)} in your wallet`;
   return { ok: true, amount, note: `${pct === 100 ? "All" : `${pct}% of`} ${where} is ${amount} USDC.` };
 }
 

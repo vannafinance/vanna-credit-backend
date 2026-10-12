@@ -552,6 +552,12 @@ function vaultYield(v: VaultRow): string {
     }
     return `${value.toFixed(2)}% APY (Vanna share-price history, ${days}-day)`;
   }
+  // Basis: the realized return since launch (share price from 1.0, annualised), the app's headline until a 7-day figure exists.
+  const sinceLaunch = num(v.apy_since_launch_pct);
+  if (sinceLaunch !== null) {
+    const from = typeof v.launched_at === "string" ? ` ${v.launched_at}` : "";
+    return `${sinceLaunch.toFixed(2)}% APY (realized since launch${from}, annualised)`;
+  }
   const published = num(v.published_apy_7d_pct);
   if (published !== null) return `${published.toFixed(2)}% APY (Perena, 7-day)`;
   const funding = (v.funding ?? null) as Record<string, unknown> | null;
@@ -564,7 +570,7 @@ function vaultYield(v: VaultRow): string {
 }
 
 const VAULT_NOTE =
-  "Every deposit is USDC and every withdrawal pays USDC; the shares sit in your margin account as collateral. Perena's APY is Perena's own 7-day figure; a Basis vault shows Phoenix's funding for its market (what the short is paid, not the vault's net yield). Where the app has its own vault APY it is shown with its source; one marked approximate is estimated from past deposits, not measured.";
+  "Every deposit is USDC and every withdrawal pays USDC; the shares sit in your margin account as collateral. Perena's APY is Perena's own 7-day figure; a Basis vault shows Phoenix's funding for its market (what the short is paid, not the vault's net yield). Where the app has its own vault APY it is shown with its source; one marked approximate is estimated from past deposits, not measured; a new Basis vault shows its realized return since launch until a 7-day figure exists. SOL Basis also deposits margin USDC, routed through your wallet in one transaction, so your health factor is checked while that USDC is out of the margin account.";
 
 async function readVaultsList(ctx: ReadCtx): Promise<ReadOutcome> {
   let raw: Record<string, unknown>;
@@ -590,7 +596,7 @@ async function readVaultsList(ctx: ReadCtx): Promise<ReadOutcome> {
             v.share_price_usd === null || v.share_price_usd === undefined ? "—" : `$${Number(v.share_price_usd).toFixed(4)}`,
             px(v.nav_usd),
             vaultYield(v),
-            v.error ? "unavailable" : v.deposits_open === true ? (v.id === "basis-sol" ? "open (from wallet)" : "open") : "closed",
+            v.error ? "unavailable" : v.deposits_open === true ? "open" : "closed",
           ]),
         },
       ],
@@ -667,7 +673,7 @@ async function readYieldOptions(asset: Asset | null, ctx: ReadCtx): Promise<Read
     const vaults = Array.isArray(vaultsR.value.vaults) ? (vaultsR.value.vaults as VaultRow[]) : [];
     for (const v of vaults) {
       const how = v.kind === "basis" ? `Delta-neutral ${String(v.asset)}: earns funding` : v.id === "perena-junior" ? "Perena junior tranche: first loss, 1% exit fee" : "Perena stablecoin yield";
-      rows.push([String(v.name), "USDC", vaultYield(v), how, v.id === "basis-sol" ? "wallet" : "margin"]);
+      rows.push([String(v.name), "USDC", vaultYield(v), how, "margin"]);
     }
   }
   if (!rows.length) return unavailable(new Error("no yield products answered"), "the yield options");
@@ -710,7 +716,9 @@ async function readVaultPreview(r: Extract<ReadIntent, { kind: "vault_preview" }
   const facts: AnswerFact[] = [
     fact(r.call === "deposit" ? "shares you'd receive" : "USDC you'd receive", `${String(raw.expected_out)} ${String(raw.out_token)}`),
     fact("minimum enforced", `${String(raw.minimum_out)} ${String(raw.out_token)}`),
-    fact("health factor after", raw.health_factor_after ? String(raw.health_factor_after) : "no debt"),
+    raw.health_factor_while_usdc_moves !== undefined
+      ? fact("health factor while the USDC is out of margin", raw.health_factor_while_usdc_moves ? String(raw.health_factor_while_usdc_moves) : "no debt")
+      : fact("health factor after", raw.health_factor_after ? String(raw.health_factor_after) : "no debt"),
   ];
   return {
     ok: true,
@@ -721,7 +729,7 @@ async function readVaultPreview(r: Extract<ReadIntent, { kind: "vault_preview" }
           ? `Depositing ${r.amount} USDC into ${name} would give about ${String(raw.expected_out)} ${String(raw.out_token)}.`
           : `Withdrawing ${r.amount} ${name} shares would pay about ${String(raw.expected_out)} USDC.`,
       facts,
-      ...(typeof raw.note === "string" ? { note: raw.note } : r.vault === "basis-sol" && r.call === "deposit" ? { note: "SOL Basis takes this USDC from your wallet; a second signature moves the shares into your margin account." } : {}),
+      ...(typeof raw.note === "string" ? { note: raw.note } : {}),
       venue: "vaults",
     },
   };

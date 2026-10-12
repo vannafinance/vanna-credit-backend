@@ -184,7 +184,7 @@ then builds the action itself. TSLA/META Basis need the stock market open (Phoen
 | V1 | show me the vaults | Seven vaults: share price, TVL, deposits open; APY "—" until the app has history | 🤖 | |
 | V2 | what would depositing 20 USDC into ETH basis give me? | Preview: shares out, minimum, HF after (or "one-time setup first") | 🤖 | |
 | V3 | deposit 20 USDC into ETH basis | One plan; a USDC deposit from the wallet first if the margin holds less | 👤 | |
-| V4 | deposit 15 USDC into the SOL basis vault | Wallet-funded deposit, then "move the shares into your margin account" | 👤 | |
+| V4 | deposit 15 USDC into the SOL basis vault | One signature from margin USDC (a wallet top-up first if the margin holds less); the preview shows the health factor while the USDC is out of margin; no separate share move | 👤 | |
 | V5 | put 10 USDC into USD* junior, then withdraw all my USD* junior | Two steps; the withdrawal pays ~1% less (exit fee) | 👤 | |
 | V6 | what vault shares do I have? | Shares per vault, where they are held, collateral value | 🤖 | |
 | V7 | close everything (holding vault shares and a loan) | Vault shares withdrawn to USDC first, then repay, then withdraw | 👤 | |

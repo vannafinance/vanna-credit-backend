@@ -213,8 +213,13 @@ A decision states amounts as a number the user typed or as a sizing word. Code r
 
 Strategies have their own planners: `workflow/strategy.ts` (`planLever`: deposit if needed, borrow a lendable asset the
 user names or picks (any registry `lendable` token other than the one levered), margin swap into the asset, report) and `workflow/unwind.ts` (`planUnwind`: Kamino, then repay, then withdraw, then Earn).
-`handleWrite` also opens a margin account first when the user has none, tops up a Kamino deposit from the wallet when
-the margin balance is short, and enforces the 8-step cap.
+`handleWrite` also opens a margin account first when the user has none, tops up a Kamino deposit or a vault deposit from
+the wallet when the margin balance is short, and enforces the 8-step cap. Every vault deposit spends margin USDC, SOL
+Basis included (website `82c5a05`): the MCP builds it as one transaction routed through the wallet (margin USDC out, vault
+deposit, vbSOL back into margin), and the preview reports the health factor while that USDC is out of the margin account
+(`health_factor_while_usdc_moves`, which the program checks; a refusal at 1.10 or below comes back in the website's
+wording). `vault_move_shares` is now only a recovery step for vbSOL left in the wallet. A new Basis vault's yield is its
+realized return since launch (`apy_since_launch_pct`) until a 7-day figure exists.
 
 ### 3.4 Stage 4: review
 
