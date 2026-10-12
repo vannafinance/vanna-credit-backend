@@ -20,7 +20,6 @@ export type AccountStatus =
 export type PositionKind = "direct" | "receipt" | "venue";
 
 export type IncompleteReason =
-  | { code: "stale_price"; symbols: string[] }
   | { code: "missing_price"; symbols: string[] }
   | { code: "unknown_asset"; assetIndexes: number[] }
   | { code: "venue_unreadable" }
@@ -55,6 +54,13 @@ export interface AccountRow {
   /** False when the account cannot be valued; its totals are then null and it is left out of aggregates. */
   valued: boolean;
   reasons: IncompleteReason[];
+  /**
+   * Assets whose on-chain price had not been updated within its allowed age when this account was read.
+   * The account is still valued at that last on-chain price (as the Margin page does: the fork keeper
+   * refreshes prices in between, and dropping the account would make every figure vanish and reappear),
+   * so this is a note, not a reason the account cannot be valued.
+   */
+  stalePrices?: string[];
   collateralUsd: number | null;
   debtUsd: number | null;
   equityUsd: number | null;

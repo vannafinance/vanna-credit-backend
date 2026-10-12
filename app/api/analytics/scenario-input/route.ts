@@ -1,5 +1,5 @@
 import { jsonResponse } from "@/lib/solana/server/json";
-import { readSnapshot } from "@/lib/analytics/server/store";
+import { readSnapshot, warm } from "@/lib/analytics/server/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
  * Fetched only when the calculator opens. The calculator itself runs in the browser and writes nothing.
  */
 export async function GET() {
+  await warm();
   const { snapshot, state } = readSnapshot();
   if (!snapshot) return jsonResponse({ state, baseline: null });
   const covered = snapshot.rows.filter((r) => r.valued && !r.venueHeld);

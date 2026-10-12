@@ -77,9 +77,9 @@ export function PoolsView() {
   const [measure, setMeasure] = useState<Measure>("usd");
   const selected = rows.find((r) => r.symbol === pick) ?? rows[0] ?? null;
   const unvalued = rows.filter((r) => !r.valued);
-  const why = !data ? (isError ? "Couldn't reach the service." : "Waiting for the first data load.") : unvalued.length ? `${unvalued.map((r) => r.symbol).join(", ")} ${unvalued.length === 1 ? "has" : "have"} no fresh price yet.` : "Prices and balances are out of sync. Try again in a moment.";
+  const why = !data ? (isError ? "Couldn't reach the service." : "Waiting for the first data load.") : unvalued.length ? `${unvalued.map((r) => r.symbol).join(", ")} ${unvalued.length === 1 ? "has" : "have"} no price yet.` : "Prices and balances are out of sync. Try again in a moment.";
   const partial = t?.partial ? <Badge tone="warn">Partial</Badge> : null;
-  const sub = (base: string) => (!t ? why : t.partial ? `Without ${t.excluded.join(", ")} (waiting for a fresh price)` : base);
+  const sub = (base: string) => (!t ? why : t.partial ? `Without ${t.excluded.join(", ")} (no price yet)` : base);
 
   const cmpRows = rows.filter((r) => measure === "rates" || r.valued).map((r) => {
     const a = r.usdCash ?? 0, b = r.usdBorrowed ?? 0, tot = a + b || 1;
@@ -126,7 +126,7 @@ export function PoolsView() {
             {measure !== "rates" && !rows.some((r) => r.valued)
               ? <Notice tone="warn">{why}</Notice>
               : <><HBars rows={cmpRows} /><div className="an-mt"><Legend items={measure === "rates" ? [{ label: "Borrow APR", color: SERIES[0] }, { label: "Supply APR", color: SERIES[1] }] : [{ label: "Available cash", color: SERIES[0] }, { label: "Outstanding debt", color: SERIES[1] }]} /></div></>}
-            {measure !== "rates" && unvalued.length > 0 && rows.some((r) => r.valued) && <p className="an-panel-foot">Excludes {unvalued.map((r) => r.symbol).join(", ")}: waiting for a fresh price.</p>}
+            {measure !== "rates" && unvalued.length > 0 && rows.some((r) => r.valued) && <p className="an-panel-foot">Excludes {unvalued.map((r) => r.symbol).join(", ")}: no price yet.</p>}
           </Panel>
         </>
       )}

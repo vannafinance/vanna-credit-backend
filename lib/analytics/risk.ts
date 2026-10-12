@@ -216,11 +216,11 @@ export function searchRows(rows: AccountRow[], query: string): AccountRow[] {
 
 /** True when every reason an account could not be valued is about prices. */
 export const onlyPriceReasons = (row: { reasons: Array<{ code: string }> }) =>
-  row.reasons.length > 0 && row.reasons.every((r) => r.code === "stale_price" || r.code === "missing_price");
+  row.reasons.length > 0 && row.reasons.every((r) => r.code === "missing_price");
 
 /** The label shown for one account: an unvalued account says WHY (price vs. something the dashboard cannot read). */
 export const statusLabelOf = (row: { status: AccountStatus; reasons: Array<{ code: string }> }): string =>
-  row.status === "incomplete" ? (onlyPriceReasons(row) ? "Price not updated" : "Can't read") : STATUS_LABEL[row.status];
+  row.status === "incomplete" ? (onlyPriceReasons(row) ? "No price" : "Can't read") : STATUS_LABEL[row.status];
 
 /** Plain-language account status labels (the UI owns wording; this is the single mapping). */
 export const STATUS_LABEL: Record<AccountStatus, string> = {

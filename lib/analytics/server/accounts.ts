@@ -59,8 +59,6 @@ export interface SharedContext {
   receiptRates: Map<number, ReserveRate>;
   receiptErrors: Set<number>;
   venueAssetIndex: number | null;
-  /** Parity-check only: value with stale prices (the production path never does). */
-  allowStale?: boolean;
 }
 
 /** Everything that is the same for every account, read once. */
@@ -232,7 +230,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
       const symbol = symbolOf(a);
       const price = prices.get(i) ?? null;
       if (!price) { missing.add(symbol); continue; }
-      if (!price.fresh && !ctx.allowStale) stale.add(symbol);
+      if (!price.fresh) stale.add(symbol);
       let valueNano: bigint;
       if (a.priceSource === "kaminoReceipt") {
         const rate = ctx.receiptRates.get(i);
@@ -270,7 +268,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
       if (!pool?.reserve) { unknown.push(i); continue; }
       const price = prices.get(i) ?? null;
       if (!price) { missing.add(symbol); continue; }
-      if (!price.fresh && !ctx.allowStale) stale.add(symbol);
+      if (!price.fresh) stale.add(symbol);
       const projected = projectReserve(pool.reserve, ctx.now);
       const debtRaw = debtSharesToAssetsUp(shares, projected.totalBorrowShares, projected.totalBorrowAssets);
       const valueNano = valueOf(debtRaw, price, a.decimals, true);
@@ -278,7 +276,6 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
       debts.push({ symbol, mint: a.mint.toBase58(), assetIndex: i, amount: rawToNumber(debtRaw, a.decimals), usd: Number(valueNano) / NANO, borrowApr: pool.borrowApr });
     }
 
-    if (stale.size) reasons.push({ code: "stale_price", symbols: [...stale] });
     if (missing.size) reasons.push({ code: "missing_price", symbols: [...missing] });
     if (unreadableReceipts.size) reasons.push({ code: "receipt_unreadable", symbols: [...unreadableReceipts] });
     if (unknown.length) reasons.push({ code: "unknown_asset", assetIndexes: [...new Set(unknown)] });
@@ -288,7 +285,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
     const valued = reasons.length === 0;
     if (!valued) {
       return { ...base, status: "incomplete", valued: false, reasons, collateralUsd: null, debtUsd: null, equityUsd: null, healthFactor: null, leverage: null, bufferPct: null, bufferUsd: null,
-        liquidatable: false, collateral, debts, composition, venueHeld };
+        liquidatable: false, collateral, debts, composition, venueHeld, stalePrices: [...stale] };
     }
     const hfWad = healthFactorWad(collateralNano, debtNano);
     const liquidatable = hfWad !== null && hfWad <= BALANCE_TO_BORROW_THRESHOLD_WAD;
@@ -297,7 +294,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
     const healthFactor = hfWad === null ? null : Number((hfWad * 1_000_000n) / WAD) / 1e6;
     return {
       ...base, valued, reasons, collateralUsd, debtUsd, equityUsd: figures.equityUsd, healthFactor, leverage: figures.leverage,
-      bufferPct: figures.bufferPct, bufferUsd: figures.bufferUsd, liquidatable, collateral, debts, composition, venueHeld,
+      bufferPct: figures.bufferPct, bufferUsd: figures.bufferUsd, liquidatable, collateral, debts, composition, venueHeld, stalePrices: [...stale],
       status: classify({ valued, collateralUsd, debtUsd, healthFactor, liquidatable }),
     };
   });

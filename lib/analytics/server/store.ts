@@ -68,6 +68,9 @@ export const persistence = { backend: persistenceBackend(), restoredAt: null as 
 let loaded: Promise<void> | null = null;
 let lastFingerprint = "";
 let lastSaveAttempt = 0;
+let lastRowsSavedAt = 0;
+/** Rows are bigger than the registry, so they are saved less often. */
+const ROWS_SAVE_EVERY_MS = 120_000;
 
 /** Once per process, before the first scan: resume from the saved state if it still matches the network. */
 function ensureLoaded(): Promise<void> {
@@ -84,6 +87,12 @@ function ensureLoaded(): Promise<void> {
       importEvents(saved.events);
       for (const [address, h] of Object.entries(saved.hfHistory)) hfHistory.set(address, h.slice(-HISTORY_POINTS));
       if (saved.vaults) importKnownVaults(saved.vaults, saved.savedAt); // trusted for the normal probe window from when it was saved
+      if (saved.rows?.length && saved.rowsAt) {
+        for (const r of saved.rows) rowCache.set(r.address, r);
+        const rows = [...rowCache.values()];
+        current = { rows, summary: summarize(rows), coverage: coverage(), asOf: saved.rowsAt, forkTime: saved.rowsForkTime ?? 0 };
+        lastRowsSavedAt = saved.rowsAt;
+      }
       persistence.restoredAt = Date.now();
       lastFingerprint = `${registryFingerprint()}:${eventsFingerprint()}:${knownVaultCount()}`;
     } catch (error) {
@@ -96,10 +105,16 @@ function ensureLoaded(): Promise<void> {
 async function maybeSave(): Promise<void> {
   if (persistence.backend === "memory" || Date.now() - lastSaveAttempt < SAVE_EVERY_MS) return;
   const fingerprint = `${registryFingerprint()}:${eventsFingerprint()}:${knownVaultCount()}`;
-  if (fingerprint === lastFingerprint || !newestKnownSignature()) return;
+  const rowsDue = !!current && current.asOf - lastRowsSavedAt >= ROWS_SAVE_EVERY_MS;
+  if ((fingerprint === lastFingerprint && !rowsDue) || !newestKnownSignature()) return;
   lastSaveAttempt = Date.now();
   try {
-    await saveState({ v: SCHEMA, savedAt: Date.now(), program: VANNA_PROGRAM_ID.toBase58(), registry: exportRegistry(), events: exportEvents(1000), hfHistory: Object.fromEntries(hfHistory), vaults: exportKnownVaults() });
+    const snap = rowsDue || fingerprint !== lastFingerprint ? current : null;
+    await saveState({
+      v: SCHEMA, savedAt: Date.now(), program: VANNA_PROGRAM_ID.toBase58(), registry: exportRegistry(), events: exportEvents(1000), hfHistory: Object.fromEntries(hfHistory), vaults: exportKnownVaults(),
+      ...(snap ? { rows: snap.rows, rowsAt: snap.asOf, rowsForkTime: snap.forkTime } : {}),
+    });
+    if (snap) lastRowsSavedAt = snap.asOf;
     lastFingerprint = fingerprint; persistence.lastSavedAt = Date.now(); persistence.lastError = null;
   } catch (error) {
     persistence.lastError = error instanceof Error ? error.name : "Error";
@@ -160,6 +175,9 @@ export interface StoreState {
   ageMs: number | null;
   error: string | null;
 }
+
+/** Resolves once any saved state has been restored (a second or so), so the first request can already be answered from it. */
+export const warm = (): Promise<void> => ensureLoaded();
 
 /** Latest snapshot (possibly null while the first pass runs) and a background refresh trigger. */
 export function readSnapshot(): { snapshot: Snapshot | null; state: StoreState } {

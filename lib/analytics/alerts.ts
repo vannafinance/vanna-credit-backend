@@ -40,15 +40,17 @@ export function deriveAlerts(input: {
     const warnOnly = s.atRiskCount - s.liquidatableCount;
     if (warnOnly > 0) out.push({ id: "risk", priority: "P2", title: `${warnOnly} of ${s.valued} valued account${s.valued === 1 ? " is" : "s are"} close to the liquidation line`, detail: `Health is under ${DISPLAY_BANDS.warning.toFixed(2)} (liquidation at ${LIQUIDATION_LINE.toFixed(2)}); ${usd(s.atRiskCollateralUsd - s.liquidatableCollateralUsd)} of collateral. View lists them.`, metric: "Accounts at risk", link: "/analytics?filter=atrisk#accounts" });
   }
-  if (s && s.incomplete > 0) out.push({ id: "unvalued", priority: "P3", title: `${s.incomplete} account${s.incomplete === 1 ? " is" : "s are"} not valued`, detail: "They are left out of the totals (a price they need has not updated, or they use something this dashboard cannot read yet).", metric: "Accounts", link: "/analytics?filter=incomplete#accounts" });
+  if (s && s.incomplete > 0) out.push({ id: "unvalued", priority: "P3", title: `${s.incomplete} account${s.incomplete === 1 ? " is" : "s are"} not valued`, detail: "They are left out of the totals: they refer to an asset the protocol has no configuration for, or one with no price, so their value can't be worked out. Open one to see which.", metric: "Accounts", link: "/analytics?filter=incomplete#accounts" });
 
   if (p) {
-    const old = Object.entries(p.prices).filter(([, v]) => v.stale && v.usd !== null);
+    // Only prices well past their allowed age: on the test network the keeper refreshes in bursts, so one that is a
+    // little over its limit is normal and would make this alert flicker on and off.
+    const old = Object.entries(p.prices).filter(([, v]) => v.stale && v.usd !== null && (v.ageSecs === null || v.maxAgeSecs === null || v.ageSecs > 3 * v.maxAgeSecs));
     const lending = Object.values(p.pools).filter((x) => x.initialised).map((x) => x.symbol);
     const lendingOld = old.filter(([sym]) => lending.includes(sym));
-    if (lendingOld.length) out.push({ id: "prices-lend", priority: "P1", title: `Prices not updated: ${lendingOld.map(([k]) => k).join(", ")}`, detail: "Lending pool assets can't be valued, and the program rejects borrows and withdrawals that need these prices.", metric: "Prices", link: "/analytics/prices" });
+    if (lendingOld.length) out.push({ id: "prices-lend", priority: "P1", title: `Prices not updated: ${lendingOld.map(([k]) => k).join(", ")}`, detail: "Accounts are valued at the last on-chain price, and the program rejects borrows and withdrawals that need a fresh one.", metric: "Prices", link: "/analytics/prices" });
     const rest = old.filter(([sym]) => !lending.includes(sym));
-    if (rest.length) out.push({ id: "prices-other", priority: "P2", title: `Prices not updated: ${rest.map(([k]) => k).join(", ")}`, detail: "Accounts holding these can't be valued until they update.", metric: "Prices", link: "/analytics/prices" });
+    if (rest.length) out.push({ id: "prices-other", priority: "P2", title: `Prices not updated: ${rest.map(([k]) => k).join(", ")}`, detail: "Accounts holding these are valued at the last on-chain price until they update.", metric: "Prices", link: "/analytics/prices" });
     for (const pool of Object.values(p.pools).filter((x) => x.initialised)) {
       if (pool.utilization >= UTILIZATION_CRITICAL) out.push({ id: `util-${pool.symbol}`, priority: "P1", title: `${pool.symbol} pool is almost fully borrowed`, detail: `${(pool.utilization * 100).toFixed(1)}% utilization - little cash is left to withdraw.`, metric: "Utilization", link: "/analytics/pools" });
       else if (pool.utilization >= UTILIZATION_WARN) out.push({ id: `util-${pool.symbol}`, priority: "P2", title: `${pool.symbol} pool utilization is high`, detail: `${(pool.utilization * 100).toFixed(1)}% of the pool is borrowed.`, metric: "Utilization", link: "/analytics/pools" });

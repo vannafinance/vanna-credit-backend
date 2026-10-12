@@ -62,15 +62,15 @@ export function OverviewView() {
   const active = s ? s.valued - s.statusCounts.empty : 0;
   const rows = poolRows(protocol);
   const t = poolTotals(rows);
-  const why = !protocol ? "Waiting for the first data load." : rows.length === 0 ? "No lending pool is active." : `${rows.filter((r) => !r.valued).map((r) => r.symbol).join(", ")} ${rows.filter((r) => !r.valued).length === 1 ? "has" : "have"} no fresh price yet.`;
+  const why = !protocol ? "Waiting for the first data load." : rows.length === 0 ? "No lending pool is active." : `${rows.filter((r) => !r.valued).map((r) => r.symbol).join(", ")} ${rows.filter((r) => !r.valued).length === 1 ? "has" : "have"} no price yet.`;
   const partial = t?.partial ? <Badge tone="warn">Partial</Badge> : null;
-  const tSub = (base: string) => (!t ? why : t.partial ? `Without ${t.excluded.join(", ")} (waiting for a fresh price)` : base);
+  const tSub = (base: string) => (!t ? why : t.partial ? `Without ${t.excluded.join(", ")} (no price yet)` : base);
 
   return (
     <>
       <ViewHead title="Overview" blurb="Is anything wrong? The key numbers at a glance." />
       {s && s.incomplete > 0 && s.incomplete === s.total && (
-        <Notice tone="warn"><strong>Waiting for fresh prices on this test network.</strong> Until the prices update, accounts that hold something can&apos;t be given a dollar value. Accounts with no balance are still shown. Nothing is estimated or filled in.</Notice>
+        <Notice tone="warn"><strong>Waiting for prices on this test network.</strong> Accounts that hold something can&apos;t be given a dollar value until a price exists. Accounts with no balance are still shown. Nothing is estimated or filled in.</Notice>
       )}
       <div className="an-kpi-grid">
         <Kpi label="Bad debt (estimated)" tip="shortfall" value={ok ? usd(s!.badDebtUsd) : "-"} na={!ok} tone={ok && s!.badDebtUsd > 0 ? "danger" : ""}

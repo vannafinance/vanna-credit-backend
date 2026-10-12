@@ -19,7 +19,7 @@ async function main() {
   let saved: Array<[string, string]> = [];
   try { saved = JSON.parse(readFileSync(".local/analytics/state.json", "utf8")).registry.margins; } catch { /* no saved scan: only the wallets given */ }
   const pick = [...extra.map((o) => [marginPda(new PublicKey(o)).toBase58(), o] as [string, string]), ...saved.slice(0, limit)];
-  const ctx = { ...(await loadSharedContext()), allowStale: true }; // compare arithmetic; freshness is policy
+  const ctx = await loadSharedContext();
   console.log(`allowed collateral tokens: ${ctx.collateralAssets.map((a) => a.assetIndex).join(",")}`);
   const rows = await readAccountRows(ctx, pick.map(([address, owner]) => ({ address, owner })));
   let bad = 0;

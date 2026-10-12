@@ -40,7 +40,7 @@ export function PositionsView() {
   const { data: protocol } = useAnalyticsProtocol();
   const s = data?.summary ?? null;
   const ok = !!s && s.borrowers > 0;
-  const prices = Object.fromEntries(Object.entries(protocol?.prices ?? {}).map(([k, v]) => [k, v.stale ? null : v.usd]));
+  const prices = Object.fromEntries(Object.entries(protocol?.prices ?? {}).map(([k, v]) => [k, v.usd]));
   return (
     <>
       <ViewHead title="Positions" blurb="Look up any wallet, and see how accounts are spread across health, leverage and collateral." />

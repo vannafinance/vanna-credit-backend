@@ -1,5 +1,5 @@
 import { jsonResponse } from "@/lib/solana/server/json";
-import { persistence, readSnapshot } from "@/lib/analytics/server/store";
+import { persistence, readSnapshot, warm } from "@/lib/analytics/server/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
  * Served from the server's last snapshot; a request never starts a scan.
  */
 export async function GET() {
+  await warm();
   const { snapshot, state } = readSnapshot();
   return jsonResponse({
     state,

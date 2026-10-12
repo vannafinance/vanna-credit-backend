@@ -4,7 +4,9 @@
  *
  * What is saved: the account registry (margin accounts, first-seen times, scan cursors, the queue of
  * transactions not yet inspected), the decoded event ring and the server-measured health readings.
- * What is NOT saved: balances, prices and valuations - those are always re-read from the chain.
+ * Also saved: the LAST SNAPSHOT of account rows (with the time it was measured), shown immediately after a
+ * restart while a fresh read runs in the background. It is always presented with its own "as of" time and is
+ * replaced by the first new read; it is never treated as current.
  * Everything saved is public chain data; nothing here is secret, so it is stored as plain JSON.
  *
  * Backends (chosen once, never silently mixed):
@@ -21,6 +23,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { GoogleAuth } from "google-auth-library";
 import type { ProgramEvent } from "./events";
+import type { AccountRow } from "../types";
 
 export const SCHEMA = 1;
 
@@ -45,6 +48,10 @@ export interface PersistedState {
   hfHistory: Record<string, number[]>;
   /** margin → asset indexes whose vault held a balance when last probed. Optional: older saves lack it. */
   vaults?: Record<string, number[]>;
+  /** Last published account rows and when / against which fork clock they were measured. Optional: older saves lack it. */
+  rows?: AccountRow[];
+  rowsAt?: number;
+  rowsForkTime?: number;
 }
 
 export type Backend = "firestore" | "file" | "memory";

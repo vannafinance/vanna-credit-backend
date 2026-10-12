@@ -10,7 +10,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lookupWallet, useAnalyticsAccounts, useAnalyticsProtocol, type AccountsQuery } from "@/hooks/use-analytics";
 import { hfText, levText, num, pct, pct1, short, usd, usdC } from "@/lib/analytics/format";
-import { liquidationPrices, protocolsOf } from "@/lib/analytics/risk";
+import { inBand, liquidationPrices, matchesFilter, protocolsOf } from "@/lib/analytics/risk";
 import { reasonText } from "@/lib/analytics/reasons";
 import type { AccountFilter, AccountSortKey, AccountView } from "@/lib/analytics/types";
 import { Addr, AssetCell, Empty, Icon, InfoTip, StatusBadge, statusTone, ForkTime, YouPill } from "./ui";
@@ -53,7 +53,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   const query: AccountsQuery = { filter: fixedFilter ?? filter, sort, dir, q, page, per: PER, band, you };
   const { data, isLoading } = useAnalyticsAccounts(query);
   const { data: protocol } = useAnalyticsProtocol();
-  const prices = Object.fromEntries(Object.entries(protocol?.prices ?? {}).map(([k, v]) => [k, v.stale ? null : v.usd]));
+  const prices = Object.fromEntries(Object.entries(protocol?.prices ?? {}).map(([k, v]) => [k, v.usd]));
   const mine = data?.you ?? null;
 
   // The connected wallet may not be in the server's snapshot yet: ask the server to add it (read-only).
@@ -65,7 +65,9 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   }, [you, data, lookedUp, qc]);
 
   const rows = data?.rows ?? [];
-  const pinned = mine && page === 1 && !q ? mine : null;
+  // Your own row is pinned on top only when it belongs in the list being shown (same filter and band, no search).
+  const activeFilter = fixedFilter ?? filter;
+  const pinned = mine && page === 1 && !q && matchesFilter(mine.row, activeFilter) && (!band || inBand(mine.row, band)) ? mine : null;
   const shown = pinned ? [pinned.row, ...rows.filter((r) => r.owner !== pinned.row.owner)] : rows;
   const counts = data?.filterCounts;
   const filteredTotal = data?.filteredTotal ?? 0, total = data?.total ?? 0;
@@ -112,7 +114,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
       <div className="an-toolbar">
         {!fixedFilter && (
           <div className="an-seg" role="group" aria-label="Status filter">
-            {FILTERS.map(([k, l]) => (
+            {FILTERS.filter(([k]) => k === "all" || (counts?.[k] ?? 0) > 0 || filter === k).map(([k, l]) => (
               <button key={k} aria-pressed={filter === k} data-tone={FILTER_TONE[k]} onClick={() => setFilter(k)}>{FILTER_TONE[k] && <i className="an-dot" />}{l}{counts ? <span className="an-muted"> {counts[k]}</span> : null}</button>
             ))}
           </div>
@@ -312,6 +314,7 @@ export function AccountDetailBody({ row, prices }: { row: AccountView; prices: R
         </div>
         {idleUsd > DUST_USD && <p className="an-panel-foot" style={{ padding: 0 }}>The account value above also includes {usd(idleUsd)} of borrowed funds still idle in the account (shown with the debt). They count toward health until they are used or repaid.</p>}
         {row.reasons.length > 0 && <p className="an-panel-foot" style={{ color: "var(--warn)", padding: 0 }}>{row.reasons.map(reasonText).join(" ")}</p>}
+        {!!row.stalePrices?.length && <p className="an-panel-foot" style={{ padding: 0 }}>Valued at the last on-chain price of {row.stalePrices.join(", ")}, which had not been updated recently when this was read. It refreshes as soon as the price does.</p>}
         {row.venueHeld && row.valued && <p className="an-panel-foot" style={{ padding: 0 }}>Its Phoenix perps account is counted as one lump value (collateral plus position equity). Individual positions are not shown, so this account is left out of What-if scenarios.</p>}
       </div>
   );

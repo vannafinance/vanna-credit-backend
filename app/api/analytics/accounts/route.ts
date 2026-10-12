@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/solana/server/json";
-import { cachedRow, decorate, readSnapshot } from "@/lib/analytics/server/store";
+import { cachedRow, decorate, readSnapshot, warm } from "@/lib/analytics/server/store";
 import { inBand, matchesFilter, searchRows, sortRows } from "@/lib/analytics/risk";
 import type { AccountFilter, AccountSortKey } from "@/lib/analytics/types";
 
@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
   const sort = (SORTS as string[]).includes(p.get("sort") ?? "") ? (p.get("sort") as AccountSortKey) : "health";
   const dir: 1 | -1 = p.get("dir") === "desc" ? -1 : 1;
   const per = Math.min(MAX_PER_PAGE, Math.max(1, Number(p.get("per")) || 10));
+  await warm();
   const { snapshot, state } = readSnapshot();
   if (!snapshot) return jsonResponse({ state, asOf: null, rows: [], total: 0, filteredTotal: 0, page: 1, per, pages: 1, filterCounts: null });
 

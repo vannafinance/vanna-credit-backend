@@ -39,7 +39,7 @@ export function poolRows(p: ProtocolOverview | undefined): PoolRow[] {
     .filter((x) => x.pool?.initialised)
     .map(({ t, pool }) => {
       const price = p.prices[t.symbol] ?? null;
-      const valued = !!price && finite(price.usd) && price.usd > 0 && !price.stale && Math.abs(p.forkTime - pool.forkTimestamp) <= 10;
+      const valued = !!price && finite(price.usd) && price.usd > 0 && Math.abs(p.forkTime - pool.forkTimestamp) <= 10;
       const v = (n: number) => (valued && price?.usd ? n * price.usd : null);
       return { symbol: t.symbol, name: t.name, pool, price, valued, usdSupplied: v(pool.totalSupplied), usdBorrowed: v(pool.totalBorrowed), usdCash: v(pool.availableLiquidity) };
     });

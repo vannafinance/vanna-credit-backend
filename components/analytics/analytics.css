@@ -433,3 +433,9 @@ html.dark .v3 .an-root { --an-card-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
 .v3 .an-root .an-t tr.an-expanded > td { background: var(--accent-soft); border-bottom-color: transparent; }
 .v3 .an-root .an-t tr.an-expanded .an-chev { color: var(--accent); }
 .v3 .an-root .an-t tr.an-detail > td { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* A table that must fit its card without sideways scrolling (Collateral): headers and long cells wrap. */
+.v3 .an-root .an-t.an-fit { table-layout: auto; }
+.v3 .an-root .an-t.an-fit th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
+.v3 .an-root .an-t.an-fit td small { white-space: normal; }
+.v3 .an-root .an-t.an-fit td { overflow-wrap: anywhere; }

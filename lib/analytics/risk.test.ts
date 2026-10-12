@@ -54,7 +54,7 @@ describe("summarize", () => {
     row({ owner: "b", collateralUsd: 105, debtUsd: 100 }),
     row({ owner: "c", collateralUsd: 40, debtUsd: 100 }),
     row({ owner: "d", collateralUsd: 70, debtUsd: 0 }),
-    row({ owner: "e", valued: false, reasons: [{ code: "stale_price", symbols: ["SOL"] }] }),
+    row({ owner: "e", valued: false, reasons: [{ code: "missing_price", symbols: ["SOL"] }] }),
   ];
   const s = summarize(rows);
   it("counts only valued accounts in totals and reports the rest as incomplete", () => {
