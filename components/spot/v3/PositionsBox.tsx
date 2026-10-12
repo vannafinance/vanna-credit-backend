@@ -4,6 +4,7 @@ import { useMarginHistory } from "@/hooks/use-margin";
 import { explorerUrl } from "@/lib/solana/config";
 import { Icon } from "@/components/v3/icons";
 import { hfFmt, timeFmt, tokFmt } from "@/components/v3/format";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 /** Spot shows swap history only; account holdings stay on the Margin page. */
 export function PositionsBox() {
@@ -62,7 +63,7 @@ export function PositionsBox() {
           ))}
         </div>
       ) : (
-        <div className="sp-empty">{loading ? "Loading swaps…" : error ? "Unable to load position history. Please try again." : "No swaps yet"}</div>
+        <div className="sp-empty">{loading ? <VannaLoader label="Loading swaps" /> : error ? "Unable to load position history. Please try again." : "No swaps yet"}</div>
       )}
     </section>
   );

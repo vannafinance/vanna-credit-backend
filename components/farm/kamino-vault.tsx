@@ -21,6 +21,7 @@ import { useFarmAccount, type FarmPositionRow } from "./use-farm-account";
 import { KaminoAction } from "./kamino-action";
 import { BackLink, Cell, HowItWorks, TabsBox, Tiles, Venue, VTag, YieldList } from "./fm-ui";
 import { PositionTxPanel } from "./position-tx";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const COLS = {
   current: [
@@ -52,7 +53,7 @@ export function KaminoVault({ id }: { id: string }) {
         <div className="page">
           <BackLink />
           <section className="fm-nf">
-            <h1>{isLoading ? "Loading pool…" : "Pool not found"}</h1>
+            {isLoading ? <VannaLoader caption="Loading pool" /> : <h1>Pool not found</h1>}
             {!isLoading && <p>&ldquo;{id}&rdquo; isn&apos;t a Farm vault.</p>}
           </section>
         </div>

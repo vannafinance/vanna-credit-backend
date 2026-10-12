@@ -25,6 +25,7 @@ import { executeFlashRepay, planFlashRepay, type FlashLoanRow, type FlashPlan, t
 import { Info, Modal } from "./ui";
 import { Icon, IC } from "./icons";
 import { hfFmt, levFmt, nf, sUsd, tokFmt, usd } from "./format";
+import { VannaLoader } from "./vanna-loader";
 
 const SLIPS = [0.1, 0.5, 1] as const;
 
@@ -188,7 +189,8 @@ export default function FlashRepayModal() {
               </>
             ) : (
               <>
-                <b>Reading your account…</b>Positions, loans and live swap quotes.
+                <VannaLoader className="vl-flush" caption="Reading your account" />
+                Positions, loans and live swap quotes.
               </>
             )}
           </div>

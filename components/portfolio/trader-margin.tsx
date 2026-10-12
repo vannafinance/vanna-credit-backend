@@ -2,7 +2,7 @@
 
 /**
  * Portfolio → Trader → Margin: the margin stats grid (2 × 4), the health-factor meter, the
- * liquidation price of the largest volatile collateral, room before liquidation, and the live
+ * (the liquidation price and room before liquidation were removed from that card), and the live
  * margin "Positions" table (Current position | Position history). Health maths from
  * `useV3Account()` (program-exact: HF = holdings ÷ debt, liquidatable at 1.10); token amounts from
  * the account snapshot; interest and history decoded from the margin's own events.
@@ -12,11 +12,12 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Info } from "@/components/v3/ui";
 import { Icon } from "@/components/v3/icons";
-import { hfFmt, levFmt, nf, pct, price, roomSub, roomText, roomZone, spct, tokFmt, usd } from "@/components/v3/format";
-import { LIQ_HF, hfPos, hfZone, isStable } from "@/lib/account-model";
+import { hfFmt, levFmt, nf, pct, tokFmt, usd } from "@/components/v3/format";
+import { LIQ_HF, hfPos, hfZone } from "@/lib/account-model";
 import type { MarginHistoryRow } from "@/lib/solana/history";
 import type { Portfolio } from "./use-portfolio";
 import { HfBar, HistNav, TT, TxCell, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const TYPE_LABEL: Record<string, string> = {
   create: "Account created",
@@ -68,12 +69,6 @@ export function TraderMargin({ p }: { p: Portfolio }) {
   // Unweighted HF: value the holdings can lose before holdings ÷ debt hits 1.10.
   const left = Math.max(0, holdings - LIQ_HF * debt);
 
-  const colls = acct.state?.collateral ?? [];
-  const vol = colls.filter((c) => !isStable(c.symbol)).sort((a, b) => b.usd - a.usd)[0];
-  const volPx = vol ? acct.priceOf(vol.symbol) : 0;
-  const lp = vol ? acct.liqPriceOf(vol.symbol) : null;
-  const mv = lp && volPx > 0 ? (lp / volPx - 1) * 100 : null;
-  const room = acct.room;
   const pNow = live ? hfPos(hf) : null;
   const pLiq = hfPos(LIQ_HF);
 
@@ -137,30 +132,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
               </span>
             </div>
           </div>
-          <div className="pf-liq-n">
-            <div className="pf-ms-k">
-              {vol ? (
-                <>
-                  <Icon sym={vol.symbol} className="ico pf-i16" />
-                  {vol.symbol}
-                </>
-              ) : (
-                "Collateral"
-              )}{" "}
-              liquidation price
-              <Info text={TT.liqColl} />
-            </div>
-            <b className={`num ${room?.state === "now" ? "z-danger" : ""}`}>{lp ? `$${price(lp)}` : noDebt ? "No debt" : "None"}</b>
-            <span className="num">{!lp || mv === null ? "" : room?.state === "now" ? "reached: liquidatable now" : `${spct(mv, 1)} from $${price(volPx)}`}</span>
-          </div>
-          <div className="pf-liq-n">
-            <div className="pf-ms-k">
-              Room before liquidation
-              <Info text={TT.room} />
-            </div>
-            <b className={`num ${room ? roomZone(room) : ""}`}>{room ? roomText(room) : "No debt"}</b>
-            <span className="num">{room ? roomSub(room) : ""}</span>
-          </div>
+          {/* Collateral liquidation price and room before liquidation were removed from this card (product request); the health factor bar shows the account's distance to 1.10. */}
         </div>
       </section>
 
@@ -174,7 +146,7 @@ export function TraderMargin({ p }: { p: Portfolio }) {
         </div>
         {view === "hist" ? (
           !hist.length ? (
-            <div className="pf-mempty">{p.margin.isLoading ? "Loading history…" : "No transaction history"}</div>
+            <div className="pf-mempty">{p.margin.isLoading ? <VannaLoader size="block" /> : "No transaction history"}</div>
           ) : (
             <div className="pf-mt">
               <div className="pf-mth" style={{ gridTemplateColumns: hcols }}>

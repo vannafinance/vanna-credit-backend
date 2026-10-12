@@ -80,10 +80,14 @@ export async function basisLaunchedAt(def: VaultDefinition): Promise<number | nu
   }
 }
 
-/** Compounded annual rate of a share price that started at 1.0, `seconds` after launch. */
-export function sinceLaunchApy(sharePrice: number, seconds: number): number | null {
-  // Under a day the annualised figure is too noisy to show.
-  if (!(sharePrice > 0) || !(seconds >= DAY / 1000)) return null;
-  const v = (Math.pow(sharePrice, (365 * 86400) / seconds) - 1) * 100;
-  return Number.isFinite(v) ? v : null;
+/**
+ * Raw (un-annualised) share-price return since launch, % — the share price starts at 1.0 — and the
+ * days of history behind it. Never annualised: a few days of history on a small NAV turn a single
+ * rebalance cost into a huge negative "APY" (SOL Basis read −75% on a −1.7% move over 4 days).
+ * Null for a missing price or elapsed time.
+ */
+export function sinceLaunchReturn(sharePrice: number, seconds: number): { returnPct: number; days: number } | null {
+  if (!(sharePrice > 0) || !(seconds > 0)) return null;
+  const returnPct = (sharePrice - 1) * 100;
+  return Number.isFinite(returnPct) ? { returnPct, days: seconds / 86400 } : null;
 }

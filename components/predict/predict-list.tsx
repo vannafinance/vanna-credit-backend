@@ -21,6 +21,7 @@ import type { PredictEvent } from "@/lib/predict/types";
 import { CATS, INFO, EarnChip, EvIc, PIC, QBtn, Tags, TeamLogo, VsBadge, cf, p2, partyCol, pc, type CatKey } from "./ui";
 import { PosTable, importOf, rowsOf, useStartEarning, usePredictAccount } from "./positions";
 import { LinkedSheet, openLinkedSheet, shortAddr } from "./linked-sheet";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 /** Value-weighted APY of the account's pooled rows in one event (null when it holds none there). */
 function mineApy(rows: PosRow[], eventId: string): number | null {
@@ -269,12 +270,16 @@ export function PredictList() {
             const x = importOf(acct.data, r);
             if (x) earn.start([x]);
           }}
-          empty={acct.loading ? "Loading your positions…" : "No positions yet. Buy Yes or No on any market."}
+          empty={acct.loading ? <VannaLoader size="block" caption="Loading your positions" /> : "No positions yet. Buy Yes or No on any market."}
         />
       </>
     );
   } else if (isLoading) {
-    body = <div className="pd-load">Loading World markets… the first load can take up to a minute.</div>;
+    body = (
+      <div className="pd-load">
+        <VannaLoader className="vl-flush" caption="Loading markets from World. The first load can take up to a minute." />
+      </div>
+    );
   } else if (error && !EV.length) {
     body = <div className="pd-empty">Markets could not be loaded: {(error as Error).message}</div>;
   } else {

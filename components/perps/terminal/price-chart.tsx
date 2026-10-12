@@ -10,6 +10,7 @@ import { nf } from "./format";
 import type { Candle, PhoenixTimeframe } from "./use-phoenix-live";
 import { PHOENIX_TIMEFRAMES } from "./use-phoenix-live";
 import { Img, SearchIcon, SideIcon, marketIcon } from "./ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 export interface ChartLine {
   v: number;
@@ -31,7 +32,8 @@ function draw(host: HTMLDivElement, ohlcEl: HTMLDivElement, data: Candle[], tf: 
   const W = Math.max(280, host.clientWidth);
   const H = Math.max(200, host.clientHeight);
   if (data.length === 0) {
-    host.innerHTML = `<svg width="${W}" height="${H}" aria-hidden="true"><text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="px-skel" style="fill:currentColor;font-size:12px">Loading Phoenix candles…</text></svg>`;
+    // No candles yet: clear the drawing; the component overlays the branded VannaLoader meanwhile.
+    host.innerHTML = "";
     ohlcEl.innerHTML = "";
     return;
   }
@@ -211,6 +213,7 @@ export function PriceChart({
           <div className="px-ohlc" ref={ohlc} />
         </div>
         <div className="px-svg" ref={host} />
+        {candles.length === 0 && <VannaLoader className="vl-cover" caption="Loading Phoenix candles" />}
       </div>
     </section>
   );

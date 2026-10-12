@@ -1,4 +1,4 @@
-import { basisDepositPrices, basisLaunchedAt, sinceLaunchApy } from "@/lib/solana/server/basis-apy";
+import { basisDepositPrices, basisLaunchedAt, sinceLaunchReturn } from "@/lib/solana/server/basis-apy";
 import { forkUnixTimestamp, getConnection } from "@/lib/solana/connection";
 import { eventApy } from "@/lib/farm/yield";
 import { recordNav } from "@/lib/farm/nav-history";
@@ -50,13 +50,16 @@ function read(id: string) {
           row.apy30BaselineAt = thirty.baselineAt;
         }
       }
-      // Basis: realized APY since launch (share price from 1.0, by the second) — shown until a
-      // 7-day baseline exists, so a new vault never reads 0.00%.
+      // Basis: realized return since launch (share price from 1.0), raw and un-annualised, with the
+      // days behind it. Shown beside the funding estimate until a 7-day baseline exists; never
+      // annualised, because a few days on a small NAV make one rebalance cost read as a huge APY.
       if (id.startsWith("basis-") && row.available && row.sharePriceUsd) {
         const def = VAULTS.find((v) => v.id === id)!;
         const [launched, now] = await Promise.all([basisLaunchedAt(def), forkUnixTimestamp(getConnection()).then(Number).catch(() => Math.floor(Date.now() / 1000))]);
         row.launchedAt = launched ? launched * 1000 : null;
-        row.apySinceLaunch = launched ? sinceLaunchApy(row.sharePriceUsd, now - launched) : null;
+        const since = launched ? sinceLaunchReturn(row.sharePriceUsd, now - launched) : null;
+        row.returnSinceLaunchPct = since?.returnPct ?? null;
+        row.sinceLaunchDays = since?.days ?? null;
       }
       if (row.apy7 !== null) row.apyHistoryStatus = "available";
       cache.set(id, { at: Date.now(), row });

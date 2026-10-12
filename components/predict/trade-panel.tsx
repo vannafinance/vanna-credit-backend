@@ -10,7 +10,7 @@
  *
  * Every action is a real trade on the fork through `usePredictTrade` (server-built, maker-signed
  * batch; the wallet signs all transactions once; progress in the shared tx-progress modal; the
- * Predict queries refresh afterwards). Prices are World's latest trades: a buy fills at the ask,
+ * Predict queries refresh afterwards). Prices are World's live maker quotes (else its latest trades): a buy fills at the ask,
  * a sell at the bid. A market with no price cannot be traded.
  */
 import { forwardRef, useEffect, useRef, type RefObject } from "react";
@@ -234,7 +234,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
     const mo = (a * fx.after.share * rate) / 100 / 12;
     let lbl = `Buy ${L}`;
     let dis = false;
-    if (!canTrade(o)) [lbl, dis] = ["No price yet: no World trades on this market", true];
+    if (!canTrade(o)) [lbl, dis] = ["No price yet: no World quote or trade on this market", true];
     else if (!a) [lbl, dis] = ["Enter amount", true];
     else if (a < MIN_TRADE_CASH || a > MAX_TRADE_CASH) [lbl, dis] = [`Buy between ${MIN_TRADE_CASH} and ${nf(MAX_TRADE_CASH)} ${st.pay}`, true];
     else if (a > bal) [lbl, dis] = [`Not enough ${st.pay}`, true];
@@ -350,7 +350,7 @@ export const TradePanel = forwardRef<HTMLElement, PanelProps>(function TradePane
     how.push(`${n ? shf(n) : "The"} ${L} sell at ${cf(bid(o, s))} each`);
     let lbl = `Sell ${L}`;
     let dis = false;
-    if (bid(o, s) === null) [lbl, dis] = ["No price yet: no World trades on this market", true];
+    if (bid(o, s) === null) [lbl, dis] = ["No price yet: no World quote or trade on this market", true];
     else if (!held.total) [lbl, dis] = [`You hold no ${L} shares here`, true];
     else if (!a) [lbl, dis] = ["Enter shares", true];
     else if (a > held.total + 1e-9) [lbl, dis] = ["Not enough shares", true];

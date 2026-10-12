@@ -16,6 +16,7 @@ import { useFarmStore } from "@/store/farm-store";
 import { VAULTS } from "@/lib/solana/vault-catalogue";
 import type { Portfolio } from "./use-portfolio";
 import { Badge, ChartCard, Ct, Grid, HistNav, InfoCard, Success, TT, Tag, TokCell, TxCell, Venue, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const HIST_COLS = ".9fr .9fr 1.8fr .7fr 1fr";
 
@@ -79,7 +80,7 @@ export function TraderFarm({ p }: { p: Portfolio }) {
           <Grid
             cols={HIST_COLS}
             heads={["Date", "Type", "Amount", "Status", "Tx Hash"]}
-            empty={p.margin.isLoading ? "Loading history…" : "No transactions yet"}
+            empty={p.margin.isLoading ? <VannaLoader size="block" /> : "No transactions yet"}
             rows={hist.map((x, i) => ({
               key: `${x.signature}-${i}`,
               cells: [

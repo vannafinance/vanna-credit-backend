@@ -40,7 +40,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://solana.vanna.finan
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Vanna — Leveraged Yield & Margin on Solana",
+    default: "Vanna - Leveraged Yield & Margin on Solana",
     template: "%s · Vanna",
   },
   description:

@@ -15,6 +15,7 @@ import { TOKENS } from "@/lib/solana/tokens";
 import type { Portfolio } from "./use-portfolio";
 import { lendingPnlSeries } from "./portfolio-math";
 import { Badge, ChartCard, Ct, Dropdown, EYE_IC, FILTER_IC, Grid, HistNav, InfoCard, Success, TT, Tag, TxCell, when } from "./pf-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 const HIST_COLS = ".9fr .9fr 1.8fr .7fr 1fr";
 const HIST_HEADS = ["Date", "Type", "Amount", "Status", "Tx Hash"];
@@ -75,7 +76,7 @@ export function LendingPools({ p }: { p: Portfolio }) {
       sub="30D"
       series={series ? [{ name: "Interest earned", color: "var(--pf-c-l)", pts: series.pts }] : null}
       labels={series?.labels}
-      empty={earn.isLoading ? "Loading history…" : "No history yet"}
+      empty={earn.isLoading ? <VannaLoader size="block" /> : "No history yet"}
       min={0}
     />
   );
@@ -89,7 +90,7 @@ export function LendingPools({ p }: { p: Portfolio }) {
           {chart}
         </div>
         <div className="pf-emptyc">
-          {p.lendLoading ? "Loading lending positions…" : "No lending positions yet. Supply assets on the Earn page to start earning."}
+          {p.lendLoading ? <VannaLoader size="block" caption="Loading lending positions" /> : "No lending positions yet. Supply assets on the Earn page to start earning."}
           <button type="button" className="pf-lnk" onClick={() => router.push("/earn")}>
             Go to Earn
           </button>
@@ -206,7 +207,7 @@ export function LendingPools({ p }: { p: Portfolio }) {
           <Grid
             cols={HIST_COLS}
             heads={HIST_HEADS}
-            empty={earn.isLoading ? "Loading history…" : "No transactions yet"}
+            empty={earn.isLoading ? <VannaLoader size="block" /> : "No transactions yet"}
             rows={history.map((x, i) => ({
               key: `${x.signature}-${i}`,
               cells: [

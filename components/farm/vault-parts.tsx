@@ -54,7 +54,7 @@ export function Card({ title, sub, right, children }: { title?: ReactNode; sub?:
 }
 
 /** One stats-strip cell. */
-export function Stat({ label, value, tip, cls = "" }: { label: string; value: ReactNode; tip?: string; cls?: string }) {
+export function Stat({ label, value, tip, cls = "", sub }: { label: string; value: ReactNode; tip?: string; cls?: string; /** Small chips under the value (e.g. a funding APR beside a vault APY). */ sub?: ReactNode[] }) {
   return (
     <article>
       <div className="lbl">
@@ -62,6 +62,15 @@ export function Stat({ label, value, tip, cls = "" }: { label: string; value: Re
         {tip && <Info text={tip} />}
       </div>
       <div className={`fm-sv ${cls}`}>{value}</div>
+      {sub && sub.length > 0 && (
+        <span className="fm-cs">
+          {sub.map((m, k) => (
+            <span key={k} className="fm-mini">
+              {m}
+            </span>
+          ))}
+        </span>
+      )}
     </article>
   );
 }

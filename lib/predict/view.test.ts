@@ -4,7 +4,7 @@ import { buyFx, canTrade, defaultOut, groupsOf, parseRouteId, poolSide, position
 
 const out = (k: string, name: string, y: number | null, pool = { yes: 0, no: 0 }, extra: Partial<PredictOutcome> = {}): PredictOutcome => ({
   k, name, y, n: y === null ? null : 100 - y + 2, vol: 0, pool, uid: k, marketId: k, yesMint: "", noMint: "", symbol: "", image: null,
-  yBid: y === null ? null : y - 2, nBid: y === null ? null : 100 - y, oi: 0, lastTradeAt: null, tradable: y !== null,
+  yBid: y === null ? null : y - 2, nBid: y === null ? null : 100 - y, oi: 0, lastTradeAt: null, priceSource: y === null ? null : "fill", tradable: y !== null,
   poolDetail: { allowlisted: true, exists: true, yesDangling: 0, noDangling: 0, invested: 0, pendingMerge: 0 }, ...extra,
 });
 const ev = (type: PredictEvent["type"], outs: PredictOutcome[], extra: Partial<PredictEvent> = {}): PredictEvent => ({

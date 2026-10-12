@@ -28,6 +28,35 @@ export const BISON_MAKER_PROGRAM = "2DNbzPochEcyCcWMbL4d9S3u9QqQEj5bbe6cSZFvKsbh
 /** BisonFI's treasury appears in every BisonFI fill, so its signatures list only trades. */
 export const BISON_TREASURY = "7ZqA8dqjSE95wa6Nr2hSigwJ4bYLALjzjSjcSBFo7TCR";
 
+/**
+ * JanusFI's price oracle (verified on mainnet 2026-10-12): World's keeper writes one 112-byte account
+ * per market, refreshed every ~1–3 minutes, and JanusFI's swap reads it (it is account 4 of every
+ * JanusFI swap). Owned by this program; no discriminator, the first byte is the layout version (1).
+ *   0   u8 version (1), 1..7 zero
+ *   7   u8 flags (meaning inferred from all 1,357 accounts): 0 on ordinary markets; 1 only on mids
+ *       ≥ 99.5¢ and 2 only on mids ≤ 5.5¢ (one side would cost ≥ 1 CASH there); 3 on a handful of
+ *       mid-range markets, treated as paused (no quote used)
+ *   8   u64 slot of the last write
+ *   16  u64 last write, unix nanoseconds
+ *   24..56 four u64 the maker uses internally (not needed for the quote)
+ *   56  u64 YES mid price × 1e6 (YES + NO mids sum to 1)
+ *   72  u32 half-spread × 1e6 (5500 on live markets, 1000 on near-settled ones)
+ *   77  u8 PDA bump, 78 World market pubkey (32)
+ * The live mids match world.xyz exactly: NFL 2026 champion SF 49ers mid 12.5¢ → World "Yes 14¢ /
+ * No 89¢", LA Rams 11.5¢ → 13 / 90, BUF Bills 10.5¢ → 12 / 91, KC Chiefs 9.5¢ → 11 / 92.
+ */
+export const JANUS_ORACLE_PROGRAM = "orafZ4BdfzikRRg498P23vG3EdEyMR7bYoYcD2zcwiD";
+export const JANUS_ORACLE_SIZE = 112;
+export const JANUS_ORACLE_OFFSETS = { flags: 7, slot: 8, updatedNs: 16, mid: 56, halfSpread: 72, market: 78 } as const;
+/**
+ * What JanusFI's main book (vault authority 4H6mGp…, the maker on every featured market) charges on
+ * top of the oracle's mid ± half-spread. Calibrated 2026-10-12 from 70+ mainnet JanusFI fills over
+ * 15 markets (mids 6.5¢ … 89.5¢): every buy filled at mid + half-spread + 0.30¢ (±0.01¢). It is a
+ * fixed amount per share, not a percentage. Sells to JanusFI were not seen in that sample, so the
+ * bid mirrors the ask (mid − the same total).
+ */
+export const JANUS_MAKER_MARKUP = 0.003;
+
 /** World `Market` account: 320 bytes, fixed offsets (verified on mainnet 2026-09-27). */
 export const MARKET_ACCOUNT_SIZE = 320;
 /** Anchor discriminator sha256("account:Market")[..8]. */

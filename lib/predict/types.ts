@@ -30,8 +30,26 @@ export interface MarketPrices {
   noBid: number | null;
   /** Milliseconds since epoch of the mainnet trade the prices come from. */
   lastTradeAt: number | null;
-  /** "trades" = derived from mainnet fills; "reference" = no trade yet, 50/50 opening price. */
-  source: "trades" | "reference" | "none";
+  /**
+   * "quote" = JanusFI's live on-chain quote (the maker World routes to); "trades" = derived from
+   * mainnet fills; "reference" = no trade yet, 50/50 opening price.
+   */
+  source: "quote" | "trades" | "reference" | "none";
+}
+
+/** One decoded JanusFI oracle account (see constants.ts `JANUS_ORACLE_OFFSETS`). */
+export interface JanusOracle {
+  /** World market the quote is for. */
+  market: string;
+  /** 0 = ordinary, 1 / 2 = mid at an extreme, 3 = paused (no quote used). */
+  flags: number;
+  slot: number;
+  /** When World's keeper last wrote it (epoch ms). */
+  updatedMs: number;
+  /** YES mid price (0–1); NO mid is 1 − mid. */
+  mid: number;
+  /** Oracle half-spread (0–1). */
+  halfSpread: number;
 }
 
 /** A market as decoded from its 320-byte account. */
@@ -152,6 +170,8 @@ export interface PredictOutcome {
   /** CASH in the market's vault (open interest). */
   oi: number;
   lastTradeAt: number | null;
+  /** Where the prices come from: World's live maker quote, the last mainnet fills, or nothing. */
+  priceSource: "quote" | "fill" | null;
   /** A buy / sell can be built (priced, not ended). */
   tradable: boolean;
   poolDetail: PoolDetail;

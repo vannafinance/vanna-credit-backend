@@ -1,6 +1,6 @@
 /**
  * Predict events (server only): the World catalog grouped into events (grouping.ts), priced from
- * mainnet maker fills (prices.server.ts) and joined with the live yield-pool balances on the fork
+ * JanusFI's live quotes, else mainnet maker fills (prices.server.ts), and joined with the live yield-pool balances on the fork
  * (pool.server.ts). Output shapes are the UI model in types.ts.
  */
 import { CASH_DECIMALS } from "./constants";
@@ -9,12 +9,27 @@ import { groupMarkets, type EventSkeleton } from "./grouping";
 import { countdown, fromRawUnits, poolBar, shortDate, timeAgo, toCents } from "./math";
 import { readPoolStates, type PoolState } from "./pool.server";
 import { featuredOnly, featuredRank } from "./featured";
-import { getMarketPrices, getMarketVolume, scanMarketMints } from "./prices.server";
+import { getMarketPrices, getMarketVolume, refreshQuotes, scanMarketMints } from "./prices.server";
 import type { MarketInfo, PoolDetail, PredictEvent, PredictOutcome } from "./types";
 
 const EVENTS_TTL_MS = 15_000;
-const g = globalThis as unknown as { __predictEvents?: { at: number; events: PredictEvent[]; byMarket: Map<string, string>; pending: Promise<void> | null } };
-const state = (g.__predictEvents ??= { at: 0, events: [], byMarket: new Map(), pending: null });
+/** How long one event read waits for its unpriced markets' history scans (they continue after). */
+const SCAN_WAIT_MS = 2_500;
+/** A listing this young already has fresh pools / open interest: an event read reuses them. */
+const FRESH_LISTING_MS = 5_000;
+/** How long a rebuild / event read waits for the live-quote read (it finishes in the background). */
+const QUOTE_WAIT_MS = 4_000;
+const within = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+interface EventsState {
+  at: number;
+  events: PredictEvent[];
+  byMarket: Map<string, string>;
+  /** Pool states read by the last rebuild (non-window markets). */
+  pools?: Map<string, PoolState>;
+  pending: Promise<void> | null;
+}
+const g = globalThis as unknown as { __predictEvents?: EventsState };
+const state: EventsState = (g.__predictEvents ??= { at: 0, events: [], byMarket: new Map(), pending: null });
 
 const SOURCES: Record<number, string> = { 1: "Pyth price feed", 2: "World.xyz (sports data)", 3: "World.xyz (sports data)", 4: "World.xyz (F1 data)", 5: "World.xyz resolver" };
 
@@ -49,6 +64,7 @@ function toEvent(sk: EventSkeleton, infos: Map<string, MarketInfo>, pools: Map<s
       nBid: toCents(p.noBid),
       oi: openInterestOf(m.id),
       lastTradeAt: p.lastTradeAt,
+      priceSource: p.source === "quote" ? "quote" : p.source === "trades" ? "fill" : null,
       tradable: !ended && p.yesAsk !== null && p.noAsk !== null,
       poolDetail: detail,
     };
@@ -98,16 +114,20 @@ async function rebuild(): Promise<void> {
   const { markets, groups } = await listMarketInfos();
   const skeletons = groupMarkets(markets, groups);
   const infos = new Map(markets.map((m) => [m.id, m]));
-  const pools = await readPoolStates(markets.filter((m) => m.startMs === null).map((m) => m.id)).catch((error) => {
-    console.warn("Predict pool states unavailable:", error instanceof Error ? error.message : error);
-    return new Map<string, PoolState>();
-  });
+  const [pools] = await Promise.all([
+    readPoolStates(markets.filter((m) => m.startMs === null).map((m) => m.id)).catch((error) => {
+      console.warn("Predict pool states unavailable:", error instanceof Error ? error.message : error);
+      return new Map<string, PoolState>();
+    }),
+    within(refreshQuotes(markets), QUOTE_WAIT_MS),
+  ]);
   const now = Date.now();
   const events = skeletons.map((sk) => toEvent(sk, infos, pools, now)).sort(featuredOnly() ? byPageOrder : (a, b) => rank(b) - rank(a));
   const byMarket = new Map<string, string>();
   for (const e of events) for (const o of e.outs) byMarket.set(o.marketId, e.id);
   state.events = events;
   state.byMarket = byMarket;
+  state.pools = pools;
   state.at = Date.now();
 }
 
@@ -122,9 +142,12 @@ export async function listEvents(): Promise<PredictEvent[]> {
 
 /**
  * One event by event id or by any of its market ids, freshly priced: its markets' own trade
- * history is scanned when the shared scan has no price, and open interest / pools are re-read.
+ * history is scanned when the shared scan has no price, and open interest / pools are re-read
+ * (unless the listing was rebuilt moments ago, e.g. by this very call on a cold start). Both run
+ * side by side, so a cold event page waits on the catalog plus a short scan window, not on each.
+ * `pricesReady` (the caller's shared price refresh) is awaited before the final pricing too.
  */
-export async function getEvent(id: string, opts: { scanTimeoutMs?: number } = {}): Promise<PredictEvent | null> {
+export async function getEvent(id: string, opts: { scanTimeoutMs?: number; pricesReady?: Promise<unknown> } = {}): Promise<PredictEvent | null> {
   await listEvents();
   const eventId = state.events.some((e) => e.id === id) ? id : state.byMarket.get(id);
   let event = eventId ? state.events.find((e) => e.id === eventId) ?? null : null;
@@ -137,15 +160,21 @@ export async function getEvent(id: string, opts: { scanTimeoutMs?: number } = {}
     const pools = await readPoolStates([info.id]).catch(() => new Map<string, PoolState>());
     event = toEvent(sk, new Map([[info.id, info]]), pools, Date.now());
   }
+  // Unpriced markets get their own history scan, waited on only briefly: the scan keeps running in
+  // the background and the page's next poll (every ~15 s) shows the prices it found.
   const unpriced = event.outs.filter((o) => o.y === null);
-  if (unpriced.length) {
-    await Promise.race([Promise.allSettled(unpriced.map((o) => scanMarketMints(o.yesMint, o.noMint))), new Promise((r) => setTimeout(r, opts.scanTimeoutMs ?? 8000))]);
-  }
+  const scanned = unpriced.length
+    ? Promise.race([Promise.allSettled(unpriced.map((o) => scanMarketMints(o.yesMint, o.noMint))), new Promise((r) => setTimeout(r, opts.scanTimeoutMs ?? SCAN_WAIT_MS))])
+    : Promise.resolve();
   const ids = event.outs.map((o) => o.marketId);
+  const reuse = eventId !== undefined && state.pools !== undefined && Date.now() - state.at < FRESH_LISTING_MS;
   const [infos, pools] = await Promise.all([
     Promise.all(ids.map((m) => getMarketInfo(m))),
-    readPoolStates(event.type === "updown" ? [] : ids).catch(() => new Map<string, PoolState>()),
-    refreshOpenInterest(ids),
+    reuse ? Promise.resolve(state.pools!) : readPoolStates(event.type === "updown" ? [] : ids).catch(() => new Map<string, PoolState>()),
+    reuse ? Promise.resolve() : refreshOpenInterest(ids),
+    scanned,
+    opts.pricesReady,
+    within(refreshQuotes(event.outs.map((o) => ({ id: o.marketId, yesMint: o.yesMint }))), QUOTE_WAIT_MS),
   ]);
   const infoMap = new Map(infos.filter((x): x is MarketInfo => Boolean(x)).map((m) => [m.id, m]));
   const sk: EventSkeleton = {

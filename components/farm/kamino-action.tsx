@@ -35,6 +35,7 @@ import { findToken } from "@/lib/solana/tokens";
 import { toTokenAmountString } from "@/lib/margin/amounts";
 import { validateAmountChange } from "@/lib/utils/sanitize-amount";
 import { TabsBox } from "./fm-ui";
+import { VannaLoader } from "@/components/v3/vanna-loader";
 
 /** Floor a UI amount to the token's decimals for a %-of-balance fill (never rounds up). */
 function percentOf(balance: number, p: number, symbol: string): string {
@@ -246,7 +247,7 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
             </div>
             <div className="kv">
               <span>Est. receipt received <Info text="Estimated from the reserve's current exchange rate, rounded down to receipt-token precision. The final amount may change slightly when the transaction executes." /></span>
-              <span aria-live="polite">{rateQuery.isFetching && !rateQuery.data ? "Loading…" : estimatedReceipts !== null ? `≈ ${estimatedReceipts} ${pool.receiptSymbol}` : `≈ 0 ${pool.receiptSymbol}`}</span>
+              <span aria-live="polite">{rateQuery.isFetching && !rateQuery.data ? <VannaLoader size="inline" label="Loading exchange rate" /> : estimatedReceipts !== null ? `≈ ${estimatedReceipts} ${pool.receiptSymbol}` : `≈ 0 ${pool.receiptSymbol}`}</span>
             </div>
             <div className="kv">
               <span>APY</span>
