@@ -407,3 +407,21 @@ html.dark .v3{
 .v3 .earn-note{font-size:11px;font-weight:500;line-height:16px;color:var(--earn-sub);padding:0 2px}
 .v3 a.earn-hash:hover{opacity:.8}
 .v3 .earn-chain{width:10px;height:10px;display:block;flex:none;border-radius:50%}
+
+/* USDC pool → Analytics: "From Predict markets" (PredictSupply in earn-pool-tabs.tsx). */
+.v3 .earn-pd{gap:12px;padding:16px;margin-bottom:12px}
+.v3 .earn-pd-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.v3 .earn-pd-t{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--earn-title)}
+.v3 .earn-pd .v{margin:6px 0 2px;font-size:22px;font-weight:700;color:var(--earn-title)}
+.v3 .earn-pd-s{font-size:12.5px;color:var(--earn-sub)}
+.v3 .earn-pd-l{flex:0 0 auto;font-size:12.5px;font-weight:600;color:var(--earn-violet);white-space:nowrap}
+.v3 .earn-pd-l:hover{text-decoration:underline}
+.v3 .earn-pd-rows{display:flex;flex-direction:column;border:1px solid var(--earn-row-bd);border-radius:12px;overflow:hidden}
+.v3 .earn-pd-r{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:var(--earn-row)}
+.v3 .earn-pd-r + .earn-pd-r{border-top:1px solid var(--earn-row-bd)}
+.v3 .earn-pd-r:hover{background:var(--earn-row-hover)}
+.v3 .earn-pd-m,.v3 .earn-pd-a{display:flex;flex-direction:column;gap:2px;min-width:0}
+.v3 .earn-pd-a{align-items:flex-end;flex:0 0 auto}
+.v3 .earn-pd-r b{font-size:13.5px;font-weight:600;color:var(--earn-title)}
+.v3 .earn-pd-r small{font-size:12px;color:var(--earn-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v3 .earn-pd-e,.v3 .earn-pd-w{margin:0;font-size:12.5px;color:var(--earn-sub)}

@@ -24,6 +24,8 @@ import { fL, fLoc, fP, fT, fU, fXr, shortAddr, usdOr } from "./earn-format";
 import { seriesFor, useEarnV3 } from "./use-earn-v3";
 import type { Tf } from "./earn-series";
 import { VannaLoader } from "@/components/v3/vanna-loader";
+import Link from "next/link";
+import { useAnalyticsPredictPools } from "@/hooks/use-analytics";
 
 type D = ReturnType<typeof useEarnV3>;
 
@@ -491,6 +493,7 @@ export function TabAnalytics({ sym, d }: { sym: string; d: D }) {
   const tipSub = (q: { t: number }) => `at ${q.t}% utilization${Math.abs(q.t - util) < 0.5 ? " (now)" : ""}`;
   return (
     <section className="earn-an" aria-label="Analytics Dashboard">
+      {sym === "USDC" && <PredictSupply poolSupplied={p?.totalSupplied ?? 0} />}
       <div className="earn-cc an">
         <div className="earn-cch">
           <div className="earn-anl">
@@ -536,6 +539,63 @@ export function TabAnalytics({ sym, d }: { sym: string; d: D }) {
         <AnalyticsModal kind={kind} cur={cur} pts={pts} tipSub={tipSub} onClose={() => setExpanded(false)} />
       )}
     </section>
+  );
+}
+
+/**
+ * USDC pool only: how much of this pool's supply came from Predict. Each Predict outcome pool merges
+ * its matched YES + NO pairs into USDC and supplies it here; this lists every market's amount (same
+ * data as Analytics → Prediction Vaults, GET /api/analytics/predict-pools) and the pairs still waiting.
+ */
+function PredictSupply({ poolSupplied }: { poolSupplied: number }) {
+  const { data, isLoading } = useAnalyticsPredictPools();
+  const rows = (data?.pools ?? []).filter((r) => r.usdcInVanna >= 0.005).sort((a, b) => b.usdcInVanna - a.usdcInVanna);
+  const total = data?.totals.usdcInVanna ?? 0;
+  const waiting = data?.totals.pairs ?? 0;
+  const share = (v: number) => (poolSupplied > 0 ? fP((v / poolSupplied) * 100) : fP(0));
+  return (
+    <div className="earn-cc earn-pd">
+      <div className="earn-pd-h">
+        <div>
+          <span className="earn-pd-t">
+            From Predict markets{" "}
+            <Info text="Predict pools merge matched YES + NO shares into USDC and supply it to this pool, where it earns the Supply APY until the event resolves." />
+          </span>
+          <p className="num v">{usd(total)}</p>
+          <span className="earn-pd-s">
+            {share(total)} of this pool&apos;s supply · {rows.length} {rows.length === 1 ? "market" : "markets"}
+          </span>
+        </div>
+        <Link href="/analytics/prediction-vaults" className="earn-pd-l">
+          All prediction vaults →
+        </Link>
+      </div>
+      {isLoading && !data ? (
+        <VannaLoader className="vl-flush" caption="Reading prediction pools" />
+      ) : rows.length ? (
+        <div className="earn-pd-rows">
+          {rows.map((r) => (
+            <Link key={r.marketId} href={r.href} className="earn-pd-r">
+              <span className="earn-pd-m">
+                <b>{r.outcome || r.event}</b>
+                <small>{r.outcome ? r.event : ""}</small>
+              </span>
+              <span className="earn-pd-a num">
+                <b>{usd(r.usdcInVanna)}</b>
+                <small>{share(r.usdcInVanna)} of pool</small>
+              </span>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <p className="earn-pd-e">No USDC from Predict markets yet.</p>
+      )}
+      {waiting > 0.005 && (
+        <p className="earn-pd-w">
+          {usd(waiting)} more in matched YES + NO pairs is waiting in Predict pools and isn&apos;t in this pool yet.
+        </p>
+      )}
+    </div>
   );
 }
 
