@@ -5,7 +5,7 @@
  * ("YOU"), and row expansion with collateral/debt lines and per-asset liquidation prices. It renders
  * what the API returns; the only maths here is pure helpers from lib/analytics/risk.
  */
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -38,6 +38,9 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [tab, setTab] = useState<Tab>("health");
   const [page, setPage] = useState(1);
+  const section = useRef<HTMLElement>(null);
+  // A page change starts at the top of the table: the last page is shorter, so staying put would leave the view below it.
+  const goPage = (n: number) => { setPage(n); section.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
   const [text, setText] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -100,7 +103,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   }
 
   return (
-    <section className="an-panel an-flush" id="accounts">
+    <section className="an-panel an-flush an-scroll-top" id="accounts" ref={section}>
       <div className="an-panel-head">
         <div>
           <h2 className="an-panel-title">{title}</h2>
@@ -189,7 +192,7 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
       </div>
       <div className="an-table-foot">
         <span>{pinned ? "Your margin account is shown first; # is still your real rank in this list" : "Click a row for details · riskiest first"}</span>
-        {data && data.pages > 1 && <Pager page={data.page} pages={data.pages} total={filteredTotal} per={data.per} onPage={setPage} />}
+        {data && data.pages > 1 && <Pager page={data.page} pages={data.pages} total={filteredTotal} per={data.per} onPage={goPage} />}
       </div>
     </section>
   );

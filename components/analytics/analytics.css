@@ -487,3 +487,6 @@ html.dark .v3 .an-statusbar { box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
 .v3 .an-statusbar .an-sep { height: 12px; }
 .v3 .an-statusbar .an-meta { padding-right: 4px; }
 .v3 .an-root .an-statusbar .an-btn { min-height: 24px; height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
+
+/* Tables that scroll themselves into view (page changes) stop just below the site's sticky header. */
+.v3 .an-root .an-scroll-top { scroll-margin-top: var(--an-top, 96px); }
