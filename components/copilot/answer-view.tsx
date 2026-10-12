@@ -143,6 +143,15 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
+/**
+ * Whether a fact fits on one line in HALF the panel (label and value side by side). The label is letter-spaced
+ * uppercase (~1.1 value characters each), and a half-row holds about 34 value characters on a desktop panel; anything
+ * longer puts the whole grid in one column, so no row is squeezed and every row still lines up.
+ */
+function fitsHalfRow(f: { label: string; value: string }): boolean {
+  return Math.ceil(f.label.length * 1.1) + f.value.length <= 32;
+}
+
 /** Label styling is shared so a figure row and an identifier row read as one system. */
 const labelStyle: React.CSSProperties = {
   fontFamily: MONO,
@@ -243,7 +252,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
             <div
               className="mt-2 grid"
               style={{
-                gridTemplateColumns: section.facts.length > 1 ? "1fr 1fr" : "1fr",
+                gridTemplateColumns: section.facts.length > 1 && section.facts.every(fitsHalfRow) ? "1fr 1fr" : "1fr",
                 gap: 8,
                 borderRadius: 8,
                 border: "1px solid var(--cp-g100)",
@@ -257,7 +266,6 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
                     style={{
                       ...labelStyle,
                       marginBottom: 2,
-                      whiteSpace: "nowrap",
                     }}
                   >
                     {f.label}
@@ -268,6 +276,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
                       fontSize: 13,
                       fontVariantNumeric: "tabular-nums",
                       color: "var(--cp-g900)",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {f.value}
@@ -379,11 +388,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
              * in a 620px two-col cell wrapped "LP" onto its own line. A long
              * value (or label) forces the whole panel to one column, full width.
              */
-            gridTemplateColumns:
-              figures.length > 1 &&
-              !figures.some((f) => f.label.length > 22 || f.value.length > 36)
-                ? "1fr 1fr"
-                : "1fr",
+            gridTemplateColumns: figures.length > 1 && figures.every(fitsHalfRow) ? "1fr 1fr" : "1fr",
             gap: "2px 32px",
             borderRadius: 8,
             border: "1px solid var(--cp-g100)",
@@ -395,21 +400,23 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
           {figures.map((f, i) => (
             <div
               key={`${f.label}-${i}`}
-              className="flex min-w-0 items-baseline justify-between gap-3"
+              // Wraps instead of overflowing: a value that doesn't fit beside its label drops under it, inside its own
+              // cell, so it can never run into the next column.
+              className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
               style={{
                 borderBottom: "1px solid var(--cp-g100)",
                 padding: "7px 0",
               }}
             >
-              <dt style={{ ...labelStyle, whiteSpace: "nowrap" }}>{f.label}</dt>
+              <dt style={{ ...labelStyle, minWidth: 0 }}>{f.label}</dt>
               <dd
-                className="m-0 flex min-w-0 items-baseline justify-end gap-1.5 text-right"
+                className="m-0 ml-auto flex min-w-0 max-w-full items-baseline justify-end gap-1.5 text-right"
                 style={{
                   fontFamily: MONO,
                   fontSize: 13,
                   fontVariantNumeric: "tabular-nums",
                   color: toneColor(f.tone),
-                  whiteSpace: "nowrap",
+                  overflowWrap: "anywhere",
                 }}
                 title={f.value}
               >
@@ -456,7 +463,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
             {kaminoFacts.map((f, i) => (
               <div
                 key={`${f.label}-${i}`}
-                className="flex min-w-0 items-baseline justify-between gap-3"
+                className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                 style={{
                   borderBottom: i === kaminoFacts.length - 1 ? "none" : "1px solid var(--cp-g100)",
                   padding: "7px 0",
@@ -466,12 +473,13 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
                   {f.label}
                 </dt>
                 <dd
-                  className="m-0 text-right"
+                  className="m-0 ml-auto min-w-0 max-w-full text-right"
                   style={{
                     fontFamily: MONO,
                     fontSize: 13,
                     fontVariantNumeric: "tabular-nums",
                     color: "var(--cp-g900)",
+                    overflowWrap: "anywhere",
                   }}
                 >
                   {f.value}
@@ -509,7 +517,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
             {earnFacts.map((f, i) => (
               <div
                 key={`${f.label}-${i}`}
-                className="flex min-w-0 items-baseline justify-between gap-3"
+                className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                 style={{
                   borderBottom: i === earnFacts.length - 1 ? "none" : "1px solid var(--cp-g100)",
                   padding: "7px 0",
@@ -519,12 +527,13 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
                   {f.label}
                 </dt>
                 <dd
-                  className="m-0 text-right"
+                  className="m-0 ml-auto min-w-0 max-w-full text-right"
                   style={{
                     fontFamily: MONO,
                     fontSize: 13,
                     fontVariantNumeric: "tabular-nums",
                     color: "var(--cp-g900)",
+                    overflowWrap: "anywhere",
                   }}
                 >
                   {f.value}
