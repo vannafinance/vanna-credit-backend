@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUser } from "@/lib/copilot/auth";
+import { getUser, renewSessionCookie } from "@/lib/copilot/auth";
 import { handleChat } from "@/lib/copilot";
 import { debugAllowed, withDebugTrace } from "@/lib/copilot/debug";
 import { guarded, readJson } from "@/lib/copilot/workflow/http";
@@ -35,6 +35,9 @@ export async function POST(req: Request) {
     const headers: Record<string, string> = {};
     if (res.limit?.retry_after_s) headers["Retry-After"] = String(res.limit.retry_after_s);
     const status = res.kind === "needs_login" ? 401 : res.limit ? 429 : 200;
+    // A chat turn counts as use: the sign-in is renewed (see renewSessionCookie).
+    const renewed = renewSessionCookie(user);
+    if (renewed) headers["Set-Cookie"] = renewed;
     return NextResponse.json(out ? { ...res, debug: out.trace } : res, { status, headers });
   });
 }

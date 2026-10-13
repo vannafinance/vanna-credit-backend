@@ -158,18 +158,35 @@ function sessionKey(): Buffer {
   return Buffer.from(hkdfSync("sha256", secret, "vanna-solana-copilot", "session-v1", 32));
 }
 
-export function createSession(wallet: string): { value: string; expiresAt: number; maxAgeS: number } {
+/**
+ * Seals a session cookie. `signedInAt` is when the wallet signed the sign-in message: a renewal keeps it, so a
+ * session lasts `sessionTtlMs` past its last use but never more than `sessionMaxMs` past the signature.
+ */
+export function createSession(wallet: string, signedInAt?: number): { value: string; expiresAt: number; maxAgeS: number } {
   parseWallet(wallet);
-  const expiresAt = authClock.now() + copilotConfig.sessionTtlMs;
+  const now = authClock.now();
+  const since = signedInAt ?? now;
+  const expiresAt = Math.min(now + copilotConfig.sessionTtlMs, since + copilotConfig.sessionMaxMs);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", sessionKey(), iv);
   cipher.setAAD(Buffer.from("copilot-session"));
-  const data = Buffer.concat([cipher.update(JSON.stringify({ w: wallet, iat: authClock.now(), exp: expiresAt }), "utf8"), cipher.final()]);
+  const data = Buffer.concat([cipher.update(JSON.stringify({ w: wallet, iat: now, sia: since, exp: expiresAt }), "utf8"), cipher.final()]);
   const value = [iv, cipher.getAuthTag(), data].map((p) => p.toString("base64url")).join(".");
-  return { value, expiresAt, maxAgeS: Math.floor(copilotConfig.sessionTtlMs / 1000) };
+  return { value, expiresAt, maxAgeS: Math.max(0, Math.floor((expiresAt - now) / 1000)) };
 }
 
-function unseal(value: string): { wallet: string; issuedAt: number; expiresAt: number } | null {
+/**
+ * The renewed cookie for a session in use, or null when it was issued less than `sessionRenewAfterMs` ago (or can
+ * last no longer). Only for a user `getUser` just accepted, so a signed-out session is never renewed.
+ */
+export function renewSessionCookie(user: CopilotUser | null): string | null {
+  if (!user || user.issuedAt === undefined || user.signedInAt === undefined) return null;
+  if (authClock.now() - user.issuedAt < copilotConfig.sessionRenewAfterMs) return null;
+  const session = createSession(user.wallet, user.signedInAt);
+  return session.expiresAt > user.expiresAt ? sessionCookieHeader(session) : null;
+}
+
+function unseal(value: string): { wallet: string; issuedAt: number; signedInAt: number; expiresAt: number } | null {
   try {
     const [iv, tag, data, extra] = value.split(".");
     if (!iv || !tag || !data || extra || value.length > 1_000) return null;
@@ -179,11 +196,14 @@ function unseal(value: string): { wallet: string; issuedAt: number; expiresAt: n
     const parsed = JSON.parse(Buffer.concat([decipher.update(Buffer.from(data, "base64url")), decipher.final()]).toString("utf8")) as {
       w?: unknown;
       iat?: unknown;
+      sia?: unknown;
       exp?: unknown;
     };
     if (typeof parsed.w !== "string" || typeof parsed.exp !== "number") return null;
-    // A cookie sealed before sessions carried an issue time counts as issued at 0: any sign-out voids it.
-    return { wallet: parsed.w, issuedAt: typeof parsed.iat === "number" ? parsed.iat : 0, expiresAt: parsed.exp };
+    // A cookie sealed before sessions carried an issue time counts as issued at 0: any sign-out voids it. One sealed
+    // before renewals counts as signed in when it was issued.
+    const issuedAt = typeof parsed.iat === "number" ? parsed.iat : 0;
+    return { wallet: parsed.w, issuedAt, signedInAt: typeof parsed.sia === "number" ? parsed.sia : issuedAt, expiresAt: parsed.exp };
   } catch {
     return null;
   }
@@ -225,11 +245,12 @@ export async function getUser(req: Request): Promise<CopilotUser | null> {
   }
   try {
     const revoked = await revocations().read(revocationDoc(session.wallet));
-    if (revoked && session.issuedAt < revoked.value.before) return null;
+    // By sign-in time, not issue time: a cookie renewed after a sign-out elsewhere is still void.
+    if (revoked && session.signedInAt < revoked.value.before) return null;
   } catch {
     return null; // the store is unreachable: a session that might have been signed out is not honoured
   }
-  return userFor(session.wallet, session.expiresAt);
+  return { ...userFor(session.wallet, session.expiresAt), issuedAt: session.issuedAt, signedInAt: session.signedInAt };
 }
 
 /**
