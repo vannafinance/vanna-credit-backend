@@ -939,6 +939,143 @@
       ]
     },
     {
+      "name": "merge_and_deposit_in_group",
+      "discriminator": [
+        137,
+        196,
+        60,
+        210,
+        212,
+        196,
+        221,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "base",
+          "accounts": [
+            {
+              "name": "caller",
+              "docs": [
+                "Anyone. The config's keeper alone may accept a CASH -> USDC price below par."
+              ],
+              "signer": true
+            },
+            {
+              "name": "config"
+            },
+            {
+              "name": "pool",
+              "docs": [
+                "Writable because prediCt requires its `merge` signer to be, and so does Vanna's `lender_supply`."
+              ],
+              "writable": true
+            },
+            {
+              "name": "predict",
+              "accounts": [
+                {
+                  "name": "market",
+                  "writable": true
+                },
+                {
+                  "name": "collateral_mint"
+                },
+                {
+                  "name": "yes_mint",
+                  "writable": true
+                },
+                {
+                  "name": "no_mint",
+                  "writable": true
+                },
+                {
+                  "name": "market_cash_vault",
+                  "writable": true
+                },
+                {
+                  "name": "pool_cash",
+                  "writable": true
+                },
+                {
+                  "name": "pool_yes",
+                  "writable": true
+                },
+                {
+                  "name": "pool_no",
+                  "writable": true
+                },
+                {
+                  "name": "predict_program"
+                }
+              ]
+            },
+            {
+              "name": "vanna",
+              "accounts": [
+                {
+                  "name": "vanna_program"
+                },
+                {
+                  "name": "vanna_protocol_config"
+                },
+                {
+                  "name": "vanna_asset_config"
+                },
+                {
+                  "name": "vanna_reserve",
+                  "writable": true
+                },
+                {
+                  "name": "usdc_mint"
+                },
+                {
+                  "name": "vanna_liquidity_vault",
+                  "writable": true
+                },
+                {
+                  "name": "vanna_share_mint",
+                  "writable": true
+                },
+                {
+                  "name": "pool_usdc",
+                  "writable": true
+                },
+                {
+                  "name": "pool_vanna_shares",
+                  "writable": true
+                },
+                {
+                  "name": "spl_token_program"
+                },
+                {
+                  "name": "associated_token_program"
+                },
+                {
+                  "name": "system_program"
+                }
+              ]
+            },
+            {
+              "name": "jupiter_program"
+            },
+            {
+              "name": "token_program"
+            }
+          ]
+        },
+        {
+          "name": "group"
+        }
+      ],
+      "args": [
+        {
+          "name": "swap_data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "redeem",
       "discriminator": [
         184,
@@ -1720,6 +1857,16 @@
       "code": 6022,
       "name": "InvalidSwapPolicy",
       "msg": "Swap loss tolerance exceeds the cap"
+    },
+    {
+      "code": 6023,
+      "name": "MarketInGroup",
+      "msg": "Market's CASH vault belongs to a World Group; use merge_and_deposit_in_group"
+    },
+    {
+      "code": 6024,
+      "name": "GroupMismatch",
+      "msg": "Group does not own the market's CASH vault"
     }
   ],
   "types": [

@@ -431,29 +431,38 @@ async function attemptMerge(marketId: string): Promise<{ signature: string; merg
   const completeSets = yes < no ? yes : no;
   if (completeSets <= 0n) return { skipped: "no matched YES+NO set in the pool" };
 
+  // Who owns the market's CASH vault (token account owner, bytes 32..64): the market itself, or the World Group it
+  // belongs to. Every outcome market of a Group shares one Group-owned vault, and prediCt's market-level merge can't
+  // release CASH from it ("owner does not match"), so those pools merge through `merge_and_deposit_in_group`.
+  const vaultInfo = await conn.getAccountInfo(account.marketCashVault, "confirmed");
+  const vaultOwner = vaultInfo && vaultInfo.data.length >= 64 ? new PublicKey(vaultInfo.data.subarray(32, 64)) : null;
+  if (!vaultOwner) throw new Error(`Market CASH vault ${account.marketCashVault.toBase58()} not found`);
+  const group = vaultOwner.equals(market) ? null : vaultOwner;
+
   const quote = await manifestQuote(account.collateralMint.toBase58(), usdcMint().toBase58(), completeSets);
   const route = await swapInstructions(conn, quote, pool, ataSpl(usdcMint(), pool));
-  const ix = await poolProgram()
-    .methods.mergeAndDeposit(route.swapData)
-    .accounts({
-      caller: keeper.publicKey,
-      config: configPda(),
-      pool,
-      predict: {
-        market,
-        collateralMint: account.collateralMint,
-        yesMint: account.yesMint,
-        noMint: account.noMint,
-        marketCashVault: account.marketCashVault,
-        poolCash: account.poolCash,
-        poolYes: account.poolYes,
-        poolNo: account.poolNo,
-        predictProgram: PREDICT,
-      },
-      vanna: vannaGroup(pool),
-      jupiterProgram: JUPITER,
-      tokenProgram: TOKEN_2022_PROGRAM_ID,
-    } as never)
+  const base = {
+    caller: keeper.publicKey,
+    config: configPda(),
+    pool,
+    predict: {
+      market,
+      collateralMint: account.collateralMint,
+      yesMint: account.yesMint,
+      noMint: account.noMint,
+      marketCashVault: account.marketCashVault,
+      poolCash: account.poolCash,
+      poolYes: account.poolYes,
+      poolNo: account.poolNo,
+      predictProgram: PREDICT,
+    },
+    vanna: vannaGroup(pool),
+    jupiterProgram: JUPITER,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+  };
+  const ix = await (group
+    ? poolProgram().methods.mergeAndDepositInGroup(route.swapData).accounts({ base, group } as never)
+    : poolProgram().methods.mergeAndDeposit(route.swapData).accounts(base as never))
     .remainingAccounts(route.swapAccounts)
     .instruction();
 

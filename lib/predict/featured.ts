@@ -1,5 +1,5 @@
 /**
- * The Predict page's curated market list: World's Trending events (world.xyz, refreshed 2026-10-12). Only these
+ * The Predict page's curated market list: World's Trending events (world.xyz, refreshed 2026-10-12; ended events removed 2026-10-13). Only these
  * markets are read, priced and listed, so the catalog loads in a couple of seconds instead of scanning
  * every World market on mainnet. Set PREDICT_ALL_MARKETS=1 to list every live World market instead.
  *
@@ -98,37 +98,11 @@ export const FEATURED_EVENTS: FeaturedEvent[] = [
     ],
   },
   {
-    title: "Atalanta vs Venezia",
-    groupId: "6gZAspmbwE34XN6tmeZvpkdYVymwtKTbUU9HuuHRDoQS",
-    markets: [
-      "FVJzqhabn1ruSdEoiuFCzHeokuCWuWMH8kuVcSPugNmv",
-      "DdmqGH6iYtsFPW7rW37YhYc5U7xSpL7rouSYYEPHGy6E",
-      "HYFK9PhPoPyik392FpmSjVhfZWhFnA1x4rwcUqBeXczp",
-    ],
-  },
-  {
     title: "Who will win control of the Senate in the 2026 midterms?",
     groupId: null,
     markets: [
       "33BE14xE3eNCej4aUDVUtfdpLEnTQzdqBoSEPiBkfWTP",
       "8eyqkqkTphDfx267LuULGJJP869hgSg6pm4Rkhe851ef",
-    ],
-  },
-  {
-    title: "LA Rams vs BUF Bills",
-    groupId: "6bSVyoU85RCcbq8J8cPGVfWBwVQLDC5NPcUHzVFN4pso",
-    markets: [
-      "AkXzAKPnY5bByTY9Kdp5eiJ6VPkcMrZhssEXpaG9ao3r",
-      "FZXGA4jqzumhRDG2axDkDk9Zuv6K9s36xePrsWqz7gRP",
-    ],
-  },
-  {
-    title: "Coventry City vs Newcastle United",
-    groupId: "7yfPMHXonusYDwnW8ZZ66yKEJjMod4dt1YT3sUsCFQbz",
-    markets: [
-      "F6X4pkCWT3TefbrMuCXV3kMrRzE3uAeNzG4RhzGLK8kG",
-      "5VW59QcW1JhQygRAScPhbz5K77YTiTRekSUi3ZH5FM3N",
-      "ESLtBWPzv9UYDmB4GCo4p5nnZS3LUqt2HRaoz1NrXxEC",
     ],
   },
 ];

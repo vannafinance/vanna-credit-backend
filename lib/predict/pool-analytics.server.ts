@@ -6,15 +6,16 @@
  * - USDC the pool has supplied to Vanna's USDC lending pool (idle USDC included, valued at the
  *   reserve's exchange rate, as on chain);
  * - whether the market can merge at all: World's market-level merge only works when the market owns
- *   its CASH vault. Outcome markets of a World Group share one Group-owned vault, so their matched
- *   pairs stay in the pool (`mergeable: false`).
+ *   its CASH vault; outcome markets of a World Group share one Group-owned vault and merge through
+ *   the pool's `merge_and_deposit_in_group`, which needs that Group account to still exist. Once World
+ *   closes an ended event's Group, its matched pairs can't merge any more (`mergeable: false`).
  *
  * Names come from the Predict listing (event title + outcome) or, for a market no longer listed,
  * from its on-chain mint name. Cached briefly; everything is a live chain read, nothing is stored.
  */
 import { PublicKey } from "@solana/web3.js";
 import { getConnection, getMultipleAccountsChunked } from "@/lib/solana/connection";
-import { CASH_DECIMALS } from "./constants";
+import { CASH_DECIMALS, GROUP_DISCRIMINATOR_HEX, WORLD_PROGRAM_ID } from "./constants";
 import { allCatalogMarketIds, getMarketInfo } from "./catalog.server";
 import { FEATURED_MARKET_IDS } from "./featured";
 import { listEvents } from "./events.server";
@@ -40,7 +41,7 @@ export interface PredictPoolRow {
   pairs: number;
   /** USDC in Vanna's USDC lending pool for this pool. */
   usdcInVanna: number;
-  /** The market owns its CASH vault, so prediCt's market-level merge works for it. */
+  /** Its matched pairs can merge: the market owns its CASH vault, or the vault's World Group is still live. */
   mergeable: boolean;
   status: PredictPoolStatus;
 }
@@ -54,7 +55,7 @@ export interface PredictPoolsResponse {
     yes: number;
     no: number;
     pairs: number;
-    /** Matched pairs that can't merge (World Group markets). */
+    /** Matched pairs that can't merge (their event's World Group is closed). */
     pairsBlocked: number;
     usdcInVanna: number;
     mergeablePools: number;
@@ -100,14 +101,24 @@ async function build(): Promise<PredictPoolsResponse> {
   // Who owns each market's CASH vault (token account owner, bytes 32..64): the market, or its World Group.
   const vaults = ids.map((id) => states.get(id)?.account?.marketCashVault ?? PublicKey.default);
   const vaultInfos = ids.length ? await getMultipleAccountsChunked(getConnection(), vaults) : [];
+  const owners = vaultInfos.map((v) => (v && v.data.length >= 64 ? new PublicKey(v.data.subarray(32, 64)) : null));
+  // Group-owned vaults merge through the live Group account; a closed (ended) Group can't sign any more.
+  const groupKeys = [...new Set(owners.filter((o, i): o is PublicKey => Boolean(o) && !o!.equals(new PublicKey(ids[i]))).map((o) => o.toBase58()))];
+  const groupInfos = groupKeys.length ? await getMultipleAccountsChunked(getConnection(), groupKeys.map((k) => new PublicKey(k))) : [];
+  const liveGroups = new Set(
+    groupKeys.filter((_, i) => {
+      const g = groupInfos[i];
+      return Boolean(g && g.owner.toBase58() === WORLD_PROGRAM_ID && g.data.subarray(0, 8).toString("hex") === GROUP_DISCRIMINATOR_HEX);
+    }),
+  );
 
   const pools: PredictPoolRow[] = [];
   for (const [i, id] of ids.entries()) {
     const s = states.get(id);
     if (!s?.exists) continue;
-    const v = vaultInfos[i];
-    const owner = v && v.data.length >= 64 ? new PublicKey(v.data.subarray(32, 64)) : null;
-    const mergeable = Boolean(owner?.equals(new PublicKey(id)));
+    const owner = owners[i];
+    // A vault the fork hasn't loaded yet (nothing deposited) isn't known to be closed, so it isn't counted as ended.
+    const mergeable = !owner || owner.equals(new PublicKey(id)) || liveGroups.has(owner.toBase58());
     let name = named.get(id);
     if (!name) {
       const info = await getMarketInfo(id).catch(() => null);

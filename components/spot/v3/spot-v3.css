@@ -241,6 +241,8 @@ html.dark .v3{
 .v3 .sp-sin span{font-size:12px;color:var(--sp-dim)}
 .v3 .sp-swarn{font-size:11px;font-weight:600;color:var(--warn)}
 .v3 .sp-snote{margin-top:16px;font-size:11px;font-weight:500;line-height:16px;color:var(--sp-dim)}
+/* Token picker: centered vertically, not pinned near the top. */
+.v3 .modal-bg:has(.sp-modal-t){align-items:center}
 .v3 .modal.sp-modal-t{width:min(480px,100%);padding:0;border-radius:20px;overflow:hidden}
 .v3 .sp-tm h2{font-size:16px;font-weight:600;line-height:24px;padding:20px 60px 12px 20px}
 .v3 .sp-tsearch{margin:0 20px 12px;display:flex;align-items:center;gap:10px;height:44px;padding:0 14px;border-radius:12px;border:1px solid var(--line-2);background:var(--tile);color:var(--label)}

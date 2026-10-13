@@ -18,7 +18,10 @@ import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { Info } from "@/components/v3/ui";
 import { Icon } from "@/components/v3/icons";
-import { hfFmt, levFmt, nf, usd } from "@/components/v3/format";
+import { hfFmt, levFmt, nf, pct, usd } from "@/components/v3/format";
+import { TokenPickButton, type PickerRow } from "@/components/v3/token-picker";
+import { usePoolData } from "@/hooks/use-earn";
+import { findToken } from "@/lib/solana/tokens";
 import { SAFE_HF, WARN_HF, healthFactor } from "@/lib/account-model";
 import { CollateralDropdownOptions, BorrowDropdownOptions } from "@/lib/constants";
 import { validateAmountChange, floorAmountToInput } from "@/lib/utils/sanitize-amount";
@@ -26,7 +29,11 @@ import { FRESH_ACCOUNT_MAX_LEVERAGE, LEVERAGE_SLIDER_CAP, floorTo, spendableWall
 import { refreshMarginAccount } from "@/store/margin-account-info-store";
 import { useDepositAndBorrow } from "@/hooks/use-margin";
 import { accountNumbers, liqBuffer, maxBorrowUsd, withBorrows, withDeposits, type Move } from "./mg-sim";
-import { LevSlider, MI, PctChips, PrevBox, PrevRow, RatioBtn, TIPS, TokenDropdown, toneHf, usePop } from "./mg-ui";
+import { LevSlider, MI, PctChips, PrevBox, PrevRow, RatioBtn, TIPS, toneHf } from "./mg-ui";
+
+/** Collateral chips shown above the full list in the token picker. */
+const POPULAR_COLLATERAL = ["SOL", "USDC", "JitoSOL", "JupSOL", "NVDAx", "TSLAx"];
+const bal4 = (v: number) => nf(v, v >= 1000 ? 2 : 4);
 import { CreateAccountModal } from "./mg-create-account";
 import type { MarginScreen } from "./use-margin-screen";
 
@@ -48,7 +55,15 @@ const num = (s: string) => {
 };
 
 export function LeverageTab({ m, connectWallet }: { m: MarginScreen; connectWallet: () => void }) {
-  const pop = usePop();
+  const { pools } = usePoolData();
+  // Token picker rows. Deposit: the balance the chosen source holds (wallet for WB, margin account for MB).
+  // Borrow: what each Vanna pool can lend right now, with its borrow APY.
+  const depositRows = (src: Row["src"]): PickerRow[] =>
+    CollateralDropdownOptions.map((s) => ({ symbol: s, name: findToken(s)?.name ?? s, value: bal4(src === "mb" ? m.vault(s) : m.wbal(s)) }));
+  const borrowRows: PickerRow[] = BorrowDropdownOptions.map((s) => {
+    const p = pools[s];
+    return { symbol: s, name: findToken(s)?.name ?? s, value: bal4(p?.availableLiquidity ?? 0), valueSub: `${pct((p?.borrowApr ?? 0) * 100)} borrow APY` };
+  });
   // The first row's id is fixed so server and client render the same markup (the counter only
   // numbers rows added later, which happens in the browser).
   const [rows, setRows] = useState<Row[]>(() => [{ ...newRow(), id: "r0" }]);
@@ -301,7 +316,18 @@ export function LeverageTab({ m, connectWallet }: { m: MarginScreen; connectWall
                       <PctChips value={r.pct} label="Deposit percentage" onPick={(p) => pickPct(r, p)} />
                     </div>
                     <div className="mg-r">
-                      <TokenDropdown id={`dep:${r.id}`} sym={r.sym} list={CollateralDropdownOptions} pop={pop} onPick={(s) => patch(r.id, { sym: s, amt: "", pct: 0 })} />
+                      <span className="mg-ddw">
+                        <TokenPickButton
+                          sym={r.sym}
+                          className="mg-tok"
+                          iconClassName="ico mg-ti"
+                          chevron={<span className="mg-cv">{MI.chev16}</span>}
+                          rows={depositRows(r.src)}
+                          popular={POPULAR_COLLATERAL}
+                          valueLabel={r.src === "mb" ? "Margin balance" : "Wallet balance"}
+                          onSelect={(s) => patch(r.id, { sym: s, amt: "", pct: 0 })}
+                        />
+                      </span>
                       <input className="mg-amt num" inputMode="decimal" autoComplete="off" placeholder="0" value={r.amt} aria-label="Collateral amount" onChange={(e) => onAmt(r, e.target.value)} />
                     </div>
                     <div className="mg-r end">
@@ -420,17 +446,20 @@ export function LeverageTab({ m, connectWallet }: { m: MarginScreen; connectWall
                   )}
                 </div>
                 <div className="mg-r">
-                  <TokenDropdown
-                    id={`bor:${i}`}
-                    sym={bTok[i]}
-                    list={BorrowDropdownOptions}
-                    pop={pop}
-                    b2
-                    onPick={(s) => {
-                      setBTok((t) => (i === 0 ? [s, t[1]] : [t[0], s]));
-                      auto();
-                    }}
-                  />
+                  <span className="mg-ddw">
+                    <TokenPickButton
+                      sym={bTok[i]}
+                      className="mg-tok b2"
+                      iconClassName="ico mg-ti"
+                      chevron={<span className="mg-cv">{MI.chev16}</span>}
+                      rows={borrowRows}
+                      valueLabel="Available to borrow"
+                      onSelect={(s) => {
+                        setBTok((t) => (i === 0 ? [s, t[1]] : [t[0], s]));
+                        auto();
+                      }}
+                    />
+                  </span>
                   <input
                     className="mg-amt num"
                     inputMode="decimal"

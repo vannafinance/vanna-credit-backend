@@ -20,7 +20,7 @@ import { HBars, Legend, SERIES } from "../charts";
 const STATUS: Record<PredictPoolStatus, { label: string; tone: Tone; tip: string }> = {
   earning: { label: "Earning", tone: "ok", tip: "Its matched pairs are in Vanna's USDC pool, earning the pool's supply rate." },
   "merge-pending": { label: "Merge pending", tone: "accent", tip: "Matched YES + NO pairs are waiting for the keeper to merge them into Vanna's USDC pool." },
-  "cannot-merge": { label: "Can't merge yet", tone: "warn", tip: "This market is part of a World Group, whose outcomes share one Group-owned CASH vault. The pool can't merge its pairs there yet, so they stay in the pool and don't earn." },
+  "cannot-merge": { label: "Event ended", tone: "warn", tip: "World has closed this event, so its matched pairs can't be merged any more. They stay in the pool until it is settled." },
   "one-sided": { label: "Waiting for other side", tone: "neutral", tip: "The pool holds only YES or only NO: nothing to pair until the other side is bought." },
   empty: { label: "Empty", tone: "neutral", tip: "Pool created, nothing deposited yet." },
 };
@@ -30,7 +30,7 @@ const FILTERS: [Filter, string][] = [
   ["funded", "With funds"],
   ["earning", "Earning"],
   ["merge-pending", "Merge pending"],
-  ["cannot-merge", "Can't merge"],
+  ["cannot-merge", "Event ended"],
   ["all", "All pools"],
 ];
 
@@ -61,7 +61,7 @@ export function PredictionVaultsView() {
           segments: [
             { value: t.usdcInVanna, color: SERIES[1], tip: `In Vanna's USDC pool ${usd(t.usdcInVanna)}` },
             { value: pairsMergeable, color: SERIES[0], tip: `Waiting to merge ${usd(pairsMergeable)}` },
-            { value: t.pairsBlocked, color: SERIES[3], tip: `Can't merge yet (World Group markets) ${usd(t.pairsBlocked)}` },
+            { value: t.pairsBlocked, color: SERIES[3], tip: `Event ended, can't merge ${usd(t.pairsBlocked)}` },
           ],
           valueText: usdC(t.usdcInVanna + t.pairs),
         },
@@ -75,11 +75,11 @@ export function PredictionVaultsView() {
         <Kpi label="In Vanna's USDC pool" value={t ? usd(t.usdcInVanna) : usd(0)} na={!t} accent
           sub={share !== null ? `${pct(share)} of the USDC pool's ${usdC(usdcSupplied)}` : "Merged pairs, supplied as USDC"} />
         <Kpi label="Waiting to merge" value={t ? usd(t.pairs) : usd(0)} na={!t} tone={t && t.pairsBlocked > 0 ? "warn" : ""}
-          sub={t ? `${num(t.pairs, 2)} matched pairs · ${usd(t.pairsBlocked)} can't merge yet` : "Matched YES + NO pairs"} />
+          sub={t ? `${num(t.pairs, 2)} matched pairs${t.pairsBlocked > 0 ? ` · ${usd(t.pairsBlocked)} in ended events` : ""}` : "Matched YES + NO pairs"} />
         <Kpi label="YES shares in pools" value={t ? shares(t.yes) : "0"} na={!t} sub={t ? `${shares(unmatchedYes)} without a NO to pair` : "Deposited YES"} />
         <Kpi label="NO shares in pools" value={t ? shares(t.no) : "0"} na={!t} sub={t ? `${shares(unmatchedNo)} without a YES to pair` : "Deposited NO"} />
         <Kpi label="Pools" value={t ? String(t.pools) : "0"} na={!t}
-          sub={t ? `${t.withFunds} with funds · ${t.mergeablePools} can merge, ${t.groupPools} can't yet` : "Created by the outcome pool program"} />
+          sub={t ? `${t.withFunds} with funds${t.groupPools > 0 ? ` · ${t.groupPools} in ended events` : ""}` : "Created by the outcome pool program"} />
       </div>
 
       {!data ? (
@@ -91,7 +91,7 @@ export function PredictionVaultsView() {
               <>
                 <HBars rows={split} />
                 <div className="an-mt">
-                  <Legend items={[{ label: "In Vanna's USDC pool", color: SERIES[1] }, { label: "Waiting to merge", color: SERIES[0] }, { label: "Can't merge yet (World Group)", color: SERIES[3] }]} />
+                  <Legend items={[{ label: "In Vanna's USDC pool", color: SERIES[1] }, { label: "Waiting to merge", color: SERIES[0] }, { label: "Event ended, can't merge", color: SERIES[3] }]} />
                 </div>
               </>
             ) : (
@@ -99,7 +99,7 @@ export function PredictionVaultsView() {
             )}
             {t && t.pairsBlocked > 0 && (
               <p className="an-panel-foot">
-                {usd(t.pairsBlocked)} of matched pairs sit in World Group markets, whose outcomes share one Group-owned CASH vault. The pool can&apos;t merge them yet, so they don&apos;t earn.
+                {usd(t.pairsBlocked)} of matched pairs sit in events World has already closed, so they can&apos;t be merged any more. They stay in the pool until it is settled.
               </p>
             )}
           </Panel>
@@ -143,7 +143,7 @@ export function PredictionVaultsView() {
                         <td className="an-r"><b>{shares(r.yes)}</b><small>{r.yes > r.pairs ? `${shares(r.yes - r.pairs)} unmatched` : "all matched"}</small></td>
                         <td className="an-r"><b>{shares(r.no)}</b><small>{r.no > r.pairs ? `${shares(r.no - r.pairs)} unmatched` : "all matched"}</small></td>
                         <td className="an-r"><b>{shares(r.pairs)}</b><small>{usd(r.pairs)}</small></td>
-                        <td className="an-r"><b>{usd(r.usdcInVanna)}</b><small>{r.mergeable ? "Can merge" : "Can't merge yet"}</small></td>
+                        <td className="an-r"><b>{usd(r.usdcInVanna)}</b><small>{r.mergeable ? "Can merge" : "Event ended"}</small></td>
                         <td><span title={STATUS[r.status].tip}><Badge tone={STATUS[r.status].tone}>{STATUS[r.status].label}</Badge></span></td>
                       </tr>
                     ))}
