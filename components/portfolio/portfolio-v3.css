@@ -218,7 +218,6 @@ html.dark .v3{
 .v3 .pf-share{padding:1px 6px;border-radius:4px;background:var(--pf-cnt-bg);color:var(--pf-cnt-fg);font-size:10px;font-weight:500;line-height:15px}
 .v3 .pf-idle{font-size:11px;font-weight:500;line-height:16px;color:var(--pf-sub2);padding-left:28px}
 .v3 .pf-idle .info-i{margin-left:4px;vertical-align:-2px}
-.v3 .pf-zero{font-size:13px;font-weight:500;color:var(--pf-zero)}
 .v3 .pf-hf-ok{color:var(--pf-hf-ok)} .v3 .pf-hf-mid{color:var(--pf-hf-mid)} .v3 .pf-hf-bad{color:var(--pf-hf-bad)}
 .v3 .pf-repay{padding:8px 12px;border-radius:8px;background:var(--grad);color:#fff;font-size:12px;font-weight:600;line-height:18px}
 .v3 .pf-repay:hover{filter:brightness(1.06)}
@@ -318,3 +317,11 @@ html.dark .v3{
 
 /* The liquidation card now holds only the health factor meter: full width. */
 .v3 .pf-liq{grid-template-columns:minmax(0,1fr)!important}
+
+/* Portfolio → Balances (balances.tsx): three summary tiles in the strip style. */
+.v3 .pf-bal-sum{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+@media (max-width:767px){.v3 .pf-bal-sum{grid-template-columns:minmax(0,1fr)}}
+.v3 .pf-bal-t{display:flex;flex-direction:column;gap:6px;padding:20px 24px;border:1px solid var(--line);border-radius:12px;background:var(--strip-bg)}
+.v3 .pf-bal-t span{font-size:14px;font-weight:500;line-height:21px;color:var(--pf-desc)}
+.v3 .pf-bal-t b{font-size:24px;font-weight:700;line-height:32px;color:var(--text)}
+.v3 .pf-bal-t small{font-size:12px;font-weight:500;line-height:18px;color:var(--pf-desc)}

@@ -21,6 +21,7 @@ import { TraderMargin } from "./trader-margin";
 import { TraderSpot } from "./trader-spot";
 import { TraderPerps } from "./trader-perps";
 import { TraderFarm } from "./trader-farm";
+import { Balances } from "./balances";
 
 /* live stat icons (/margin/dollar.png, bag.png, health.png) redrawn as inline SVG */
 const IP = {
@@ -51,7 +52,7 @@ const IP = {
   ),
 };
 
-type Tab = "lender" | "trader";
+type Tab = "lender" | "trader" | "balances";
 type LenderSub = "pools" | "predict";
 type TraderSub = "margin" | "spot" | "perps" | "farm";
 const SUBS = {
@@ -184,9 +185,9 @@ export function PortfolioV3() {
       <Header p={p} />
       <div className="pf-side">
         <nav className="pf-tabs" role="tablist" aria-label="Portfolio side">
-          {(["lender", "trader"] as const).map((k) => (
+          {(["lender", "trader", "balances"] as const).map((k) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
-              {k === "lender" ? "Lender" : "Trader"}
+              {k === "lender" ? "Lender" : k === "trader" ? "Trader" : "Balances"}
             </button>
           ))}
         </nav>
@@ -195,6 +196,10 @@ export function PortfolioV3() {
             <button type="button" className="pf-login-b" onClick={() => void connectWallet()}>
               Login
             </button>
+          </div>
+        ) : tab === "balances" ? (
+          <div className="pf-body">
+            <Balances p={p} />
           </div>
         ) : (
           <div className="pf-body">
