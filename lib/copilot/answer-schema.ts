@@ -72,6 +72,18 @@ export interface StructuredAnswer {
   table?: { columns: string[]; rows: string[][] };
   /** Multiple cards (pool stats, then positions). */
   tables?: Array<{ caption?: string; columns: string[]; rows: string[][] }>;
+  /**
+   * A whole list shown on the card from the website's own endpoint, never retyped by the model. Only the read's filter
+   * travels: the card loads the list the website's page loads with that filter and draws every item as the page does.
+   */
+  list?: AnswerList;
+}
+
+/** `predict_markets`: the Predict page's event list (`/api/predict/events`, same `cat` / `q`). */
+export interface AnswerList {
+  kind: "predict_markets";
+  category?: string;
+  query?: string;
 }
 
 /**
@@ -330,6 +342,10 @@ export function answerToText(a: StructuredAnswer): string {
       lines.push(t.columns.join(" | "));
       for (const row of t.rows) lines.push(row.join(" | "));
     }
+  }
+  if (a.list?.kind === "predict_markets") {
+    lines.push("");
+    lines.push(`(Predict events${a.list.category ? ` · ${a.list.category}` : ""}${a.list.query ? ` · "${a.list.query}"` : ""}, as on the Predict page)`);
   }
   if (a.note) {
     lines.push("");

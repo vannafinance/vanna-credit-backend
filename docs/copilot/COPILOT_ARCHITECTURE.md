@@ -84,9 +84,10 @@ flowchart LR
 2. `lib/copilot/auth.ts` (`getUser`) reads the signed session cookie created at Sign-In-With-Solana
    (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user. Signing out (`/api/copilot/auth/logout`)
    also records a per-wallet cut-off in the store, so every earlier session for that wallet stops working, not just
-   this browser's cookie. A session lasts 7 days without use; opening the Copilot (`/api/copilot/auth/session`) or a
-   chat turn renews it (`renewSessionCookie`, at most hourly), never past 30 days from the wallet's signature
-   (`config.ts` `sessionTtlMs`, `sessionMaxMs`). A renewed cookie keeps the sign-in time, so a sign-out still voids it.
+   this browser's cookie. A session ends 12 hours after the wallet signed in, used or not (`config.ts` `sessionTtlMs`
+   = `sessionMaxMs`, so the hourly `renewSessionCookie` on opening the Copilot or a chat turn cannot extend it); the
+   user then signs in again. The left panel shows the sign-in as a status only ("Signed in · <wallet>" or "Not signed
+   in · sign in to use the Copilot"); it is not a sign-out button.
    The page offers the sign-in card before anything is typed, and says "Connecting…" while a remembered wallet
    reconnects (up to 5 s) instead of offering "Connect wallet".
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
@@ -260,7 +261,16 @@ borrowing, no health factor.
   `get_predict_market`, `get_predict_positions`, `get_predict_history`, `get_predict_quote`. The market reads reach
   the model as compact rows (`[market_id, name, yes buy/sell, no buy/sell, tradable, joins pool]`, prices in cents) with a
   larger observation budget, so no market id is cut off. The left panel lists Predict positions (the website's
-  `usePredictPositions`).
+  `usePredictPositions`), each with its market's logo as the Predict page draws it (World's artwork, both teams of a
+  game, or the event's short-code badge); every other panel row takes its logo from the website's `logoSrc`
+  (`components/v3/icons.tsx`: tokens, CASH, vault shares, USD* / USD* Junior, Kamino receipts), with a lettered disc
+  if an image fails.
+- **Showing markets**: the answer tool's `show_list: "predict_markets"` (or a code-built markets answer) attaches
+  `answer.list` = the read's own filter (category / search), never rows the model picked. The answer card
+  (`components/copilot/predict-events-list.tsx`) loads the website's own `/api/predict/events` with that filter (same
+  query and cache as the Predict page) and draws every event as the page's cards do: a game's teams, draw and YES
+  prices; a question's chance and YES / NO prices; a multi-outcome question's two likeliest outcomes and "+N more".
+  Each card opens the event on the Predict page.
 - **Writes**: the model names `predict_buy` (CASH: literal 0.1-5,000, usd = CASH at $1, all / fraction of the wallet's
   CASH), `predict_sell` (shares; all / fraction of wallet + pooled shares) and `predict_deposit` (World shares in the
   wallet into Vanna's pool), each with a `market_id` that must appear in a Predict read in the evidence (decision.ts

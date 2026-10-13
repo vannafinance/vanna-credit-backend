@@ -109,7 +109,8 @@ describe("SIWS login", () => {
   });
 });
 
-const DAY = 24 * 3600_000;
+const HOUR = 3600_000;
+const HOUR12 = 12 * HOUR;
 
 describe("session cookie", () => {
   const reqWith = (cookie: string) => new Request("http://x.test/api", { headers: { cookie } });
@@ -120,7 +121,7 @@ describe("session cookie", () => {
     expect(header).toContain("HttpOnly");
     expect(header).toContain("SameSite=Lax");
     expect(header).not.toContain("Secure"); // the test env is not production
-    expect(s.maxAgeS).toBe(7 * 24 * 3600);
+    expect(s.maxAgeS).toBe(12 * 3600);
     const user = await getUser(reqWith(`other=1; ${SESSION_COOKIE}=${s.value}`));
     expect(user?.wallet).toBe(wallet);
   });
@@ -137,7 +138,7 @@ describe("session cookie", () => {
     expect(await getUser(reqWith(`${SESSION_COOKIE}=${tampered}`))).toBeNull();
     expect(await getUser(reqWith(`${SESSION_COOKIE}=garbage`))).toBeNull();
     expect(await getUser(new Request("http://x.test"))).toBeNull();
-    authClock.now = () => Date.now() + 7 * DAY + 1000;
+    authClock.now = () => Date.now() + HOUR12 + 1000;
     expect(await getUser(reqWith(`${SESSION_COOKIE}=${s.value}`))).toBeNull();
     authClock.now = () => Date.now();
     vi.stubEnv("COPILOT_SESSION_SECRET", "y".repeat(40));
@@ -159,50 +160,20 @@ describe("session cookie", () => {
     expect((await getUser(reqWith(`${SESSION_COOKIE}=${fresh.value}`)))?.wallet).toBe(wallet);
   });
 
-  it("renews a session in use for 7 more days, never past 30 days from the sign-in", async () => {
+  it("ends 12 hours after the sign-in, however often it is used", async () => {
     let t = 1_000_000_000;
     authClock.now = () => t;
     const first = createSession(wallet);
-    const valueOf = (header: string) => header.split(";")[0]!.slice(SESSION_COOKIE.length + 1);
-    // Used again within the hour: nothing to renew.
-    t += 30 * 60_000;
-    expect(renewSessionCookie(await getUser(reqWith(`${SESSION_COOKIE}=${first.value}`)))).toBeNull();
-    // Idle 6 days, then used: renewed to 7 days from now.
-    t += 6 * DAY;
-    let cookie = first.value;
-    const renewed = renewSessionCookie(await getUser(reqWith(`${SESSION_COOKIE}=${cookie}`)));
-    expect(renewed).toContain(`Max-Age=${7 * 24 * 3600}`);
-    cookie = valueOf(renewed!);
-    // Past the first cookie's own expiry, the renewed one still works.
-    t += 3 * DAY;
-    expect((await getUser(reqWith(`${SESSION_COOKIE}=${cookie}`)))?.wallet).toBe(wallet);
-    // Kept in use every 5 days: it ends 30 days after the sign-in all the same.
-    for (let i = 0; i < 6; i++) {
-      const next = renewSessionCookie(await getUser(reqWith(`${SESSION_COOKIE}=${cookie}`)));
-      if (next) cookie = valueOf(next);
-      t += 5 * DAY;
+    const cookie = `${SESSION_COOKIE}=${first.value}`;
+    // Used every hour: never renewed past the 12 hours, and it keeps working until then.
+    for (let i = 0; i < 11; i++) {
+      t += HOUR;
+      expect(renewSessionCookie(await getUser(reqWith(cookie)))).toBeNull();
+      expect((await getUser(reqWith(cookie)))?.wallet).toBe(wallet);
     }
-    expect(t).toBeGreaterThan(1_000_000_000 + 30 * DAY);
-    expect(await getUser(reqWith(`${SESSION_COOKIE}=${cookie}`))).toBeNull();
-    // Idle longer than 7 days: expired, and nothing renews it.
-    t = 2_000_000_000;
-    const idle = createSession(wallet);
-    t += 7 * DAY + 1;
-    expect(await getUser(reqWith(`${SESSION_COOKIE}=${idle.value}`))).toBeNull();
+    t = 1_000_000_000 + HOUR12 + 1;
+    expect(await getUser(reqWith(cookie))).toBeNull();
     expect(renewSessionCookie(null)).toBeNull();
-  });
-
-  it("a cookie renewed after a sign-out elsewhere is still void", async () => {
-    let t = 1_000_000_000;
-    authClock.now = () => t;
-    const s = createSession(wallet);
-    t += 2 * 3600_000;
-    const renewed = renewSessionCookie(await getUser(reqWith(`${SESSION_COOKIE}=${s.value}`)));
-    t += 10;
-    await revokeSessions(wallet);
-    t += 10;
-    const value = renewed!.split(";")[0]!.slice(SESSION_COOKIE.length + 1);
-    expect(await getUser(reqWith(`${SESSION_COOKIE}=${value}`))).toBeNull();
   });
 
   it("refuses to seal with a short secret", () => {

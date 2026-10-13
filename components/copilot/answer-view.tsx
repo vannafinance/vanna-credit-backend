@@ -33,6 +33,7 @@
 
 import { useCallback, useState } from "react";
 import type { AnswerFact, AnswerVenue, StructuredAnswer } from "@/lib/copilot/answer-schema";
+import { PredictEventsList } from "./predict-events-list";
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 
@@ -614,6 +615,8 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
           </p>
         </div>
       ) : null}
+
+      {answer.list?.kind === "predict_markets" ? <PredictEventsList list={answer.list} /> : null}
 
       {answer.note ? (
         <p

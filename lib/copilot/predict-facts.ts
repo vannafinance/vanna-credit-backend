@@ -56,7 +56,6 @@ export async function readPredictMarkets(category: PredictCategory | null, query
     return unavailable(err, "the Predict markets");
   }
   const events = rows(raw.events);
-  const table = events.flatMap((e) => rows(e.outcomes).map((o) => outcomeRow(e, o)));
   const filter = [category, query ? `"${query}"` : null].filter(Boolean).join(", ");
   return {
     ok: true,
@@ -66,9 +65,8 @@ export async function readPredictMarkets(category: PredictCategory | null, query
         ? `${events.length} Predict event${events.length === 1 ? "" : "s"} listed${filter ? ` for ${filter}` : ""}.`
         : `No Predict event is listed${filter ? ` for ${filter}` : ""} right now.`,
       facts: [],
-      ...(table.length
-        ? { tables: [{ caption: table.length > MAX_TABLE_ROWS ? `First ${MAX_TABLE_ROWS} of ${table.length} outcomes` : undefined, columns: ["Event", "Outcome", "YES buy / sell", "NO buy / sell", "Tradable"], rows: table.slice(0, MAX_TABLE_ROWS) }] }
-        : {}),
+      // Every event, as the Predict page shows it: the card loads the page's own list with this filter.
+      ...(events.length ? { list: { kind: "predict_markets" as const, ...(category ? { category } : {}), ...(query ? { query } : {}) } } : {}),
       note: PREDICT_NOTE,
       venue: "predict",
     },

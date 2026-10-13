@@ -1,19 +1,85 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { zoneOf, zoneLabel } from "./health-dial";
 import type { ConversationSummary } from "@/lib/copilot/client/conversations";
+import { logoSrc } from "@/components/v3/icons";
 import { KAMINO_RECEIPTS } from "@/lib/solana/kamino";
-import { tokenIcon } from "@/lib/solana/tokens";
+import { findToken } from "@/lib/solana/tokens";
 
 /**
- * The website's icon for a position symbol: the registry token's own icon (any spelling), and for a Kamino receipt
- * (kSOL, kUSDC, ...) its underlying token's icon, as the Farm and Portfolio pages show it.
+ * The website's logo for a position symbol, from the same map its pages draw with (`logoSrc`): tokens in any
+ * spelling, CASH, vault shares (vbSOL… show their underlying, USD* / USD* Junior their own), and Kamino receipts
+ * (kSOL, kUSDC, …) their underlying. Null when the site has none.
  */
-function positionIcon(symbol: string): string {
+function positionLogo(symbol: string): string | null {
+  const exact = findToken(symbol)?.symbol ?? symbol;
   const receipt = KAMINO_RECEIPTS.find((r) => r.symbol.toLowerCase() === symbol.toLowerCase());
-  return tokenIcon(receipt ? receipt.underlying : symbol);
+  return logoSrc(exact) ?? (receipt ? logoSrc(receipt.underlying) : null);
+}
+
+/**
+ * What one round logo shows: the image when there is one, else `text` on a disc (the website's own fallbacks: a grey
+ * lettered disc for a token, the Predict page's short-code badge or coloured team initial for a market).
+ */
+export interface RailLogoSpec {
+  src: string | null;
+  text: string;
+  bg?: string;
+  fg?: string;
+}
+
+/** A token's logo: the site's image, else its first letter on grey (the website's `Icon` fallback). */
+function tokenLogo(symbol: string): RailLogoSpec {
+  return { src: positionLogo(symbol), text: symbol.replace(/[^A-Za-z0-9]/g, "").slice(0, 1).toUpperCase() || "?" };
+}
+
+/** One round logo. An image that fails to load falls back to the text disc, so a row never shows a broken image. */
+function RailLogo({ logo, style }: { logo: RailLogoSpec; style: CSSProperties }) {
+  // Remembers which URL failed, so a new URL for the same row is tried again.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const { src } = logo;
+  const base: CSSProperties = { position: "absolute", top: 0, width: 20, height: 20, borderRadius: 999, background: "#fff", ...style };
+  if (src && failedSrc !== src)
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt="" width={20} height={20} draggable={false} onError={() => setFailedSrc(src)} style={{ ...base, objectFit: "cover" }} />;
+  const text = logo.text.slice(0, 4);
+  return (
+    <span
+      aria-hidden
+      style={{
+        ...base,
+        display: "grid",
+        placeItems: "center",
+        background: logo.bg ?? "#999",
+        color: logo.fg ?? "#fff",
+        fontSize: text.length <= 1 ? 10 : text.length === 2 ? 8 : text.length === 3 ? 7 : 6,
+        fontWeight: 800,
+        letterSpacing: "-0.01em",
+        lineHeight: 1,
+        overflow: "hidden",
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+/** A row's logo, or two overlapped (a paired holding, or both teams of a game), the first one in front. */
+function PositionLogos({ p }: { p: RailPosition }) {
+  const logos = (p.logos?.length ? p.logos : [tokenLogo(p.symbol), ...(p.pairedSymbol ? [tokenLogo(p.pairedSymbol)] : [])]).slice(0, 2);
+  return (
+    <div style={{ position: "relative", width: logos.length > 1 ? 28 : 20, height: 20, flex: "none" }}>
+      {logos.map((logo, i) => (
+        <RailLogo
+          key={i}
+          logo={logo}
+          style={{ left: i * 8, zIndex: logos.length - i, boxShadow: logos.length > 1 ? "0 0 0 1.5px #fff" : undefined }}
+        />
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -43,8 +109,11 @@ export interface RailPosition {
   role: string;
   amount: string;
   usd: string;
-  /** An icon the symbol alone doesn't map to (a Phoenix perps market). */
-  icon?: string;
+  /**
+   * Logos the symbol alone doesn't map to, front one first: a perps market's asset, a prediction market's World
+   * artwork or its text badge (or both teams of a game), as the Predict page draws it.
+   */
+  logos?: RailLogoSpec[];
 }
 
 /** Down chevron for in-place sections (Margin Positions, Earn Positions, Recents). Open rotates it to point up. */
@@ -250,26 +319,9 @@ function PositionsSection({
           ) : (
             positions.map((p) => (
               <div key={`${p.role}:${p.symbol}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                {/* The app's own icon map, not the mock's assets — a token must not be
-                    drawn from two sources that can disagree about what it looks like. */}
-                <div style={{ position: "relative", width: p.pairedSymbol ? 26 : 20, height: 20, flex: "none" }}>
-                  <img
-                    src={p.icon ?? positionIcon(p.symbol)}
-                    alt=""
-                    width={20}
-                    height={20}
-                    style={{ position: "absolute", left: 0, top: 0, zIndex: 1, borderRadius: 999 }}
-                  />
-                  {p.pairedSymbol && (
-                    <img
-                      src={positionIcon(p.pairedSymbol)}
-                      alt=""
-                      width={20}
-                      height={20}
-                      style={{ position: "absolute", left: 8, top: 0, zIndex: 0, borderRadius: 999 }}
-                    />
-                  )}
-                </div>
+                {/* The website's own logo map (and World's artwork for a prediction market), never the mock's
+                    assets: a token must not be drawn from two sources that can disagree about what it looks like. */}
+                <PositionLogos p={p} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="truncate text-[14px] leading-[21px] font-semibold text-vgray-900">{p.symbol}</div>
                   <div className="truncate text-[12px] leading-[18px] text-vgray-500">{p.role}</div>
