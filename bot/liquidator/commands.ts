@@ -140,6 +140,33 @@ interface Update {
  * (old messages are not answered). One process per bot token may poll: with several shards, only
  * shard 0 runs this, and it answers for the accounts in its own shard.
  */
+/** When the poller last finished a getUpdates call (ms epoch); 0 before the first. */
+let lastPollAt = 0;
+export const lastTelegramPoll = () => lastPollAt;
+
+/**
+ * Keeps one command poller alive: if it hasn't finished a poll in `staleMs` (it stalled, or died),
+ * a fresh one replaces it. The stale one, if it ever wakes, stops at its next check of `generation`.
+ */
+export function superviseCommands(isStopping: () => boolean, staleMs = 120_000): void {
+  let generation = 0;
+  const start = () => {
+    const mine = ++generation;
+    lastPollAt = Date.now();
+    void pollCommands(() => isStopping() || mine !== generation).catch((error) =>
+      log("ERROR", "telegram commands stopped", { error: error instanceof Error ? error.message.slice(0, 200) : "Error" }),
+    );
+  };
+  start();
+  const watchdog = setInterval(() => {
+    if (isStopping()) return clearInterval(watchdog);
+    if (Date.now() - lastPollAt > staleMs) {
+      log("WARNING", "telegram command poller stalled, restarting it", { lastPollSecondsAgo: Math.round((Date.now() - lastPollAt) / 1000) });
+      start();
+    }
+  }, 30_000);
+}
+
 export async function pollCommands(isStopping: () => boolean): Promise<void> {
   if (!allowedChats.size) return;
   await telegramApi("setMyCommands", {
@@ -157,6 +184,8 @@ export async function pollCommands(isStopping: () => boolean): Promise<void> {
   let offset = pending?.length ? pending[pending.length - 1].update_id + 1 : 0;
   while (!isStopping()) {
     const updates = await telegramApi<Update[]>("getUpdates", { offset, timeout: 25, allowed_updates: ["message"] }, 35_000);
+    if (isStopping()) return;
+    lastPollAt = Date.now();
     if (!updates) {
       await new Promise((resolve) => setTimeout(resolve, 5_000));
       continue;

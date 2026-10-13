@@ -48,13 +48,28 @@ export function notify(html: string, opts: { key?: string; everyMs?: number } = 
 /** Queues an HTML message to one chat (alerts go to TELEGRAM_CHAT_ID; command replies to the asking chat). */
 export function reply(chat: string, html: string): Promise<void> {
   if (!token) return Promise.resolve();
-  queue = queue.then(() => send(chat, html)).then(() => new Promise((resolve) => setTimeout(resolve, MIN_GAP_MS)));
+  // A send that never settles must not block every message behind it: give up on it after 20 s.
+  const bounded = () => Promise.race([send(chat, html), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);
+  queue = queue.then(bounded).then(() => new Promise((resolve) => setTimeout(resolve, MIN_GAP_MS)));
   return queue;
 }
 
-/** Calls a Telegram Bot API method. Never throws with the URL: it holds the token. */
-export async function telegramApi<T>(method: string, body: Record<string, unknown>, timeoutMs = 10_000): Promise<T | null> {
-  if (!token) return null;
+/** Calls a Telegram Bot API method. Never throws with the URL: it holds the token. Never hangs: a call
+ * that has not settled `timeoutMs` + 5 s after it started resolves to null (a stalled socket once left
+ * the command poller waiting forever). */
+export function telegramApi<T>(method: string, body: Record<string, unknown>, timeoutMs = 10_000): Promise<T | null> {
+  if (!token) return Promise.resolve(null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      log("WARNING", `telegram ${method} timed out`, { afterMs: timeoutMs + 5_000 });
+      resolve(null);
+    }, timeoutMs + 5_000);
+  });
+  return Promise.race([callApi<T>(method, body, timeoutMs), deadline]).finally(() => clearTimeout(timer));
+}
+
+async function callApi<T>(method: string, body: Record<string, unknown>, timeoutMs: number): Promise<T | null> {
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",

@@ -31,7 +31,7 @@ import { HOOKS } from "./hooks";
 import { log } from "./log";
 import { telegramEnabled } from "./notify";
 import { shardOf } from "./shard";
-import { pollCommands } from "./commands";
+import { lastTelegramPoll, superviseCommands } from "./commands";
 import { topUpOnFork } from "./fork-faucet";
 import { liquidateAccount } from "./engine";
 import { dueMargins, prune, record, trackedRows } from "./scheduler";
@@ -96,6 +96,7 @@ async function loop(keypair: Keypair, strategies: LiquidationStrategy[]) {
     shard: `${config.shardIndex}/${config.shardCount}`,
     inShard: mine.length,
     readThisLoop: due.length,
+    telegramPollSecondsAgo: telegramEnabled && lastTelegramPoll() ? Math.round((Date.now() - lastTelegramPoll()) / 1000) : null,
     liquidatable: liquidatable.length,
     coverage: coverage(),
     wallet: held,
@@ -130,7 +131,7 @@ async function main() {
   }
   // Read-only Telegram commands, answered from the last loop's snapshot. One poller per bot token.
   if (telegramEnabled && config.shardIndex === 0) {
-    void pollCommands(() => stopping).catch((error) => log("ERROR", "telegram commands stopped", { error: describeError(error).slice(0, 300) }));
+    superviseCommands(() => stopping);
   }
   while (!stopping) {
     try {
