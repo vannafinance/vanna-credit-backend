@@ -84,7 +84,11 @@ flowchart LR
 2. `lib/copilot/auth.ts` (`getUser`) reads the signed session cookie created at Sign-In-With-Solana
    (`/api/copilot/auth/nonce` and `/verify`): the wallet signed a login message, so the session's wallet is the user. Signing out (`/api/copilot/auth/logout`)
    also records a per-wallet cut-off in the store, so every earlier session for that wallet stops working, not just
-   this browser's cookie.
+   this browser's cookie. A session lasts 7 days without use; opening the Copilot (`/api/copilot/auth/session`) or a
+   chat turn renews it (`renewSessionCookie`, at most hourly), never past 30 days from the wallet's signature
+   (`config.ts` `sessionTtlMs`, `sessionMaxMs`). A renewed cookie keeps the sign-in time, so a sign-out still voids it.
+   The page offers the sign-in card before anything is typed, and says "Connecting…" while a remembered wallet
+   reconnects (up to 5 s) instead of offering "Connect wallet".
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
    (last 12 turns).
 4. `domain-firewall.ts` (`evaluateFirewall`) refuses, before any model call: liquidating someone, admin and protocol
@@ -582,6 +586,7 @@ environment.
   the funding transaction (`summary.prerequisite_kind = "phoenix_fund"`). Once it confirms, the step is marked `funded` and
   rebuilt: the order is sized from the USDC now in Phoenix and moves nothing more (`workflow.ts`, `workflow/steps.ts`).
 - **Slow fork RPC reads** get a 30 s timeout, with a body-read timeout retried once.
+- **Shared read layer** (`investigation/read-cache.ts`, under every model read `executeRead`): a read already running for the same wallet + tool + arguments is joined, never started again, so a read that outlives its time limit is waited for, not restarted, when asked again; a success is reused for 20 s; failures are never kept; everything kept for a wallet is dropped when one of its transactions is submitted or confirmed, or the test faucet adds CASH. Plan sizing and transaction builds always read live.
 - **First call on a new instance** can fail while VPC egress and NAT come up; the WorkOS token request is retried up
   to 3 times.
 - Raw runtime errors (`InstructionError … Custom(3005)`) are shown as plain sentences, and Kamino receipts are named

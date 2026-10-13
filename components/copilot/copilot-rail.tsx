@@ -152,10 +152,11 @@ export function CopilotRailBody({
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const [positionsOpen, setPositionsOpen] = useState(true);
-  const [earnOpen, setEarnOpen] = useState(true);
-  const [perpsOpen, setPerpsOpen] = useState(true);
-  const [predictOpen, setPredictOpen] = useState(true);
+  // Position lists start closed on every visit; the user opens the one they want to see.
+  const [positionsOpen, setPositionsOpen] = useState(false);
+  const [earnOpen, setEarnOpen] = useState(false);
+  const [perpsOpen, setPerpsOpen] = useState(false);
+  const [predictOpen, setPredictOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(true);
 
   if (!hasWallet) {

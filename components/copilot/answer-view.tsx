@@ -348,7 +348,10 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
                               fontVariantNumeric: "tabular-nums",
                               color: "var(--cp-g900)",
                               borderBottom: i === tbl.rows.length - 1 ? "none" : "1px solid var(--cp-g100)",
-                              whiteSpace: j === 1 ? "normal" : "nowrap",
+                              // Every cell wraps at spaces, so a wide table fits the answer's width instead of
+                              // scrolling sideways inside a box; a figure ("$1,234.56") has no space and stays whole.
+                              whiteSpace: "normal",
+                              overflowWrap: "break-word",
                             }}
                           >
                             {cell}
@@ -550,8 +553,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
         Sixteen addresses is the payload this card was drawn for, and the design's answer to
         "sixteen identical rows" is density plus alignment rather than grouping: every label
         sits in a fixed 172px column so the addresses all start at the same x and the eye can
-        run straight down them, and the list caps at 340px so a long set scrolls inside the
-        card instead of pushing the rest of the turn off screen.
+        run straight down them. The list grows with its rows: no inner scroll box (the page scrolls).
 
         The label truncates with an ellipsis and keeps its full text in `title`. That is
         deliberately NOT the old "1fr auto" grid that shattered "REGISTRY" into "REG / IST /
@@ -561,8 +563,8 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
       {identifiers.length > 0 ? (
         <div>
           <div
-            className="mt-[18px] overflow-y-auto"
-            style={{ border: "1px solid var(--cp-g100)", borderRadius: 8, maxHeight: 340 }}
+            className="mt-[18px]"
+            style={{ border: "1px solid var(--cp-g100)", borderRadius: 8 }}
           >
             {identifiers.map((f, i) => (
               <div

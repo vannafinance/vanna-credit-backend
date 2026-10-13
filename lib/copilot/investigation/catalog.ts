@@ -14,6 +14,7 @@ import { loadFreshPrice, loadHealth, runRead, type ReadCtx } from "../mcp-facts"
 import { DEFAULT_SLIPPAGE_BPS, maxLeverage, sizeLever } from "../risk";
 import type { LlmFunctionDecl } from "../vertex";
 import { SIM_OPS, simulate, simulateArgsProblem } from "./simulate";
+import { sharedRead } from "./read-cache";
 
 const ASSETS = [...PRODUCT_ASSETS] as string[];
 const LEND_ASSETS = [...LEND_BORROW_ASSETS] as string[];
@@ -283,8 +284,15 @@ async function earnBalances(assets: Asset[], ctx: ReadCtx): Promise<ReadOutput> 
   return { ok: settled.some((s) => s.status === "fulfilled"), result: { pools } };
 }
 
-/** Run one read the model asked for. Unknown tools and bad arguments come back as an error the model can see. */
-export async function executeRead(tool: string, args: Record<string, unknown>, ctx: ReadCtx): Promise<ReadOutput> {
+/**
+ * Run one read the model asked for. Unknown tools and bad arguments come back as an error the model can see. Every read
+ * goes through the shared layer (`read-cache.ts`): one already running is joined, a recent success is reused.
+ */
+export function executeRead(tool: string, args: Record<string, unknown>, ctx: ReadCtx): Promise<ReadOutput> {
+  return sharedRead(ctx.user.wallet, tool, args, () => readNow(tool, args, ctx));
+}
+
+async function readNow(tool: string, args: Record<string, unknown>, ctx: ReadCtx): Promise<ReadOutput> {
   switch (tool) {
     case "get_account_health":
       return viaRead({ kind: "health" }, ctx);

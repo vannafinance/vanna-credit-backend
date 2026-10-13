@@ -99,8 +99,19 @@ export const copilotConfig = {
     }
     return this.isProduction ? "" : "localhost:3000";
   },
+  /**
+   * A sign-in lasts this long without use; any use (opening the Copilot, a chat turn) renews it, never past
+   * `sessionMaxMs` from the wallet's signature. Sign-out still voids it at once, on every device.
+   */
   get sessionTtlMs(): number {
-    return 12 * 60 * 60 * 1000;
+    return 7 * 24 * 60 * 60 * 1000;
+  },
+  get sessionMaxMs(): number {
+    return 30 * 24 * 60 * 60 * 1000;
+  },
+  /** A renewal re-issues the cookie at most this often, not on every request. */
+  get sessionRenewAfterMs(): number {
+    return 60 * 60 * 1000;
   },
   get nonceTtlMs(): number {
     return 5 * 60 * 1000;

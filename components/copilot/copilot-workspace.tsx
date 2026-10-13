@@ -1,17 +1,16 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useWallet as useAdapterWallet } from "@solana/wallet-adapter-react";
 import { useWallet } from "@/hooks/use-wallet";
 import { useMarginAccountInfoStore } from "@/store/margin-account-info-store";
 import { HEALTH_FACTOR_INFINITY_SENTINEL } from "@/lib/margin-health";
-import { NETWORK_LABEL } from "@/lib/solana/config";
 import { useCopilot } from "@/lib/copilot/client/use-copilot";
 import { useUserPositions } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { usePerpsView } from "@/hooks/use-perps";
 import { usePredictPositions } from "@/hooks/use-predict";
 import { PERP_MARKETS } from "@/lib/solana/phoenix";
-import type { BrainHealth } from "@/lib/copilot/types";
 import { CopilotShell } from "./copilot-shell";
 import {
   CopilotRailBody,
@@ -21,6 +20,7 @@ import {
   type RailStatusChip,
 } from "./copilot-rail";
 import { AssistantTurn } from "./assistant-turn";
+import { NeedsLoginCard } from "./needs-login-card";
 import { UserBubble, WorkingRow } from "./chat-message";
 
 /**
@@ -40,18 +40,30 @@ function shortAddress(a: string): string {
   return a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a;
 }
 
-type ServerState = "checking" | "ok" | "degraded" | "unreachable";
+/**
+ * How long a remembered wallet may take to reconnect on page load before the sign-in card offers "Connect wallet"
+ * instead of waiting (the wallet may be locked, or the user declined it).
+ */
+const RECONNECT_GRACE_MS = 5_000;
 
 /** Eight lines of the prompt box (21px line height) plus its 10px top and bottom padding. */
 const COMPOSER_MAX_HEIGHT = 8 * 21 + 20;
 export function CopilotWorkspace() {
   const { address, walletName, connectWallet } = useWallet();
+  const { connecting } = useAdapterWallet();
   const copilot = useCopilot();
+  // A wallet the site remembers reconnects by itself a moment after the page loads: until then (or the grace period
+  // ends) the sign-in card says it is connecting, never "Connect wallet" for a wallet that is about to be connected.
+  const [graceOver, setGraceOver] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setGraceOver(true), RECONNECT_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const walletReconnecting = !address && (connecting || (walletName != null && !graceOver));
   const { session, turns, runs, busy } = copilot;
 
   const [input, setInput] = useState("");
   const [railCollapsed, setRailCollapsed] = useState(false);
-  const [server, setServer] = useState<ServerState>("checking");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   // The prompt box grows with what is typed, like any chat composer, up to about eight lines; only a longer prompt
@@ -64,18 +76,6 @@ export function CopilotWorkspace() {
     el.style.height = `${Math.min(full, COMPOSER_MAX_HEIGHT)}px`;
     el.style.overflowY = full > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
   }, [input]);
-
-  // Server status for the rail chip. No probe: the route's cheap form only reports configuration.
-  useEffect(() => {
-    let current = true;
-    fetch("/api/copilot/health", { cache: "no-store" })
-      .then((res) => (res.ok ? (res.json() as Promise<BrainHealth>) : Promise.reject(new Error(String(res.status)))))
-      .then((health) => current && setServer(health.status === "ok" ? "ok" : "degraded"))
-      .catch(() => current && setServer("unreachable"));
-    return () => {
-      current = false;
-    };
-  }, [session.state]);
 
   // The rail shows the account the app already reads from chain; it is never the Copilot's own copy.
   const hasMarginAccount = useMarginAccountInfoStore((s) => s.hasMarginAccount);
@@ -167,10 +167,8 @@ export function CopilotWorkspace() {
   );
 
   const chips: RailStatusChip[] = useMemo(() => {
-    const list: RailStatusChip[] = [{ label: NETWORK_LABEL, tone: "muted" }];
-    if (server === "unreachable") list.push({ label: "Server unreachable", tone: "bad", title: "The Copilot API did not answer." });
-    else if (server === "degraded") list.push({ label: "Server degraded", tone: "warn", title: "The Copilot API is up but reports a problem." });
-    else if (server === "ok") list.push({ label: "Server connected", tone: "ok" });
+    // Only the sign-in state: the network and server chips were noise (an unreachable server shows on the page).
+    const list: RailStatusChip[] = [];
     if (session.state === "signed_in") {
       const mismatch = address != null && address !== session.wallet;
       list.push({
@@ -183,7 +181,7 @@ export function CopilotWorkspace() {
       list.push({ label: "Not signed in", tone: "warn" });
     }
     return list;
-  }, [server, session, address, copilot]);
+  }, [session, address, copilot]);
 
   const stageEmpty = turns.length === 0;
   const lastAssistantIndex = turns.reduce((acc, t, i) => (t.role === "assistant" ? i : acc), -1);
@@ -208,6 +206,7 @@ export function CopilotWorkspace() {
 
   const login = {
     walletConnected: Boolean(address),
+    walletConnecting: walletReconnecting,
     walletName,
     busy: copilot.signInBusy,
     error: copilot.signInError,
@@ -298,10 +297,11 @@ export function CopilotWorkspace() {
                 <div className="mt-1.5 text-[16px] leading-[24px] text-vgray-500">
                   Read the book, size a plan, or run a change.
                 </div>
+                {/* Signed out: the sign-in card is offered before anything is typed, not only after a first message. */}
                 {session.state === "signed_out" && (
-                  <p className="mt-3 text-[13px] leading-5 text-vgray-500">
-                    You are not signed in. Sign in with your wallet to ask questions and run plans.
-                  </p>
+                  <div className="mt-4 text-left">
+                    <NeedsLoginCard {...login} />
+                  </div>
                 )}
                 {session.state === "unreachable" && (
                   <p role="alert" className="mt-3 text-[13px] leading-5 text-imperial-500">

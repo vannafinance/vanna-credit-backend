@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authed, readJson } from "@/lib/copilot/workflow/http";
 import { submitWorkflow } from "@/lib/copilot/workflow";
+import { forgetWallet } from "@/lib/copilot/investigation/read-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const body = await readJson(req);
     const signedTxs = Array.isArray(body.signed_txs) ? body.signed_txs.filter((x: unknown): x is string => typeof x === "string").slice(0, 8) : undefined;
     const res = await submitWorkflow(id, { step_n: Number(body.step_n), signed_tx: typeof body.signed_tx === "string" ? body.signed_tx : "", ...(signedTxs ? { signed_txs: signedTxs } : {}) }, user);
+    forgetWallet(user.wallet); // sent: what the next answer reads must be read again
     return NextResponse.json(res);
   });
 }

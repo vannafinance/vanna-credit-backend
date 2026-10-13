@@ -409,7 +409,11 @@ export function useCopilot() {
     try {
       const res = await signInWithWallet({ wallet, signMessage: adapter.signMessage });
       if (!res.authenticated || !res.wallet) throw new Error("The server did not accept the signature.");
-      setSession({ state: "signed_in", wallet: res.wallet, expiresAt: res.expires_at ?? null });
+      const signedIn: SessionStatus = { state: "signed_in", wallet: res.wallet, expiresAt: res.expires_at ?? null };
+      setSession(signedIn);
+      // The retried message below is sent before React re-renders: without this it would still read "signed out" and
+      // skip the model's progress lines for that first message (the reply itself always came from the model).
+      sessionRef.current = signedIn;
       const retry = retryRef.current;
       retryRef.current = null;
       if (retry) void send(retry.text, { clarify: retry.clarify, replaceLast: true });

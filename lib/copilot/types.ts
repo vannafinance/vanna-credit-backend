@@ -23,6 +23,9 @@ export interface CopilotUser {
   subject: string;
   /** Session expiry, epoch ms. */
   expiresAt: number;
+  /** When this cookie was issued, and when the wallet signed the sign-in message (renewals keep it), epoch ms. */
+  issuedAt?: number;
+  signedInAt?: number;
 }
 
 // ── Chat request ─────────────────────────────────────────────────────────────

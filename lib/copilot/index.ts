@@ -47,6 +47,7 @@ import { sizeBorrowAgainst, sizeLevBorrow } from "./workflow/leverage-borrow";
 import { buildStepTx, preflightStep, resolvePercent, walletSpendable } from "./workflow/steps";
 import { randomUUID } from "node:crypto";
 import type { CopilotUser } from "./types";
+import { forgetWallet } from "./investigation/read-cache";
 
 export { WorkflowError };
 
@@ -494,6 +495,7 @@ async function predictFaucet(w: WriteIntent, t: Turn): Promise<{ ok: true; note:
   const amount = w.amount?.kind === "exact" ? w.amount.value : null;
   try {
     const r = await mcp.predictFaucet(t.user.wallet, amount, t.ctx);
+    forgetWallet(t.user.wallet); // the wallet's CASH just changed
     return { ok: true, note: `Added ${String(r.added_cash ?? amount ?? 100)} test CASH to your wallet; it now holds ${String(r.cash)} CASH.` };
   } catch (err) {
     return { ok: false, message: `I couldn't add test CASH: ${humanizeMcpError(err).message}` };
