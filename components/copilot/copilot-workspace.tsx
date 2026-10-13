@@ -9,13 +9,18 @@ import { useCopilot } from "@/lib/copilot/client/use-copilot";
 import { useUserPositions } from "@/hooks/use-earn";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { usePerpsView } from "@/hooks/use-perps";
-import { usePredictPositions } from "@/hooks/use-predict";
+import { usePredictEvents, usePredictPositions } from "@/hooks/use-predict";
 import { PERP_MARKETS } from "@/lib/solana/phoenix";
+import { logoSrc } from "@/components/v3/icons";
+import { isDraw, mainOuts } from "@/lib/predict/view";
+import { partyCol } from "@/components/predict/ui";
+import type { PredictEvent } from "@/lib/predict/types";
 import { CopilotShell } from "./copilot-shell";
 import {
   CopilotRailBody,
   CopilotRailMini,
   CopilotRailTop,
+  type RailLogoSpec,
   type RailPosition,
   type RailStatusChip,
 } from "./copilot-rail";
@@ -38,6 +43,27 @@ const usd = (n: number) =>
 
 function shortAddress(a: string): string {
   return a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a;
+}
+
+/** The Predict page's badge colours (predict-v3.css `--pd-ava` / `--pd-accent`, light theme) and team-initial ink. */
+const PD_BADGE = { bg: "#eae2fb", fg: "#6635d1" };
+
+/**
+ * A prediction market's logo as the Predict page draws it (`EvLogo`): both teams for a two-team game (World's team
+ * artwork, else the team's initial on its party colour), else World's event artwork, else the event's short code.
+ * An event missing from the list shows the first letters of its name, as the page's positions table does.
+ */
+function predictLogos(e: PredictEvent | undefined, eventName: string): RailLogoSpec[] {
+  if (!e) return [{ src: null, text: eventName.slice(0, 3).toUpperCase(), ...PD_BADGE }];
+  const teams = mainOuts(e).filter((o) => !isDraw(o));
+  if (e.type === "match" && teams.length === 2)
+    return teams.map((o) => ({
+      src: o.image && !/\/img\//.test(o.image) ? o.image : null,
+      text: o.name.slice(0, 1).toUpperCase(),
+      bg: partyCol(e, o),
+      fg: "#fff",
+    }));
+  return [{ src: e.image, text: e.ic, ...PD_BADGE }];
 }
 
 /**
@@ -141,7 +167,8 @@ export function CopilotWorkspace() {
         const pnl = `${p.pnlUsd < 0 ? "-" : "+"}${usd(Math.abs(p.pnlUsd))}`;
         return {
           symbol: p.marketName,
-          icon: PERP_MARKETS.find((m) => m.key === p.market)?.icon,
+          // The Perps page's market logo: the asset's site logo, else the market's own icon.
+          logos: [{ src: logoSrc(p.market) ?? PERP_MARKETS.find((m) => m.key === p.market)?.icon ?? null, text: p.market.slice(0, 1) }],
           role: `Perp · ${p.side === "long" ? "Long" : "Short"} ${p.leverage.toFixed(1)}x`,
           amount: p.sizeTokens.toLocaleString(undefined, { maximumFractionDigits: 4 }),
           usd: `${usd(p.sizeUsd)} · ${pnl}`,
@@ -152,36 +179,42 @@ export function CopilotWorkspace() {
 
   // Predict positions (World.xyz prediction markets): the same read the Predict page polls; wallet-only, so they sit
   // apart from the margin account and never touch the health factor.
+  // Each row carries its market's logo as the Predict page draws it (`predictLogos`), from the shared events list.
   const { data: predictData } = usePredictPositions(address);
-  const predictPositions: RailPosition[] = useMemo(
-    () =>
-      (predictData?.positions ?? [])
+  const { data: predictEvents } = usePredictEvents();
+  const predictPositions: RailPosition[] = useMemo(() => {
+    const byId = new Map<string, PredictEvent>();
+    for (const e of predictEvents ?? []) {
+      byId.set(e.id, e);
+      for (const o of e.outs) if (o.marketId && !byId.has(o.marketId)) byId.set(o.marketId, e);
+    }
+    return (predictData?.positions ?? [])
         .filter((p) => p.shares > 0)
         .map((p) => ({
+          logos: predictLogos(byId.get(p.eventId) ?? byId.get(p.marketId), p.event),
           symbol: `${p.outcome} ${p.label}`,
           role: `Predict · ${p.event}`,
           amount: `${p.shares.toLocaleString(undefined, { maximumFractionDigits: 2 })} shares`,
           usd: `${usd(p.value)} · ${p.pnl < 0 ? "-" : "+"}${usd(Math.abs(p.pnl))}`,
-        })),
-    [predictData],
-  );
+        }));
+  }, [predictData, predictEvents]);
 
   const chips: RailStatusChip[] = useMemo(() => {
-    // Only the sign-in state: the network and server chips were noise (an unreachable server shows on the page).
+    // Only the sign-in state, as a status, never a button: the network and server chips were noise (an unreachable
+    // server shows on the page), and a one-click sign-out was too easy to hit. A sign-in ends by itself after 12 hours.
     const list: RailStatusChip[] = [];
     if (session.state === "signed_in") {
       const mismatch = address != null && address !== session.wallet;
       list.push({
         label: mismatch ? "Wallet differs from sign-in" : `Signed in · ${shortAddress(session.wallet)}`,
         tone: mismatch ? "warn" : "ok",
-        title: mismatch ? "The connected wallet is not the one you signed in with. Click to sign out." : "Click to sign out",
-        onClick: () => void copilot.signOut(),
+        title: mismatch ? "The connected wallet is not the one you signed in with." : "Signed in to the Copilot",
       });
     } else if (session.state === "signed_out") {
-      list.push({ label: "Not signed in", tone: "warn" });
+      list.push({ label: "Not signed in · Sign in to use the Copilot", tone: "warn" });
     }
     return list;
-  }, [session, address, copilot]);
+  }, [session, address]);
 
   const stageEmpty = turns.length === 0;
   const lastAssistantIndex = turns.reduce((acc, t, i) => (t.role === "assistant" ? i : acc), -1);

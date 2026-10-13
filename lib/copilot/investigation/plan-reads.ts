@@ -18,7 +18,7 @@ import { debugMcp } from "../debug";
 import { getLlm } from "../vertex";
 import { calculate, CALCULATE_TOOL } from "./calculate";
 import { executeRead, SLOW_READS, type ReadOutput } from "./catalog";
-import { DECISION_TOOLS, parseDecision } from "./decision";
+import { DECISION_TOOLS, parseDecision, predictListFilter } from "./decision";
 import type { Observation, Rejection } from "./types";
 
 const READ_TIMEOUT_MS = 15_000;
@@ -74,7 +74,7 @@ function prompt(leg: ReadLeg, evidence: Observation[], rejections: Rejection[]):
 }
 
 /** The readers' own wording, used when the model can't write the answer. Nothing is computed. */
-function fallbackAnswer(leg: ReadLeg, outputs: Array<{ tool: string; out: ReadOutput | null }>): StructuredAnswer {
+function fallbackAnswer(leg: ReadLeg, outputs: Array<{ tool: string; args: Record<string, unknown>; out: ReadOutput | null }>): StructuredAnswer {
   const headlines: string[] = [];
   const facts: AnswerFact[] = [];
   const notes: string[] = [];
@@ -99,7 +99,10 @@ function fallbackAnswer(leg: ReadLeg, outputs: Array<{ tool: string; out: ReadOu
     }
   }
   const failed = outputs.filter((o) => !o.out || !o.out.ok).length;
+  // A Predict market list is shown whole, from the website's own list (answer-schema `list`), never as picked rows.
+  const markets = outputs.find((o) => o.tool === "get_predict_markets" && o.out?.ok);
   return {
+    ...(markets ? { list: { kind: "predict_markets" as const, ...predictListFilter(markets.args) } } : {}),
     headline: headlines.join(" ") || (failed === outputs.length ? `I couldn't read this right now: ${leg.label || leg.question}.` : leg.label || "Here is what I read."),
     facts: facts.slice(0, 12),
     ...(notes.length ? { note: notes.join(" ").slice(0, 400) } : failed && failed < outputs.length ? { note: "Part of this couldn't be read right now." } : {}),

@@ -8,7 +8,7 @@
  * (`intent.ts`), and an answer is refused if it contains a figure that is not in the evidence.
  */
 
-import type { AnswerFact, AnswerVenue, StructuredAnswer } from "../answer-schema";
+import type { AnswerFact, AnswerList, AnswerVenue, StructuredAnswer } from "../answer-schema";
 import { copilotConfig } from "../config";
 import { detectConditional } from "../conditional";
 import {
@@ -23,6 +23,7 @@ import {
   PERP_MARKETS,
   PERP_OPS,
   PREDICT_LEG_OPS,
+  PREDICT_CATEGORIES,
   PREDICT_OPS,
   VAULT_IDS,
   VAULT_OPS,
@@ -112,6 +113,11 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
         facts: { type: "ARRAY", items: { type: "OBJECT", properties: { label: { type: "STRING" }, value: { type: "STRING" } }, required: ["label", "value"] }, description: "Supporting figures, at most 12." },
         note: { type: "STRING", description: "Optional context or trade-off, at most two sentences. No price predictions." },
         venue: { type: "STRING", enum: VENUES },
+        show_list: {
+          type: "STRING",
+          enum: ["predict_markets"],
+          description: "Show a whole list on the card, every item exactly as the website's page shows it, instead of picking rows into facts. predict_markets: the events of your get_predict_markets read (same category / query), each with its outcomes and prices. Use it whenever the user asks to see, browse or list markets/events; then keep facts for anything else they asked (e.g. their CASH), never a copy of the list.",
+        },
       },
       required: ["headline"],
     },
@@ -453,6 +459,13 @@ function actionsToIntent(raw: unknown, ctx: DecisionContext, requireQuotes = tru
   return { ok: true, intent };
 }
 
+/** The category / search of a get_predict_markets read, as the read itself used them (catalog.ts). */
+export function predictListFilter(args: Record<string, unknown>): { category?: string; query?: string } {
+  const category = (PREDICT_CATEGORIES as readonly string[]).includes(String(args.category)) ? String(args.category) : undefined;
+  const query = typeof args.query === "string" && args.query.trim() ? args.query.trim().slice(0, 80) : undefined;
+  return { ...(category ? { category } : {}), ...(query ? { query } : {}) };
+}
+
 export function parseDecision(name: string, args: Record<string, unknown>, ctx: DecisionContext): ParsedDecision {
   const sources = groundingSources(ctx);
   switch (name) {
@@ -468,7 +481,14 @@ export function parseDecision(name: string, args: Record<string, unknown>, ctx: 
         return no("the answer contains a figure that is not in any tool result. Use only figures exactly as the tools returned them, or read the missing figure first");
       }
       const venue = VENUES.includes(args.venue as AnswerVenue) ? (args.venue as AnswerVenue) : "none";
-      const answer: StructuredAnswer = { headline: plain(headline), facts, ...(note ? { note: plain(note) } : {}), venue };
+      let list: AnswerList | undefined;
+      if (args.show_list === "predict_markets") {
+        // The list shown is the one read: the last successful get_predict_markets of this request, with its filter.
+        const read = [...ctx.evidence].reverse().find((o) => o.ok && o.tool === "get_predict_markets");
+        if (!read) return no("show_list predict_markets needs a get_predict_markets read in the evidence first");
+        list = { kind: "predict_markets", ...predictListFilter(read.args) };
+      }
+      const answer: StructuredAnswer = { headline: plain(headline), facts, ...(note ? { note: plain(note) } : {}), venue: list ? "predict" : venue, ...(list ? { list } : {}) };
       return { ok: true, name, outcome: { kind: "answer", answer } };
     }
     case "ask_user": {
