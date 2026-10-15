@@ -115,9 +115,11 @@ interface RawTx {
 const MAX_SIGNATURES = 200;
 const CONCURRENCY = 6;
 
-// Finalized transaction logs are immutable. Bound memory and lifetime (the fork can restart).
+// Finalized transaction logs are immutable: keep them for hours (least recently used dropped first)
+// instead of re-downloading up to 200 of them every few minutes. The expiry only guards against a
+// fork reset reusing a signature.
 const transactionCache = new Map<string, { at: number; tx: RawTx | null }>();
-const HISTORY_CACHE_MS = 5 * 60_000;
+const HISTORY_CACHE_MS = 6 * 60 * 60_000;
 const HISTORY_CACHE_LIMIT = 1_000;
 const historyReads = singleFlight<string, { txs: RawTx[]; complete: boolean; scanned: number }>();
 
@@ -135,8 +137,11 @@ async function readRecentVannaTransactions(address: PublicKey, limit: number) {
     const batch = await Promise.all(
       ok.slice(i, i + CONCURRENCY).map(async (s) => {
         const cached = transactionCache.get(s.signature);
-        if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) return cached.tx;
         transactionCache.delete(s.signature);
+        if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) {
+          transactionCache.set(s.signature, cached); // most recently used last
+          return cached.tx;
+        }
         const tx = await connection.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
         // RPC indexing may lag confirmation. Retry missing transactions next refresh and do
         // not report a complete cost basis while any transaction is unavailable.

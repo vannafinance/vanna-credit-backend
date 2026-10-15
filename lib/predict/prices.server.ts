@@ -210,10 +210,18 @@ interface QuoteState {
   /** World market → YES mint (to file a read under the mint getMarketPrices is called with). */
   yesMintOf: Map<string, string>;
   indexedAt: number;
+  /** When the last oracle index scan failed (0 = never): retried at most once a minute. */
+  indexFailedAt: number;
+  /** Markets waiting for the next quote read. */
+  wanted: Set<string>;
   pending: Promise<void> | null;
 }
 const gq = globalThis as unknown as { __predictQuotes?: QuoteState };
-const quotes: QuoteState = (gq.__predictQuotes ??= { oracleOf: new Map(), byYesMint: new Map(), yesMintOf: new Map(), indexedAt: 0, pending: null });
+const quotes: QuoteState = (gq.__predictQuotes ??= { oracleOf: new Map(), byYesMint: new Map(), yesMintOf: new Map(), indexedAt: 0, indexFailedAt: 0, wanted: new Set(), pending: null });
+quotes.wanted ??= new Set(); // instances created before these fields existed (dev hot reload)
+quotes.indexFailedAt ??= 0;
+/** After a failed oracle index scan, wait this long before scanning again. */
+const INDEX_RETRY_MS = 60_000;
 
 /** A quote this young is served as is; older ones are re-read (one getMultipleAccounts per 100). */
 const QUOTE_TTL_MS = 30_000;
@@ -267,17 +275,33 @@ export function refreshQuotes(markets: Array<{ id: string; yesMint: string }>): 
   const now = Date.now();
   const stale = markets.filter((m) => now - (quotes.byYesMint.get(m.yesMint)?.readAt ?? 0) > QUOTE_TTL_MS).map((m) => m.id);
   if (!stale.length) return quotes.pending ?? Promise.resolve();
+  for (const m of stale) quotes.wanted.add(m);
+  // One read at a time: markets asked for meanwhile join the next round instead of starting a
+  // parallel chain (each round re-checks what is still stale).
+  if (quotes.pending) return quotes.pending;
   const run = async () => {
-    try {
-      const unindexed = stale.some((m) => !quotes.oracleOf.has(m));
-      if (quotes.indexedAt === 0 || (unindexed && Date.now() - quotes.indexedAt > ORACLE_INDEX_TTL_MS)) await indexOracles();
-      const due = stale.filter((m) => Date.now() - (quotes.byYesMint.get(quotes.yesMintOf.get(m)!)?.readAt ?? 0) > QUOTE_TTL_MS);
-      await readOracles(due);
-    } catch (error) {
-      console.warn("Predict live quotes unavailable:", error instanceof Error ? error.message : error);
+    while (quotes.wanted.size) {
+      const batch = [...quotes.wanted];
+      quotes.wanted.clear();
+      try {
+        const unindexed = batch.some((m) => !quotes.oracleOf.has(m));
+        const indexDue = quotes.indexedAt === 0 || (unindexed && Date.now() - quotes.indexedAt > ORACLE_INDEX_TTL_MS);
+        if (indexDue && Date.now() - quotes.indexFailedAt > INDEX_RETRY_MS) {
+          try {
+            await indexOracles();
+          } catch (error) {
+            quotes.indexFailedAt = Date.now(); // the ~150 KB program scan is not retried on every call
+            throw error;
+          }
+        }
+        const due = batch.filter((m) => Date.now() - (quotes.byYesMint.get(quotes.yesMintOf.get(m)!)?.readAt ?? 0) > QUOTE_TTL_MS);
+        await readOracles(due);
+      } catch (error) {
+        console.warn("Predict live quotes unavailable:", error instanceof Error ? error.message : error);
+      }
     }
   };
-  quotes.pending = (quotes.pending ?? Promise.resolve()).then(run).finally(() => (quotes.pending = null));
+  quotes.pending = run().finally(() => (quotes.pending = null));
   return quotes.pending;
 }
 

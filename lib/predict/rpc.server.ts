@@ -20,11 +20,22 @@ const pool = (g.__predictRpc ??= new Map());
 function conn(url: string): Connection {
   let c = pool.get(url);
   if (!c) {
-    c = new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true });
+    c = new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true, fetch: timedFetch });
     pool.set(url, c);
   }
   return c;
 }
+
+/**
+ * Every mainnet request is bounded: a stalled public endpoint would otherwise hold the call (and the
+ * shared single flights waiting on it) for the runtime's ~5 min default, and withFallback would never
+ * reach the next endpoint.
+ */
+const MAINNET_TIMEOUT_MS = 10_000;
+const timedFetch: typeof fetch = (input, init) => {
+  const timeout = AbortSignal.timeout(MAINNET_TIMEOUT_MS);
+  return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout });
+};
 
 const unique = (urls: (string | undefined)[]) => [...new Set(urls.filter((u): u is string => Boolean(u)))];
 

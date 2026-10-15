@@ -4,6 +4,7 @@
  * wallet's reconstructed trades, and the summary / vault figures in the UI model's shapes.
  */
 import { PublicKey } from "@solana/web3.js";
+import type { ReadScope } from "@/lib/async";
 import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getConnection } from "@/lib/solana/connection";
 import { fetchPoolStates } from "@/lib/solana/protocol-state";
@@ -45,7 +46,7 @@ export function maxPayout(positions: PredictPosition[], events: Map<string, Pred
   return total;
 }
 
-export async function getPositions(owner: PublicKey): Promise<PositionsResponse> {
+export async function getPositions(owner: PublicKey, scope?: ReadScope): Promise<PositionsResponse> {
   const conn = getConnection();
   const usdc = getToken("USDC");
   const [tokens, lamports, usdcBal, events, trades, pools] = await Promise.all([
@@ -54,7 +55,7 @@ export async function getPositions(owner: PublicKey): Promise<PositionsResponse>
     conn.getTokenAccountBalance(getAssociatedTokenAddressSync(usdc.mint, owner, false, TOKEN_PROGRAM_ID), "confirmed").then((b) => Number(b.value.uiAmount ?? 0)).catch(() => 0),
     listEvents().catch(() => [] as PredictEvent[]),
     getTradeHistory(owner).catch(() => []),
-    fetchPoolStates().catch(() => null),
+    fetchPoolStates(undefined, scope).catch(() => null),
   ]);
   const supplyApyPct = (pools?.USDC?.supplyApr ?? 0) * 100;
   const eventById = new Map(events.map((e) => [e.id, e]));

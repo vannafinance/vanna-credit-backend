@@ -70,12 +70,15 @@ describe("history RPC work", () => {
     await fetchEarnHistory(wallet); await fetchEarnHistory(wallet);
     expect(rpc.getTransaction).toHaveBeenCalledTimes(2);
   });
-  it("expires finalized cache entries to tolerate fork resets", async () => {
+  it("keeps finalized transactions across refreshes, expiring them only after hours (fork resets)", async () => {
     vi.useFakeTimers();
     rpc.getSignaturesForAddress.mockResolvedValue([{ signature: "sig", confirmationStatus: "finalized", err: null }]);
     rpc.getTransaction.mockResolvedValue({ meta: { logMessages: [] } });
     await fetchEarnHistory(wallet);
-    vi.setSystemTime(Date.now() + 300_001);
+    vi.setSystemTime(Date.now() + 300_001); // past the old 5-minute expiry: still cached
+    await fetchEarnHistory(wallet);
+    expect(rpc.getTransaction).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 6 * 60 * 60_000);
     await fetchEarnHistory(wallet);
     expect(rpc.getTransaction).toHaveBeenCalledTimes(2);
   });

@@ -21,6 +21,7 @@ import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { useV3Account } from "@/hooks/use-v3-account";
 import { refreshMarginAccount } from "@/store/margin-account-info-store";
 import { explorerUrl } from "@/lib/solana/config";
+import { markFreshReads } from "@/lib/fresh-reads";
 import { describeError } from "@/lib/solana/errors";
 import { executeFlashRepay, planFlashRepay, type FlashLoanRow, type FlashPlan, type FlashStepState } from "@/lib/solana/flash-repay";
 import { Info, Modal } from "./ui";
@@ -89,6 +90,7 @@ export default function FlashRepayModal() {
 
   // Refresh every page's data after (part of) a run.
   const refreshAll = useCallback(async () => {
+    markFreshReads();
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["margin"] }),
       qc.invalidateQueries({ queryKey: ["earn"] }),

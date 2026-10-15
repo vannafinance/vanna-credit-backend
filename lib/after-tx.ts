@@ -1,4 +1,5 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { markFreshReads } from "./fresh-reads";
 
 /** Areas of the app a confirmed transaction can change. Each maps to a top-level query-key prefix. */
 export type TxScope = "margin" | "earn" | "farm" | "perps";
@@ -31,6 +32,7 @@ const startsWith = (key: QueryKey, prefix: QueryKey) => prefix.every((part, i) =
  * background. Refreshes the same queries as invalidating each scope prefix, only in a better order.
  */
 export async function refreshAfterTx(qc: QueryClient, scopes: readonly TxScope[]): Promise<void> {
+  markFreshReads(); // the next reads skip the server caches: the user must see their own transaction
   const first = [ACCOUNT_SNAPSHOT, ...scopes.flatMap((s) => CRITICAL[s])];
   await Promise.allSettled(first.map((queryKey) => qc.invalidateQueries({ queryKey })));
   setTimeout(() => {

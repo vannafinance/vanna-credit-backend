@@ -6,7 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
-const within = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
 
 /**
  * POST /api/predict/trade { owner, legs: [{ marketId, outcome, side, amount }], pay?, noPool? }
@@ -23,7 +22,8 @@ export async function POST(req: Request) {
   }
   try {
     const request = validateTradeRequest(body);
-    await within(refreshPrices(), 3000);
+    // Fill prices refresh in the background; the build itself caps its live-quote read (trade.server.ts).
+    void refreshPrices().catch(() => {});
     return jsonResponse(await buildTrade(request));
   } catch (error) {
     const status = error instanceof TradeError ? 400 : 502;

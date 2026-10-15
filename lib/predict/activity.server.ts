@@ -21,13 +21,26 @@ import type { TradeEvent } from "./types";
 
 const USDC = getToken("USDC").mint.toBase58();
 const g = globalThis as unknown as { __predictTx?: Map<string, ParsedTransactionWithMeta | null> };
-/** Confirmed transactions never change: cache parsed ones by signature. */
+/**
+ * Confirmed transactions never change: cache parsed ones by signature. Bounded (least recently used
+ * dropped first), since any wallet in the URL adds entries; a not-yet-visible transaction (null) is
+ * not cached, so it is picked up on the next read.
+ */
 const txCache = (g.__predictTx ??= new Map());
+const TX_CACHE_LIMIT = 5_000;
 
 async function parsed(signature: string) {
-  if (txCache.has(signature)) return txCache.get(signature)!;
-  const tx = await getConnection().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }).catch(() => undefined);
-  if (tx !== undefined) txCache.set(signature, tx);
+  const hit = txCache.get(signature);
+  if (hit) {
+    txCache.delete(signature);
+    txCache.set(signature, hit);
+    return hit;
+  }
+  const tx = await getConnection().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }).catch(() => null);
+  if (tx) {
+    txCache.set(signature, tx);
+    if (txCache.size > TX_CACHE_LIMIT) txCache.delete(txCache.keys().next().value!);
+  }
   return tx ?? null;
 }
 

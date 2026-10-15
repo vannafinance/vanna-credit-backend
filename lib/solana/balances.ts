@@ -1,4 +1,4 @@
-import { singleFlight } from "../async";
+import { singleFlight, type ReadScope } from "../async";
 import { PublicKey, type AccountInfo, type Connection } from "@solana/web3.js";
 import { getConnection, getMultipleAccountsChunked } from "./connection";
 import { lenderShareAccount, walletAta } from "./pdas";
@@ -30,10 +30,10 @@ export interface WalletBalances {
  * share ATA.
  */
 const balanceReads = new WeakMap<Connection, ReturnType<typeof singleFlight<string, WalletBalances>>>();
-export function fetchWalletBalances(owner: PublicKey, connection: Connection = getConnection()): Promise<WalletBalances> {
+export function fetchWalletBalances(owner: PublicKey, connection: Connection = getConnection(), scope?: ReadScope): Promise<WalletBalances> {
   let read = balanceReads.get(connection);
   if (!read) { read = singleFlight<string, WalletBalances>(); balanceReads.set(connection, read); }
-  return read(owner.toBase58(), () => readWalletBalances(owner, connection));
+  return read(owner.toBase58(), () => readWalletBalances(owner, connection), scope);
 }
 
 async function readWalletBalances(owner: PublicKey, connection: Connection = getConnection()): Promise<WalletBalances> {

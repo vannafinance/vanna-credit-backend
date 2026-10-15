@@ -1,4 +1,4 @@
-import { singleFlight } from "../async";
+import { singleFlight, type ReadScope } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Buffer } from "buffer";
 import { AccountLayout, MintLayout } from "@solana/spl-token";
@@ -180,8 +180,8 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
  * reject an incomplete scan anyway), so this fails closed rather than hiding a position.
  */
 const fetchAllAssetConfigsReads = singleFlight<Connection, Map<number, AssetConfigState>>();
-export function fetchAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
-  return fetchAllAssetConfigsReads(connection, () => readAllAssetConfigs(connection));
+export function fetchAllAssetConfigs(connection: Connection = getConnection(), scope?: ReadScope): Promise<Map<number, AssetConfigState>> {
+  return fetchAllAssetConfigsReads(connection, () => readAllAssetConfigs(connection), scope);
 }
 
 async function readAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
@@ -237,16 +237,16 @@ function buildPoolState(token: TokenInfo, asset: AssetConfigState | null, reserv
  * batched account read, and projects accrued interest to the fork's `now`.
  */
 const fetchPoolStatesReads = singleFlight<Connection, Record<string, PoolState>>();
-export function fetchPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
-  return fetchPoolStatesReads(connection, () => readPoolStates(connection));
+export function fetchPoolStates(connection: Connection = getConnection(), scope?: ReadScope): Promise<Record<string, PoolState>> {
+  return fetchPoolStatesReads(connection, () => readPoolStates(connection, scope), scope);
 }
 
-async function readPoolStates(connection: Connection = getConnection()): Promise<Record<string, PoolState>> {
+async function readPoolStates(connection: Connection = getConnection(), scope?: ReadScope): Promise<Record<string, PoolState>> {
   const keys: PublicKey[] = [];
   for (const t of TOKENS) keys.push(assetConfigPda(t.mint), reservePda(t.mint), shareMintPda(t.mint));
   const [[book, ...infos], now] = await Promise.all([
     getMultipleAccountsChunked(connection, [priceBookPda(), ...keys]),
-    forkUnixTimestamp(connection),
+    forkUnixTimestamp(connection, scope),
   ]);
   const sources = priceSourcesFrom(book as AccountInfo<Buffer> | null);
   const out: Record<string, PoolState> = {};
