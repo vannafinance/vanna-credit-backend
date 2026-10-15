@@ -8,6 +8,7 @@
 import { VersionedTransaction } from "@solana/web3.js";
 import { broadcastSignedTransaction } from "@/lib/solana/broadcast";
 import { getConnection } from "@/lib/solana/connection";
+import { freshParam } from "@/lib/fresh-reads";
 import type { TxSigner } from "@/lib/solana/wallet-bridge";
 import type { EventsResponse, MergeResult, PositionsResponse, PredictEvent, TradeBuildResponse, TradeEvent, TradeRequest } from "./types";
 
@@ -31,7 +32,7 @@ export const fetchPredictEvents = (params: { cat?: string; q?: string } = {}) =>
   return predictApi<EventsResponse>(`/events${qs ? `?${qs}` : ""}`);
 };
 export const fetchPredictEvent = (id: string) => predictApi<{ event: PredictEvent }>(`/events/${encodeURIComponent(id)}`).then((r) => r.event);
-export const fetchPredictPositions = (owner: string) => predictApi<PositionsResponse>(`/positions/${owner}`);
+export const fetchPredictPositions = (owner: string) => predictApi<PositionsResponse>(`/positions/${owner}${freshParam()}`);
 export const fetchPredictActivity = (owner: string, marketId?: string) =>
   predictApi<{ trades: TradeEvent[] }>(`/activity/${owner}${marketId ? `?market=${marketId}` : ""}`).then((r) => r.trades);
 export const buildPredictTrade = (req: TradeRequest) => predictApi<TradeBuildResponse>("/trade", post(req));

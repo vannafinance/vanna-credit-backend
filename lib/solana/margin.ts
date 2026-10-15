@@ -1,6 +1,6 @@
 import { vaultByMint } from "./vault-catalogue";
 import { basisOraclePrice } from "./vault-oracles";
-import { singleFlight } from "../async";
+import { singleFlight, type ReadScope } from "../async";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Margin-account service layer for the core program `vanna_credit_layer` (Frontend Integration
@@ -198,18 +198,18 @@ function valueOf(amount: bigint, price: OnchainPrice | null, decimals: number, r
 const lastBasisPrice = new Map<string, NonNullable<Awaited<ReturnType<typeof basisOraclePrice>>>>();
 
 const fetchMarginSnapshotReads = singleFlight<string, MarginSnapshot>();
-export function fetchMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
-  return fetchMarginSnapshotReads(owner.toBase58(), () => readMarginSnapshot(owner));
+export function fetchMarginSnapshot(owner: PublicKey, scope?: ReadScope): Promise<MarginSnapshot> {
+  return fetchMarginSnapshotReads(owner.toBase58(), () => readMarginSnapshot(owner, scope), scope);
 }
 
-async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
+async function readMarginSnapshot(owner: PublicKey, scope?: ReadScope): Promise<MarginSnapshot> {
   const connection = getConnection();
   const margin = marginPda(owner);
   const [raw, assetMap, pools, now] = await Promise.all([
     fetchMarginAccount(owner),
-    fetchAllAssetConfigs(),
-    fetchPoolStates(connection),
-    forkUnixTimestamp(connection),
+    fetchAllAssetConfigs(connection, scope),
+    fetchPoolStates(connection, scope),
+    forkUnixTimestamp(connection, scope),
   ]);
   const empty: MarginSnapshot = {
     owner: owner.toBase58(),
@@ -268,7 +268,7 @@ async function readMarginSnapshot(owner: PublicKey): Promise<MarginSnapshot> {
     if (def?.kind !== "basis" || !raw || tokenAccountAmount(infos[i*3],a.tokenProgram) === 0n) return;
     const key = a.mint.toBase58();
     try {
-      const p = await basisOraclePrice(def, connection);
+      const p = await basisOraclePrice(def, connection, scope);
       basisPrices.set(a.assetIndex, p);
       if (p && p.price > 0n) lastBasisPrice.set(key, p);
     } catch {

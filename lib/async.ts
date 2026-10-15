@@ -18,14 +18,21 @@ export const fetchWithTimeout: typeof fetch = (input, init) => {
   return fetch(input, { ...init, signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout });
 };
 
-/** Share concurrent reads only; settled results never become stale transaction-building inputs. */
+/** An opaque request identity isolates fresh reads from work started before confirmation. */
+export type ReadScope = object;
+
+/** Share concurrent reads only; optional scopes share within one request, never across requests. */
 export function singleFlight<K, V>() {
   const pending = new Map<K, Promise<V>>();
-  return (key: K, run: () => Promise<V>): Promise<V> => {
-    const existing = pending.get(key);
+  const scoped = new WeakMap<ReadScope, Map<K, Promise<V>>>();
+  return (key: K, run: () => Promise<V>, scope?: ReadScope): Promise<V> => {
+    let reads = scope ? scoped.get(scope) : pending;
+    if (!reads) { reads = new Map(); scoped.set(scope!, reads); }
+    const existing = reads.get(key);
     if (existing) return existing;
-    const request = Promise.resolve().then(run).finally(() => pending.delete(key));
-    pending.set(key, request);
+    const requests = reads;
+    const request = Promise.resolve().then(run).finally(() => requests.delete(key));
+    requests.set(key, request);
     return request;
   };
 }

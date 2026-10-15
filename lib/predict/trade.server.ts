@@ -143,6 +143,10 @@ export function validateTradeRequest(body: unknown): TradeRequest {
   return { owner: b.owner, legs: b.legs, pay: b.pay ?? "CASH", noPool: Boolean(b.noPool) };
 }
 
+/** How long a trade build waits for a live-quote refresh before using the cached quote. */
+const QUOTE_WAIT_MS = 2_000;
+const withinMs = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+
 export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse> {
   const owner = new PublicKey(req.owner);
   const conn = getConnection();
@@ -161,7 +165,8 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
     readShareBalances(owner, ids),
     getPredictLookupTable(),
     // The same live quotes the event page shows (cached ~30 s), so the fork maker fills at them.
-    refreshQuotes(infos.map((i) => ({ id: i!.id, yesMint: i!.yesMint }))),
+    // Capped: a cold or slow mainnet read must not hold the trade (the cached quote is used instead).
+    withinMs(refreshQuotes(infos.map((i) => ({ id: i!.id, yesMint: i!.yesMint }))), QUOTE_WAIT_MS),
   ]);
   const balanceKeys = [ata(CASH, owner), ...ids.flatMap((id) => [ata(markets.get(id)!.yes, owner), ata(markets.get(id)!.no, owner)])];
   const balanceInfos = await conn.getMultipleAccountsInfo(balanceKeys, "confirmed");

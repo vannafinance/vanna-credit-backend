@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { BN } from "@coral-xyz/anchor";
+import type { ReadScope } from "../async";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -196,8 +197,8 @@ export interface LenderPosition {
 }
 
 /** Every registry token's lender position for `owner` (zero rows included). */
-export async function fetchLenderPositions(owner: PublicKey): Promise<Record<string, LenderPosition>> {
-  const [pools, balances] = await Promise.all([fetchPoolStates(), fetchWalletBalances(owner)]);
+export async function fetchLenderPositions(owner: PublicKey, scope?: ReadScope): Promise<Record<string, LenderPosition>> {
+  const [pools, balances] = await Promise.all([fetchPoolStates(undefined, scope), fetchWalletBalances(owner, undefined, scope)]);
   const out: Record<string, LenderPosition> = {};
   for (const t of TOKENS) {
     const pool = pools[t.symbol];

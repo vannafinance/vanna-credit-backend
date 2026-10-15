@@ -11,6 +11,7 @@ import { getActiveSigner } from "@/lib/solana/wallet-bridge";
 import { onTxStatus, showTxError, showTxStep, showTxSuccess } from "@/lib/tx-progress";
 import { useUserStore } from "@/store/user";
 import { usePoolData } from "@/hooks/use-earn";
+import { markFreshReads } from "@/lib/fresh-reads";
 import {
   executePredictTrade,
   fetchPredictActivity,
@@ -112,7 +113,10 @@ export function usePredictTrade() {
       showTxSuccess(input.successMessage ?? `${describe(input.legs)}${pooled > 0 ? " · earning in the Vanna pool" : ""}`);
     },
     onError: (error) => showTxError(error.message),
-    onSettled: () => qc.invalidateQueries({ queryKey: PREDICT_KEY }),
+    onSettled: () => {
+      markFreshReads();
+      return qc.invalidateQueries({ queryKey: PREDICT_KEY });
+    },
   });
 }
 
@@ -121,6 +125,9 @@ export function usePredictFaucet() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { address: string; amount?: number; usdc?: boolean }) => requestPredictFaucet(input.address, input.amount, input.usdc),
-    onSettled: () => qc.invalidateQueries({ queryKey: PREDICT_KEY }),
+    onSettled: () => {
+      markFreshReads();
+      return qc.invalidateQueries({ queryKey: PREDICT_KEY });
+    },
   });
 }

@@ -21,7 +21,7 @@ import {
   readPhoenixExchange,
 } from "./phoenix";
 import { oracleAccounts, type OraclePrice } from "./oracle";
-import { singleFlight } from "../async";
+import { singleFlight, type ReadScope } from "../async";
 import { type VaultDefinition, BASIS_PROGRAM } from "./vault-catalogue";
 
 export const VIEW_PAYER = new PublicKey(
@@ -84,6 +84,7 @@ const oracleReads = singleFlight<string, OraclePrice>();
 export function basisOraclePrice(
   def: VaultDefinition,
   conn: Connection = getConnection(),
+  scope?: ReadScope,
 ): Promise<OraclePrice> {
   return oracleReads(`${conn.rpcEndpoint}:${def.id}`, async () => {
     const { accounts } = await basisOracleAccounts(def, conn);
@@ -138,5 +139,5 @@ export function basisOraclePrice(
       source: "receipt",
       fresh: (data[36] & 7) === 7,
     };
-  });
+  }, scope);
 }

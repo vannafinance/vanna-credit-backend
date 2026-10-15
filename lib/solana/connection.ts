@@ -1,4 +1,4 @@
-import { singleFlight } from "../async";
+import { singleFlight, type ReadScope } from "../async";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { CLOCK_SYSVAR, SOLANA_RPC_URL, SOLANA_WS_URL } from "./config";
 
@@ -78,8 +78,8 @@ export function getConnection(): Connection {
  * client-side projection uses it too — never Date.now().
  */
 const forkUnixTimestampReads = singleFlight<Connection, bigint>();
-export function forkUnixTimestamp(connection: Connection = getConnection()): Promise<bigint> {
-  return forkUnixTimestampReads(connection, () => readForkUnixTimestamp(connection));
+export function forkUnixTimestamp(connection: Connection = getConnection(), scope?: ReadScope): Promise<bigint> {
+  return forkUnixTimestampReads(connection, () => readForkUnixTimestamp(connection), scope);
 }
 
 async function readForkUnixTimestamp(connection: Connection = getConnection()): Promise<bigint> {
