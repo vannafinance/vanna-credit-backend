@@ -18,8 +18,10 @@ export const fetchWithTimeout: typeof fetch = (input, init) => {
   return fetch(input, { ...init, signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout });
 };
 
-/** An opaque request identity isolates fresh reads from work started before confirmation. */
-export type ReadScope = object;
+/** Request identity; only display routes opt into short-lived public protocol state. */
+export interface ReadScope {
+  readonly publicState?: "cached" | "fresh";
+}
 
 /** Share concurrent reads only; optional scopes share within one request, never across requests. */
 export function singleFlight<K, V>() {

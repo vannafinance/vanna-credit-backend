@@ -1,4 +1,5 @@
 import { singleFlight, type ReadScope } from "../async";
+import { ttlCache } from "../server-cache";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Buffer } from "buffer";
 import { AccountLayout, MintLayout } from "@solana/spl-token";
@@ -179,9 +180,29 @@ export function decodeReserve(address: PublicKey, info: AccountInfo<Buffer> | nu
  * index outside it, `buildHealthRemainingAccounts` throws a clear error (and the program would
  * reject an incomplete scan anyway), so this fails closed rather than hiding a position.
  */
-const fetchAllAssetConfigsReads = singleFlight<Connection, Map<number, AssetConfigState>>();
+/**
+ * Display-only reuse, explicitly selected by the request scope. Execution callers keep the
+ * existing live-read default. Weak connection keys isolate networks without retaining connections.
+ * A fresh scope bypasses old work and publishes its result for subsequent display requests.
+ */
+const PUBLIC_STATE_TTL_MS = 3_000;
+function publicStateReads<T>(read: (connection: Connection, scope?: ReadScope) => Promise<T>) {
+  const reads = singleFlight<Connection, T>();
+  const caches = new WeakMap<Connection, ReturnType<typeof ttlCache<T>>>();
+  return (connection: Connection, scope?: ReadScope): Promise<T> => reads(connection, () => {
+    if (!scope?.publicState) return read(connection, scope);
+    let cache = caches.get(connection);
+    if (!cache) {
+      cache = ttlCache<T>(PUBLIC_STATE_TTL_MS, 1);
+      caches.set(connection, cache);
+    }
+    return cache("all", () => read(connection, scope), { fresh: scope.publicState === "fresh" });
+  }, scope);
+}
+
+const fetchAllAssetConfigsReads = publicStateReads(readAllAssetConfigs);
 export function fetchAllAssetConfigs(connection: Connection = getConnection(), scope?: ReadScope): Promise<Map<number, AssetConfigState>> {
-  return fetchAllAssetConfigsReads(connection, () => readAllAssetConfigs(connection), scope);
+  return fetchAllAssetConfigsReads(connection, scope);
 }
 
 async function readAllAssetConfigs(connection: Connection = getConnection()): Promise<Map<number, AssetConfigState>> {
@@ -236,9 +257,9 @@ function buildPoolState(token: TokenInfo, asset: AssetConfigState | null, reserv
  * Reads every registry token's AssetConfig + Reserve + share mint and the fork clock in one
  * batched account read, and projects accrued interest to the fork's `now`.
  */
-const fetchPoolStatesReads = singleFlight<Connection, Record<string, PoolState>>();
+const fetchPoolStatesReads = publicStateReads(readPoolStates);
 export function fetchPoolStates(connection: Connection = getConnection(), scope?: ReadScope): Promise<Record<string, PoolState>> {
-  return fetchPoolStatesReads(connection, () => readPoolStates(connection, scope), scope);
+  return fetchPoolStatesReads(connection, scope);
 }
 
 async function readPoolStates(connection: Connection = getConnection(), scope?: ReadScope): Promise<Record<string, PoolState>> {

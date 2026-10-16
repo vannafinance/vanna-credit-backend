@@ -17,6 +17,7 @@
  * The maker signs here; the transaction can only be submitted exactly as quoted.
  */
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction, type AddressLookupTableAccount } from "@solana/web3.js";
+import { withTimeout } from "@/lib/async";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
@@ -103,22 +104,33 @@ interface LegMarket {
   mergeable: boolean;
 }
 
-/** Reads the market on the fork (cloning it from mainnet on first touch) and checks its layout. */
-async function forkMarket(info: MarketInfo): Promise<LegMarket> {
-  const acct = await getConnection().getAccountInfo(new PublicKey(info.id), "confirmed");
-  if (!acct || acct.owner.toBase58() !== WORLD_PROGRAM_ID || acct.data.length !== MARKET_ACCOUNT_SIZE) {
-    throw new TradeError("This market is not available on the fork (it may have closed on mainnet).");
+/** Batch known markets and CASH vaults (at most 16 keys for the API's eight-leg limit). */
+async function forkMarkets(infos: MarketInfo[]): Promise<LegMarket[]> {
+  const conn = getConnection();
+  const keys = infos.flatMap((info) => [new PublicKey(info.id), new PublicKey(info.vault)]);
+  const accounts = await conn.getMultipleAccountsInfo(keys, "confirmed");
+  const ownedBy = (data: Buffer | undefined, market: PublicKey) => Boolean(data && data.length >= 64 && new PublicKey(data.subarray(32, 64)).equals(market));
+  const markets = infos.map((info, index) => {
+    const acct = accounts[index * 2];
+    if (!acct || acct.owner.toBase58() !== WORLD_PROGRAM_ID || acct.data.length !== MARKET_ACCOUNT_SIZE) {
+      throw new TradeError("This market is not available on the fork (it may have closed on mainnet).");
+    }
+    const key = (offset: number) => new PublicKey(acct.data.subarray(offset, offset + 32));
+    const yes = key(MARKET_OFFSETS.yesMint);
+    const no = key(MARKET_OFFSETS.noMint);
+    if (yes.toBase58() !== info.yesMint || no.toBase58() !== info.noMint) throw new TradeError("Market accounts do not match.");
+    const vault = key(MARKET_OFFSETS.vault);
+    const market = keys[index * 2];
+    return { info, market, yes, no, vault, mergeable: vault.equals(keys[index * 2 + 1]) && ownedBy(accounts[index * 2 + 1]?.data as Buffer | undefined, market) };
+  });
+  // A fork can retain a different vault pointer from the mainnet catalog. Read that actual vault
+  // instead of trusting its prefetched catalog account; preserve the original ownership check.
+  const changed = markets.flatMap((market, index) => market.vault.equals(keys[index * 2 + 1]) ? [] : [index]);
+  if (changed.length) {
+    const vaults = await conn.getMultipleAccountsInfo(changed.map((index) => markets[index].vault), "confirmed");
+    changed.forEach((index, offset) => { markets[index].mergeable = ownedBy(vaults[offset]?.data as Buffer | undefined, markets[index].market); });
   }
-  const key = (o: number) => new PublicKey(acct.data.subarray(o, o + 32));
-  const yes = key(MARKET_OFFSETS.yesMint);
-  const no = key(MARKET_OFFSETS.noMint);
-  if (yes.toBase58() !== info.yesMint || no.toBase58() !== info.noMint) throw new TradeError("Market accounts do not match.");
-  const vault = key(MARKET_OFFSETS.vault);
-  const market = new PublicKey(info.id);
-  // Who owns the CASH vault (token account owner, bytes 32..64): the market, or the World Group it belongs to.
-  const vaultAcct = await getConnection().getAccountInfo(vault, "confirmed");
-  const vaultOwner = vaultAcct && vaultAcct.data.length >= 64 ? new PublicKey(vaultAcct.data.subarray(32, 64)) : null;
-  return { info, market, yes, no, vault, mergeable: Boolean(vaultOwner?.equals(market)) };
+  return markets;
 }
 
 const kindOf = (m: MarketInfo) => (m.startMs !== null && m.endMs !== null ? "updown" : "binary");
@@ -145,7 +157,7 @@ export function validateTradeRequest(body: unknown): TradeRequest {
 
 /** How long a trade build waits for a live-quote refresh before using the cached quote. */
 const QUOTE_WAIT_MS = 2_000;
-const withinMs = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+const withinMs = (p: Promise<unknown>, ms: number) => withTimeout(p, ms, "Quote refresh deadline").catch(() => {});
 
 export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse> {
   const owner = new PublicKey(req.owner);
@@ -157,19 +169,20 @@ export async function buildTrade(req: TradeRequest): Promise<TradeBuildResponse>
   const infos = await Promise.all(ids.map((id) => getMarketInfo(id)));
   const missing = ids.filter((_, i) => !infos[i]);
   if (missing.length) throw new TradeError(`Market not found: ${missing.join(", ")}`);
-  const markets = new Map((await Promise.all(infos.map((i) => forkMarket(i!)))).map((m) => [m.info.id, m]));
+  const markets = new Map((await forkMarkets(infos as MarketInfo[])).map((m) => [m.info.id, m]));
   for (const m of markets.values()) if (m.info.endMs !== null && m.info.endMs <= Date.now()) throw new TradeError(`${m.info.question} has closed for trading.`);
-  const [maker, pools, shares, table] = await Promise.all([
+  // These addresses are already known: wallet reads need not wait for maker/quote/table work.
+  const balanceKeys = [ata(CASH, owner), ...ids.flatMap((id) => [ata(markets.get(id)!.yes, owner), ata(markets.get(id)!.no, owner)])];
+  const [maker, pools, shares, table, balanceInfos] = await Promise.all([
     ensureMakerReady(),
     readPoolStates(ids),
     readShareBalances(owner, ids),
     getPredictLookupTable(),
+    conn.getMultipleAccountsInfo(balanceKeys, "confirmed"),
     // The same live quotes the event page shows (cached ~30 s), so the fork maker fills at them.
     // Capped: a cold or slow mainnet read must not hold the trade (the cached quote is used instead).
     withinMs(refreshQuotes(infos.map((i) => ({ id: i!.id, yesMint: i!.yesMint }))), QUOTE_WAIT_MS),
   ]);
-  const balanceKeys = [ata(CASH, owner), ...ids.flatMap((id) => [ata(markets.get(id)!.yes, owner), ata(markets.get(id)!.no, owner)])];
-  const balanceInfos = await conn.getMultipleAccountsInfo(balanceKeys, "confirmed");
   let cash = tokenAmountOf(balanceInfos[0]?.data as Buffer);
   /** Wallet outcome balance per mint, updated as legs are planned. */
   const held = new Map<string, bigint>();

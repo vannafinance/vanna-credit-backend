@@ -6,8 +6,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLedgerTick } from '@/contexts/ledger-subscriber';
+import { useLiveTick } from '@/lib/tick-scope';
 import { useUserStore } from '@/store/user';
 import { refreshAfterTx } from '@/lib/after-tx';
+import { freshParam } from '@/lib/fresh-reads';
 import { fetchPoolStates, type PoolState, type SerializedPoolState } from '@/lib/solana/protocol-state';
 import { fetchLenderPositions, redeem, supply, type LenderPosition } from '@/lib/solana/lend';
 import { computeEarnedInterest, fetchEarnHistory, type EarnedInterest, type EarnHistoryRow, type HistoryPage } from '@/lib/solana/history';
@@ -20,13 +22,15 @@ export const EARN_POOLS_KEY = ['earn', 'pools'] as const;
 function useTickInvalidate(key: readonly unknown[]) {
   const qc = useQueryClient();
   const { tick } = useLedgerTick();
+  const live = useLiveTick();
   const last = useRef(tick);
   const k = JSON.stringify(key);
   useEffect(() => {
     if (tick === last.current) return;
     last.current = tick;
+    if (!live) return; // e.g. Predict only shows a slow-moving APY from the pools (lib/tick-scope.ts)
     qc.invalidateQueries({ queryKey: JSON.parse(k) }, { cancelRefetch: false });
-  }, [tick, qc, k]);
+  }, [tick, qc, k, live]);
 }
 
 /**
@@ -39,7 +43,7 @@ export const usePoolData = () => {
   const query = useQuery({
     queryKey: EARN_POOLS_KEY,
     queryFn: async (): Promise<Record<string, SerializedPoolState>> => {
-      const res = await fetchWithTimeout('/api/pools', { cache: 'no-store' });
+      const res = await fetchWithTimeout(`/api/pools${freshParam()}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`pool stats failed (${res.status})`);
       return ((await res.json()) as { pools: Record<string, SerializedPoolState> }).pools;
     },

@@ -6,6 +6,7 @@ import { freshParam } from "@/lib/fresh-reads";
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLedgerTick } from "@/contexts/ledger-subscriber";
+import { useLiveTick } from "@/lib/tick-scope";
 import type { SerializedMarginSnapshot } from "@/lib/solana/margin";
 import type { LenderPosition } from "@/lib/solana/lend";
 import { marginFieldsFromSnapshot, type MarginAccountInfoStateType } from "@/store/margin-account-info-store";
@@ -49,6 +50,7 @@ async function fetchSnapshot(userAddress: string): Promise<AccountSnapshot> {
 export function useAccountSnapshot(userAddress: string | null) {
   const qc = useQueryClient();
   const { tick } = useLedgerTick();
+  const live = useLiveTick();
   const lastTickRef = useRef(tick);
   const query = useQuery<AccountSnapshot>({
     queryKey: [...ACCOUNT_SNAPSHOT_KEY, userAddress ?? "none"],
@@ -59,8 +61,9 @@ export function useAccountSnapshot(userAddress: string | null) {
   useEffect(() => {
     if (tick === lastTickRef.current) return;
     lastTickRef.current = tick;
+    if (!live) return; // this page shows no account data (lib/tick-scope.ts)
     qc.invalidateQueries({ queryKey: ACCOUNT_SNAPSHOT_KEY }, { cancelRefetch: false });
-  }, [tick, qc]);
+  }, [tick, qc, live]);
   return {
     snapshot: query.data,
     isLoading: query.isLoading,

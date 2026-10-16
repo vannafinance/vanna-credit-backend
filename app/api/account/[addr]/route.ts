@@ -6,6 +6,7 @@ import { fetchWalletBalances } from "@/lib/solana/balances";
 import { isPublicKeyString, jsonResponse } from "@/lib/solana/server/json";
 import { ttlCache } from "@/lib/server-cache";
 import { wantsFresh } from "@/lib/fresh-reads";
+import type { ReadScope } from "@/lib/async";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,8 +29,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   try {
     const owner = new PublicKey(addr);
     const fresh = wantsFresh(request);
-    // One scope lets the parallel branches share work, without joining pre-confirmation reads.
-    const scope = fresh ? {} : undefined;
+    // Display requests may reuse public state; fresh reads isolate pre-confirmation work.
+    const scope: ReadScope = { publicState: fresh ? "fresh" : "cached" };
     const body = await cachedAccount(
       addr,
       async () => {

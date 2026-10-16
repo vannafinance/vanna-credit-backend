@@ -34,7 +34,7 @@ export const fetchPredictEvents = (params: { cat?: string; q?: string } = {}) =>
 export const fetchPredictEvent = (id: string) => predictApi<{ event: PredictEvent }>(`/events/${encodeURIComponent(id)}`).then((r) => r.event);
 export const fetchPredictPositions = (owner: string) => predictApi<PositionsResponse>(`/positions/${owner}${freshParam()}`);
 export const fetchPredictActivity = (owner: string, marketId?: string) =>
-  predictApi<{ trades: TradeEvent[] }>(`/activity/${owner}${marketId ? `?market=${marketId}` : ""}`).then((r) => r.trades);
+  predictApi<{ trades: TradeEvent[] }>(`/activity/${owner}${marketId ? `?market=${marketId}` : ""}${freshParam(Boolean(marketId))}`).then((r) => r.trades);
 export const buildPredictTrade = (req: TradeRequest) => predictApi<TradeBuildResponse>("/trade", post(req));
 export const requestPredictFaucet = (address: string, amount?: number, usdc?: boolean) =>
   predictApi<{ ok: true; cash: number; sol: number; usdc?: string }>("/faucet", post({ address, amount, usdc }));

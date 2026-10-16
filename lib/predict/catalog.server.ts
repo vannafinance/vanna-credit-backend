@@ -25,6 +25,7 @@ import { FEATURED_EVENTS, FEATURED_GROUP_IDS, FEATURED_MARKET_IDS, featuredOnly 
 import { sweepUnpricedMarkets } from "./prices.server";
 import { scanUrls, withFallback, withMainnet } from "./rpc.server";
 import { getConnection } from "@/lib/solana/connection";
+import { ttlCache } from "@/lib/server-cache";
 
 const CATALOG_TTL_MS = 5 * 60_000;
 /** Crypto windows are pre-created for days ahead; list the live one and the next hour only. */
@@ -351,7 +352,13 @@ export async function marketIdForMint(mint: string): Promise<string | null> {
 /** Open interest (CASH in the vault) as of the last catalog load; refresh with `refreshOpenInterest`. */
 export const openInterestOf = (id: string) => state.openInterest.get(id) ?? 0;
 
-/** Re-reads the vault balance of a few markets (event page / after a trade). */
+/** Public market statistics: share event-page reads for one listing-refresh window. */
+const OPEN_INTEREST_TTL_MS = 15_000;
+const openInterestReads = ttlCache<void>(OPEN_INTEREST_TTL_MS, 500);
+
+/** Fork wallet/position balances are read separately and are never cached here. */
 export async function refreshOpenInterest(ids: string[]): Promise<void> {
-  await loadOpenInterest(ids);
+  const known = [...new Set(ids)].filter((id) => state.all.has(id)).sort();
+  if (!known.length) return;
+  await openInterestReads(known.join(","), () => loadOpenInterest(known));
 }

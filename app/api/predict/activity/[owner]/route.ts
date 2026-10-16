@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { isPublicKeyString, jsonResponse } from "@/lib/solana/server/json";
 import { getTradeHistory } from "@/lib/predict/activity.server";
+import { wantsFresh } from "@/lib/fresh-reads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ owner: stri
   if (!isPublicKeyString(owner)) return jsonResponse({ error: "Invalid wallet address" }, { status: 400 });
   const market = req.nextUrl.searchParams.get("market");
   try {
-    const trades = await getTradeHistory(new PublicKey(owner));
+    const trades = await getTradeHistory(new PublicKey(owner), 40, wantsFresh(req) ? {} : undefined);
     return jsonResponse({ trades: market ? trades.filter((t) => t.marketId === market) : trades });
   } catch (error) {
     return jsonResponse({ error: error instanceof Error ? error.message : "Failed to load activity" }, { status: 502 });
