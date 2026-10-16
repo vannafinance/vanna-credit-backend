@@ -9,10 +9,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
 /**
- * Each open Predict tab polls its positions every 20 s (~11 fork calls per read). Per-wallet reads
- * within 15 s are shared; `?fresh=1` (sent right after the user's own trade) always reads the chain.
+ * Each open Predict tab polls its positions every 20 s (~11 fork calls per read). A per-wallet
+ * result is reused for 25 s after its read finishes — longer than the poll, so a single tab's
+ * refreshes alternate between a cached reply and a chain read. `?fresh=1` (sent right after the
+ * user's own trade) always reads the chain.
  */
-const POSITIONS_TTL_MS = 15_000;
+const POSITIONS_TTL_MS = 25_000;
 const cachedPositions = ttlCache<Awaited<ReturnType<typeof getPositions>>>(POSITIONS_TTL_MS, 1_000);
 
 /** GET /api/predict/positions/:owner — wallet outcome tokens + pooled shares (valued), summary, vault, importable. */

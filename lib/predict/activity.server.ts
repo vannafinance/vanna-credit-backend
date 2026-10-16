@@ -12,6 +12,7 @@ import { PublicKey, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { getConnection } from "@/lib/solana/connection";
 import { getToken } from "@/lib/solana/tokens";
+import { singleFlight, type ReadScope } from "@/lib/async";
 import { CASH_DECIMALS, CASH_MINT, OUTCOME_DECIMALS } from "./constants";
 import { getMarketInfo, marketIdForMint } from "./catalog.server";
 import { eventIdForMarket } from "./events.server";
@@ -48,7 +49,13 @@ async function parsed(signature: string) {
 
 /** Epoch ms, or null when missing or implausible (before 2020). */
 const plausibleMs = (ms: number) => (ms >= Date.UTC(2020, 0, 1) ? ms : null);
-export async function getTradeHistory(owner: PublicKey, limit = 40): Promise<TradeEvent[]> {
+const historyReads = singleFlight<string, TradeEvent[]>();
+export function getTradeHistory(owner: PublicKey, limit = 40, scope?: ReadScope): Promise<TradeEvent[]> {
+  // Positions and activity refresh concurrently. Share their live scan, not a settled result.
+  return historyReads(`${owner.toBase58()}:${limit}`, () => readTradeHistory(owner, limit), scope);
+}
+
+async function readTradeHistory(owner: PublicKey, limit: number): Promise<TradeEvent[]> {
   const conn = getConnection();
   const cashAccount = getAssociatedTokenAddressSync(new PublicKey(CASH_MINT), owner, false, TOKEN_2022_PROGRAM_ID);
   const sigs = await conn.getSignaturesForAddress(cashAccount, { limit }, "confirmed").catch(() => []);

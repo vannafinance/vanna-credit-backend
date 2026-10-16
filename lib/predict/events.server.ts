@@ -145,7 +145,7 @@ export async function listEvents(): Promise<PredictEvent[]> {
  * history is scanned when the shared scan has no price, and open interest / pools are re-read
  * (unless the listing was rebuilt moments ago, e.g. by this very call on a cold start). Both run
  * side by side, so a cold event page waits on the catalog plus a short scan window, not on each.
- * `pricesReady` (the caller's shared price refresh) is awaited before the final pricing too.
+ * Only unpriced events wait for the global fill backfill; priced events still refresh their own quotes.
  */
 export async function getEvent(id: string, opts: { scanTimeoutMs?: number; pricesReady?: Promise<unknown> } = {}): Promise<PredictEvent | null> {
   await listEvents();
@@ -163,6 +163,7 @@ export async function getEvent(id: string, opts: { scanTimeoutMs?: number; price
   // Unpriced markets get their own history scan, waited on only briefly: the scan keeps running in
   // the background and the page's next poll (every ~15 s) shows the prices it found.
   const unpriced = event.outs.filter((o) => o.y === null);
+  const needsBackfill = event.outs.some((o) => o.y === null || o.n === null);
   const scanned = unpriced.length
     ? Promise.race([Promise.allSettled(unpriced.map((o) => scanMarketMints(o.yesMint, o.noMint))), new Promise((r) => setTimeout(r, opts.scanTimeoutMs ?? SCAN_WAIT_MS))])
     : Promise.resolve();
@@ -173,7 +174,7 @@ export async function getEvent(id: string, opts: { scanTimeoutMs?: number; price
     reuse ? Promise.resolve(state.pools!) : readPoolStates(event.type === "updown" ? [] : ids).catch(() => new Map<string, PoolState>()),
     reuse ? Promise.resolve() : refreshOpenInterest(ids),
     scanned,
-    opts.pricesReady,
+    needsBackfill ? opts.pricesReady : undefined,
     within(refreshQuotes(event.outs.map((o) => ({ id: o.marketId, yesMint: o.yesMint }))), QUOTE_WAIT_MS),
   ]);
   const infoMap = new Map(infos.filter((x): x is MarketInfo => Boolean(x)).map((m) => [m.id, m]));

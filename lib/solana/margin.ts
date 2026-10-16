@@ -257,28 +257,33 @@ async function readMarginSnapshot(owner: PublicKey, scope?: ReadScope): Promise<
     keys.push(marginVault(margin, a.mint, a.tokenProgram), debtPositionPda(margin, reservePda(a.mint)), reservePda(a.mint));
   }
   const oracleKeys = [...new Map(assetList.filter(a => vaultByMint(a.mint.toBase58())?.kind !== "basis").flatMap((a) => a.oracleAccounts).map((k) => [k.toBase58(), k])).values()];
-  const [infos, oracleInfos] = await Promise.all([
-    raw ? getMultipleAccountsChunked(connection, keys) : Promise.resolve([] as (AccountInfo<Buffer> | null)[]),
+  const infosRead = raw ? getMultipleAccountsChunked(connection, keys) : Promise.resolve([] as (AccountInfo<Buffer> | null)[]);
+  // Basis valuation depends on held vault balances, not the unrelated token oracle read.
+  const basisPricesRead = infosRead.then(async (infos) => {
+    const basisPrices = new Map<number, Awaited<ReturnType<typeof basisOraclePrice>>>();
+    await Promise.all(assetList.map(async (a,i) => {
+      const def = vaultByMint(a.mint.toBase58());
+      if (def?.kind !== "basis" || !raw || tokenAccountAmount(infos[i*3],a.tokenProgram) === 0n) return;
+      const key = a.mint.toBase58();
+      try {
+        const p = await basisOraclePrice(def, connection, scope);
+        basisPrices.set(a.assetIndex, p);
+        if (p && p.price > 0n) lastBasisPrice.set(key, p);
+      } catch {
+        // Keep the existing stale-price fallback when simulation fails; never invent a price.
+        const last = lastBasisPrice.get(key);
+        if (last) basisPrices.set(a.assetIndex, { ...last, fresh: false });
+      }
+    }));
+    return basisPrices;
+  });
+  const [infos, oracleInfos, basisPrices, venue] = await Promise.all([
+    infosRead,
     getMultipleAccountsChunked(connection, oracleKeys),
+    basisPricesRead,
+    venueAsset ? loadPhoenixVenue(connection, margin, now) : Promise.resolve(null),
   ]);
   const oracleMap = new Map(oracleKeys.map((k, i) => [k.toBase58(), oracleInfos[i] as AccountInfo<Buffer> | null]));
-  const basisPrices = new Map<number, Awaited<ReturnType<typeof basisOraclePrice>>>();
-  await Promise.all(assetList.map(async (a,i) => {
-    const def = vaultByMint(a.mint.toBase58());
-    if (def?.kind !== "basis" || !raw || tokenAccountAmount(infos[i*3],a.tokenProgram) === 0n) return;
-    const key = a.mint.toBase58();
-    try {
-      const p = await basisOraclePrice(def, connection, scope);
-      basisPrices.set(a.assetIndex, p);
-      if (p && p.price > 0n) lastBasisPrice.set(key, p);
-    } catch {
-      // The receipt is priced by simulating the vault oracle, which can fail on a transient RPC error
-      // (e.g. a 429 from the fork's upstream). Keep showing the last good price, flagged stale,
-      // instead of letting the receipt drop to $0 and the health factor jump. (In memory only.)
-      const last = lastBasisPrice.get(key);
-      if (last) basisPrices.set(a.assetIndex, { ...last, fresh: false });
-    }
-  }));
   const priceOf = (a: AssetConfigState) => basisPrices.get(a.assetIndex) ?? priceFromAccounts(a.oracle, oracleMap, now);
   if (!raw) {
     empty.prices = Object.fromEntries(assetList.map((a) => [tokenByMint(a.mint)?.symbol ?? a.mint.toBase58(), priceOf(a)]));
@@ -376,9 +381,7 @@ async function readMarginSnapshot(owner: PublicKey, scope?: ReadScope): Promise<
     }
   });
 
-  let venue: PhoenixVenueContext | null = null;
   if (venueAsset) {
-    venue = await loadPhoenixVenue(connection, margin, now);
     if (venue) {
       // Counted at full value, like every holding (the guide: LTV/threshold aren't used yet).
       totalCollateralNano += venue.valueNano;

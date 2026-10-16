@@ -1548,11 +1548,7 @@ export const Navbar = (props: Navbar) => {
             >
               <nav className="flex flex-col p-2 gap-0.5">
                 {/* All nav items */}
-                {[
-                  ...groupedItems.primary,
-                  ...groupedItems.bordered,
-                  ...groupedItems.secondary,
-                ].map(
+                {filteredItems.map(
                   (item, idx) => {
                     const isActive = isNavItemActive(pathname, item);
                     return (

@@ -27,7 +27,7 @@ it("coalesces concurrent normal requests and reuses the settled snapshot", async
   expect(reads.margin).toHaveBeenCalledTimes(1);
   expect(reads.lender).toHaveBeenCalledTimes(1);
   expect(reads.wallet).toHaveBeenCalledTimes(1);
-  expect(reads.margin.mock.calls[0][1]).toBeUndefined();
+  expect(reads.margin.mock.calls[0][1]).toEqual({ publicState: "cached" });
 });
 
 it("bypasses the cache with one new scope shared through all fresh branches", async () => {
@@ -35,6 +35,7 @@ it("bypasses the cache with one new scope shared through all fresh branches", as
   await request(true);
   const scope = reads.margin.mock.calls[1][1];
   expect(scope).toBeTypeOf("object");
+  expect(scope.publicState).toBe("fresh");
   expect(reads.lender.mock.calls[1][1]).toBe(scope);
   expect(reads.wallet.mock.calls[1][2]).toBe(scope);
   await request(true);

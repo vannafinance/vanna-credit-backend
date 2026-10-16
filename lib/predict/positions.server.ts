@@ -54,7 +54,7 @@ export async function getPositions(owner: PublicKey, scope?: ReadScope): Promise
     conn.getBalance(owner, "confirmed"),
     conn.getTokenAccountBalance(getAssociatedTokenAddressSync(usdc.mint, owner, false, TOKEN_PROGRAM_ID), "confirmed").then((b) => Number(b.value.uiAmount ?? 0)).catch(() => 0),
     listEvents().catch(() => [] as PredictEvent[]),
-    getTradeHistory(owner).catch(() => []),
+    getTradeHistory(owner, 40, scope).catch(() => []),
     fetchPoolStates(undefined, scope).catch(() => null),
   ]);
   const supplyApyPct = (pools?.USDC?.supplyApr ?? 0) * 100;
