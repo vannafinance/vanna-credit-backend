@@ -17,6 +17,22 @@ const nextConfig: NextConfig = {
     return [{ source: "/trade/perps", destination: "/trade/perps/ethusdc", permanent: false }];
   },
 
+  // The approve page signs plans an AI client drew through the public MCP: never framed (no clickjacking of the
+  // wallet prompt), never cached, and its URL (a plan's capability id) never sent on as a referrer.
+  async headers() {
+    const strict = [
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "Cache-Control", value: "no-store" },
+      { key: "X-Robots-Tag", value: "noindex, nofollow" },
+    ];
+    return [
+      { source: "/approve/:path*", headers: strict },
+      { source: "/api/copilot/plan/:path*", headers: strict },
+    ];
+  },
+
   compiler: {
     // Strip console.* from production bundles at build time so the 167 dev log
     // calls across the app never ship to users — smaller bundles, no main-thread

@@ -56,6 +56,18 @@ export const copilotConfig = {
   get mcpIamAudience(): string {
     return env("MCP_IAM_AUDIENCE").replace(/\/$/, "");
   },
+  /**
+   * The public MCP connector's origin (e.g. https://vanna-mcp-solana-public-….run.app; local http://127.0.0.1:8000).
+   * The approve page (/approve/<plan>) proxies its plan API, so an AI client's plan link opens on this site. Empty =
+   * approvals on this site are off (the MCP's own page still works).
+   */
+  get mcpPlanApiUrl(): string {
+    return env("MCP_PLAN_API_URL").replace(/\/$/, "");
+  },
+  /** Shared with the MCP's PLAN_PROXY_SECRET: lets the MCP rate-limit per end user behind this proxy. Optional. */
+  get planProxySecret(): string {
+    return env("PLAN_PROXY_SECRET");
+  },
   get mcpTimeoutMs(): number {
     // The hosted fork's RPC sometimes needs ~22s for one oracle read; 20s cut those off.
     return envNumber("MCP_TIMEOUT_MS", 30_000);

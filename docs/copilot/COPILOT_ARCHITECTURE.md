@@ -443,6 +443,27 @@ The Copilot uses the program's own definitions. Values are USD at the protocol's
 - **Limits:** all Copilot traffic reaches the MCP as one client, so the Copilot limits each user itself and backs off
   on 429.
 
+### 7.1 The approve page for other AI clients (`/approve/<plan>`)
+
+Claude, Cursor, Codex and other clients connect to the **public** MCP connector, not to this app. When they draw a
+plan or a write, the MCP's link points here (its `APPROVE_PAGE_URL` = `https://<site>/approve`), so the user reviews and
+signs on the Vanna site, like Coinbase or Phantom send users to their own domain. The plan stays on the MCP.
+
+- **Page:** `app/approve/[planId]/page.tsx` → `components/copilot/approve/approve-plan.tsx`: the site's wallet
+  connection (`useWallet`, the wallet modal, `lib/copilot/client/sign.ts` for transactions). One main button:
+  Connect wallet → Approve and sign (approval signature, then each step) → Continue / Try again. Cancel is a link.
+- **Proxy:** `app/api/copilot/plan/[planId]` (GET view) and `.../[action]` (POST approve | next | submit | cancel) →
+  `lib/copilot/approve/proxy.ts` → the MCP's `/api/plan/*` at `MCP_PLAN_API_URL`. Same-origin POSTs only, plan id and
+  action allowlisted, 16 KB bodies, `X-Plan-Token` forwarded, no caching. It adds no authority: the MCP still requires
+  the plan wallet's signature over the digest, the run token for prepare/submit, and byte-identical signed transactions.
+- **Rate limits:** with `PLAN_PROXY_SECRET` (same value on the MCP), the proxy forwards the caller's address
+  (right-most `X-Forwarded-For` hop) so the MCP's per-address plan limit counts each user, not this server.
+- **Gate and headers:** the page sits behind the site's access gate like every page (a visitor without the code sees
+  the gate, then lands back on the plan). `next.config.ts` adds `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
+  `Referrer-Policy: no-referrer` and `no-store` to `/approve/*` and `/api/copilot/plan/*`.
+- **Env:** `MCP_PLAN_API_URL` (public MCP origin; local `http://127.0.0.1:8000`), optional `PLAN_PROXY_SECRET`.
+  Empty `MCP_PLAN_API_URL` turns the page off (503); the MCP's own `/plan/<id>` page keeps working.
+
 ## 8. Testing
 
 | Suite | Command | Covers |
