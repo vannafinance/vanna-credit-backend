@@ -15,6 +15,7 @@ import { logoSrc } from "@/components/v3/icons";
 import { isDraw, mainOuts } from "@/lib/predict/view";
 import { partyCol } from "@/components/predict/ui";
 import type { PredictEvent } from "@/lib/predict/types";
+import { viaSite } from "@/lib/copilot/world-image";
 import { CopilotShell } from "./copilot-shell";
 import {
   CopilotRailBody,
@@ -58,12 +59,12 @@ function predictLogos(e: PredictEvent | undefined, eventName: string): RailLogoS
   const teams = mainOuts(e).filter((o) => !isDraw(o));
   if (e.type === "match" && teams.length === 2)
     return teams.map((o) => ({
-      src: o.image && !/\/img\//.test(o.image) ? o.image : null,
+      src: o.image && !/\/img\//.test(o.image) ? viaSite(o.image) : null,
       text: o.name.slice(0, 1).toUpperCase(),
       bg: partyCol(e, o),
       fg: "#fff",
     }));
-  return [{ src: e.image, text: e.ic, ...PD_BADGE }];
+  return [{ src: viaSite(e.image), text: e.ic, ...PD_BADGE }];
 }
 
 /**

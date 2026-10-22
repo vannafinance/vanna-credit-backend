@@ -70,7 +70,7 @@ export async function investigate(args: {
   const started = investigationDeps.now();
   const evidence: Observation[] = [];
   const rejections: Rejection[] = [];
-  const trace: InvestigationTrace = { turns: 0, reads: [], rejections, decision: null, tokens: 0, ms: 0 };
+  const trace: InvestigationTrace = { turns: 0, reads: [], rejections, decision: null, tokens: 0, cachedTokens: 0, ms: 0 };
   const system = systemPrompt();
   // Reads already started this turn, by tool + arguments. The account health read is started right away, in parallel
   // with the first model call: it is the most requested fact, and it is ready by the time the model asks for it.
@@ -103,7 +103,7 @@ export async function investigate(args: {
   let rejectedLastTurn = false;
   const done = (outcome: InvestigationResult["outcome"]): InvestigationResult => {
     trace.ms = investigationDeps.now() - started;
-    if (verbose()) console.info(`[copilot:investigate] ${outcome.kind}${trace.decision ? ` via ${trace.decision}` : ""} after ${trace.turns} turn(s), ${trace.reads.length} read(s), ${trace.tokens} tokens, ${trace.ms}ms`);
+    if (verbose()) console.info(`[copilot:investigate] ${outcome.kind}${trace.decision ? ` via ${trace.decision}` : ""} after ${trace.turns} turn(s), ${trace.reads.length} read(s), ${trace.tokens} tokens (${trace.cachedTokens} cached), ${trace.ms}ms`);
     return { outcome, trace };
   };
 
@@ -126,12 +126,16 @@ export async function investigate(args: {
         thinkingLevel: turn === 1 || rejectedLastTurn ? copilotConfig.investigationThinking : copilotConfig.followupThinking,
         maxOutputTokens: 4096,
         signal: args.signal,
+        // The prompt and the full tool list are the same on every such turn of every request. A must-decide turn
+        // (decision tools only) is rare, so caching it would cost more to keep than it saves.
+        cachePrefix: !mustDecide,
       });
     } catch (err) {
       if (verbose()) console.warn("[copilot:investigate] model call failed:", err instanceof Error ? err.message : err);
       return done({ kind: "none", reason: err instanceof LlmUnavailable ? "model unavailable" : "model call failed" });
     }
     trace.tokens += res.tokens;
+    trace.cachedTokens += res.cachedTokens ?? 0;
     rejectedLastTurn = false;
 
     const calls = res.calls ?? [];

@@ -11,13 +11,14 @@
  */
 
 import Link from "next/link";
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { usePredictEvents } from "@/hooks/use-predict";
 import { byChance, canTrade, isDraw, mainOuts, predictHref } from "@/lib/predict/view";
 import type { PredictEvent, PredictOutcome } from "@/lib/predict/types";
 import { cf, cpair, partyCol, pc } from "@/components/predict/ui";
 import { usdC } from "@/components/v3/format";
 import type { AnswerList } from "@/lib/copilot/answer-schema";
+import { viaSite } from "@/lib/copilot/world-image";
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 /** The Predict page's badge colours (predict-v3.css `--pd-ava` / `--pd-accent`). */
@@ -31,10 +32,12 @@ function ordered(events: PredictEvent[], list: AnswerList): PredictEvent[] {
 }
 
 function Disc({ src, text, bg, fg, size }: { src?: string | null; text: string; bg: string; fg: string; size: number }) {
+  // A picture that fails to load shows the text disc instead (remembered per URL).
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const style: CSSProperties = { width: size, height: size, borderRadius: 999, flex: "none", display: "grid", placeItems: "center", overflow: "hidden" };
-  if (src)
+  if (src && failedSrc !== src)
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="" width={size} height={size} draggable={false} style={{ ...style, objectFit: "cover" }} />;
+    return <img src={src} alt="" width={size} height={size} draggable={false} onError={() => setFailedSrc(src)} style={{ ...style, objectFit: "cover" }} />;
   return (
     <span aria-hidden style={{ ...style, background: bg, color: fg, fontSize: text.length > 2 ? size * 0.3 : size * 0.42, fontWeight: 800, lineHeight: 1 }}>
       {text}
@@ -42,7 +45,7 @@ function Disc({ src, text, bg, fg, size }: { src?: string | null; text: string; 
   );
 }
 
-const teamArt = (o: PredictOutcome) => (o.image && !/\/img\//.test(o.image) ? o.image : null);
+const teamArt = (o: PredictOutcome) => (o.image && !/\/img\//.test(o.image) ? viaSite(o.image) : null);
 
 /** The event's logo as the page draws it (`EvLogo`): both teams of a game, else the artwork or the short code. */
 function EventLogo({ e }: { e: PredictEvent }) {
@@ -57,7 +60,7 @@ function EventLogo({ e }: { e: PredictEvent }) {
         ))}
       </span>
     );
-  return <Disc src={e.image} text={e.ic} bg={BADGE.bg} fg={BADGE.fg} size={34} />;
+  return <Disc src={viaSite(e.image)} text={e.ic} bg={BADGE.bg} fg={BADGE.fg} size={34} />;
 }
 
 function Price({ children, tone }: { children: ReactNode; tone: "yes" | "no" | "plain" }) {

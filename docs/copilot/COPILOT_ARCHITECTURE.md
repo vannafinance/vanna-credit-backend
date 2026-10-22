@@ -264,7 +264,9 @@ borrowing, no health factor.
   `usePredictPositions`), each with its market's logo as the Predict page draws it (World's artwork, both teams of a
   game, or the event's short-code badge); every other panel row takes its logo from the website's `logoSrc`
   (`components/v3/icons.tsx`: tokens, CASH, vault shares, USD* / USD* Junior, Kamino receipts), with a lettered disc
-  if an image fails.
+  if an image fails. World's artwork (`https://m.world.xyz/...`) is loaded through the site's own
+  `/api/copilot/world-image` (server fetch, raster images from World's host only, kept in memory,
+  `lib/copilot/world-image.ts`), so a browser whose network cannot reach World still shows the logos.
 - **Showing markets**: the answer tool's `show_list: "predict_markets"` (or a code-built markets answer) attaches
   `answer.list` = the read's own filter (category / search), never rows the model picked. The answer card
   (`components/copilot/predict-events-list.tsx`) loads the website's own `/api/predict/events` with that filter (same
@@ -352,8 +354,24 @@ borrow, margin swap into SOL, and a health report.
 | Calling mode | Function calling required: every turn is a read or a decision | `vertex.ts` |
 | Budgets | 6 turns (`COPILOT_INVESTIGATION_MAX_TURNS`), 50 s (`COPILOT_INVESTIGATION_TIMEOUT_MS`), 16 reads, 15 s per read | `config.ts`, `investigation/runtime.ts` |
 | Output | Up to 4,096 tokens per turn (thinking included) | `investigation/runtime.ts` |
+| Prompt cache | The fixed prefix of an investigation turn (system prompt + full tool list, ~14k tokens) is kept in an explicit Vertex cache, billed at the cached input rate; details below | `vertex.ts`, `investigation/runtime.ts` |
 | Daily tokens | Per-user cap (`COPILOT_DAILY_TOKEN_CAP`) | `limits.ts` |
 | Switch | `COPILOT_INVESTIGATION=off` uses the keyword router alone | `config.ts` |
+
+**Prompt cache.** The system prompt and the tool definitions hold no user, account or time data, so they are the same
+on every investigation turn of every request; everything per request is in the turn message. `vertex.ts` keeps that
+prefix in a Vertex cached content (`ai.caches.create`, keyed on a hash of model + prompt + tools + tool mode) and sends
+only the cache name with the turn message. Gemini reads exactly the same text either way, so answers do not change;
+only the input bill does. Rules:
+- Never waits: a request that finds no ready cache is sent in full as before and the cache is created in the
+  background; later turns use it. A cache is renewed 2 minutes before it expires.
+- Only turns with the full tool list (`cachePrefix: !mustDecide`). Must-decide turns and the small wording calls are
+  sent in full.
+- Lifetime `COPILOT_PROMPT_CACHE_TTL_S` (default 900 s, 120-3600): storage is billed per token-hour, so short.
+- A failed create means plain calls for 10 minutes; a call failing on its cache is retried once in full. Caching can
+  never fail a request. `COPILOT_PROMPT_CACHE=off` turns it off.
+- `trace.cachedTokens` (Vertex `cachedContentTokenCount`, explicit or implicit) shows the effect; the development log
+  prints it on every investigation (`... 31200 tokens (14100 cached) ...`).
 
 Answers of the structured read lane are worded by Gemini from figures code has fixed (`vertex.ts` `wordAnswer`); a
 wording with a figure not in the data is discarded.
@@ -571,7 +589,7 @@ COPILOT_AUTH_DOMAIN=test.solana.vanna.finance
 ```
 
 Optional: `COPILOT_THINKING_LEVEL`, `COPILOT_INVESTIGATION_MAX_TURNS`, `COPILOT_INVESTIGATION_TIMEOUT_MS`,
-`COPILOT_INVESTIGATION` (§4).
+`COPILOT_INVESTIGATION`, `COPILOT_PROMPT_CACHE`, `COPILOT_PROMPT_CACHE_TTL_S` (§4).
 
 ### WorkOS (staging)
 
