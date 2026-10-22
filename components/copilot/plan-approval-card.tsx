@@ -19,7 +19,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { LIQUIDATION_HF_TEXT } from "@/lib/copilot/protocol-constants";
 import type { PlanStepView, PlanView, Venue } from "@/lib/copilot/types";
 
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
@@ -110,7 +109,7 @@ export interface PlanApprovalCardProps {
   busy?: boolean;
   /** The plan is past `proposed` (approved, running, finished): Approve is not offered again. */
   disabled?: boolean;
-  /** An approval attempt failed on the server; shown with the plan's own warnings. */
+  /** An approval attempt failed on the server; shown above the buttons. */
   error?: string | null;
 }
 
@@ -134,8 +133,6 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
     };
   }, [plan.steps, plan.signature_count]);
 
-  const execution = useMemo(() => planExecutionSummary(plan), [plan]);
-
   const unusable = expired || plan.steps.length === 0 || disabled;
   const approveBlocked = unusable || busy;
   const approveLabel = expired ? "Plan expired" : busy ? "Running…" : "Approve & run";
@@ -143,7 +140,10 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
   const clockColor = expired ? "var(--pc-danger-fg)" : "var(--pc-heading)";
   const clockLabelColor = expired ? "var(--pc-danger-fg)" : "var(--pc-muted)";
 
-  const warnings = error ? [...plan.warnings, error] : plan.warnings;
+  // The plan's own notes (sizing explanations, signature counts) are not drawn: the steps, the signatures line and the
+  // projected-impact panel already carry them, and the server refuses anything unsafe before it gets here. Only what
+  // needs action shows: an approval the server refused, or the window running out.
+  const warnings = error ? [error] : [];
   const showNotices = expired || warnings.length > 0;
 
   return (
@@ -158,19 +158,8 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
         padding: "20px 22px 18px",
       }}
     >
-      {/* header: stage label, waiting is not a timeout */}
-      <div className="flex items-center justify-between gap-5">
-        <p
-          className="m-0 uppercase"
-          style={{
-            fontFamily: MONO,
-            fontSize: 11,
-            letterSpacing: ".2em",
-            color: "var(--pc-muted)",
-          }}
-        >
-          <span style={{ color: "var(--pc-accent)" }}>03</span> · approve plan
-        </p>
+      {/* header: the approval window, counting down */}
+      <div className="flex items-center justify-end gap-5">
         <p
           aria-live="polite"
           className="m-0 flex items-baseline gap-2"
@@ -400,28 +389,6 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
         {meta.venueText ? ` · ${meta.venueText}` : ""}
       </p>
 
-      <div
-        className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5"
-        role="note"
-        aria-label="Execution preview"
-        style={{
-          border: "1px solid var(--pc-line-soft)",
-          borderRadius: 9,
-          background: "var(--pc-inset)",
-          padding: "9px 12px",
-          fontFamily: MONO,
-          fontSize: 10.5,
-          lineHeight: "17px",
-          color: "var(--pc-muted)",
-        }}
-      >
-        <span style={{ color: "var(--pc-body)", fontWeight: 700 }}>execution preview</span>
-        <span>{execution.stepCount} planned {execution.stepCount === 1 ? "step" : "steps"}</span>
-        <span>{execution.signatureCount} wallet {execution.signatureCount === 1 ? "signature" : "signatures"}</span>
-        {execution.readCount > 0 ? <span>{execution.readCount} read-only</span> : null}
-        <span>health floor {plan.hf_floor.toFixed(2)} · liquidation at {LIQUIDATION_HF_TEXT}</span>
-      </div>
-
       {/* Warnings — never dismissable, always above the buttons. One tinted block holding
           compact rows rather than a stack of full-size panels: boxed panels each the
           height of a paragraph pushed Approve below the fold, which made the plan itself
@@ -552,20 +519,6 @@ export function PlanApprovalCard({ plan, onApprove, onModify, onCancel, busy = f
           Cancel
         </button>
       </div>
-
-      {/* plan_id — the proof that what executes is what was shown */}
-      <p
-        className="m-0 mt-3 text-right"
-        title={`plan_id ${plan.plan_id}`}
-        style={{
-          fontFamily: MONO,
-          fontSize: 11,
-          letterSpacing: ".04em",
-          color: "var(--pc-quiet)",
-        }}
-      >
-        plan {plan.plan_id.slice(0, 10)}…{plan.plan_id.slice(-3)} · digest {plan.digest.slice(0, 8)}
-      </p>
     </div>
   );
 }

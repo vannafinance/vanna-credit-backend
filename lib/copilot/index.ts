@@ -787,6 +787,8 @@ async function singleAction(step: StepSpec, extras: string[], t: Turn): Promise<
     risk: pre.prepared.risk,
     simulation: pre.prepared.simulation,
     requires_signature: true,
+    // The card stands alone (the reply text is not drawn above it), so it carries these lines itself.
+    notes: [...new Set([...extras, ...pre.prepared.notes])].filter((n) => !pre.prepared.risk.reasons.includes(n)),
   };
   const lines = [
     `${planSummary}`,

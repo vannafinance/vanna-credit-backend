@@ -46,6 +46,8 @@ export interface InvestigationTrace {
   rejections: Rejection[];
   decision: string | null;
   tokens: number;
+  /** Of the input, tokens Vertex served from a cache (billed at the cached rate). */
+  cachedTokens: number;
   ms: number;
 }
 

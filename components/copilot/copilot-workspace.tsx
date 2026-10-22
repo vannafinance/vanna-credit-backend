@@ -15,6 +15,7 @@ import { logoSrc } from "@/components/v3/icons";
 import { isDraw, mainOuts } from "@/lib/predict/view";
 import { partyCol } from "@/components/predict/ui";
 import type { PredictEvent } from "@/lib/predict/types";
+import { viaSite } from "@/lib/copilot/world-image";
 import { CopilotShell } from "./copilot-shell";
 import {
   CopilotRailBody,
@@ -41,10 +42,6 @@ const STARTERS = ["Price of SOL", "What's my health factor?", "Supply 5 USDC to 
 const usd = (n: number) =>
   `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-function shortAddress(a: string): string {
-  return a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a;
-}
-
 /** The Predict page's badge colours (predict-v3.css `--pd-ava` / `--pd-accent`, light theme) and team-initial ink. */
 const PD_BADGE = { bg: "#eae2fb", fg: "#6635d1" };
 
@@ -58,12 +55,12 @@ function predictLogos(e: PredictEvent | undefined, eventName: string): RailLogoS
   const teams = mainOuts(e).filter((o) => !isDraw(o));
   if (e.type === "match" && teams.length === 2)
     return teams.map((o) => ({
-      src: o.image && !/\/img\//.test(o.image) ? o.image : null,
+      src: o.image && !/\/img\//.test(o.image) ? viaSite(o.image) : null,
       text: o.name.slice(0, 1).toUpperCase(),
       bg: partyCol(e, o),
       fg: "#fff",
     }));
-  return [{ src: e.image, text: e.ic, ...PD_BADGE }];
+  return [{ src: viaSite(e.image), text: e.ic, ...PD_BADGE }];
 }
 
 /**
@@ -200,16 +197,14 @@ export function CopilotWorkspace() {
   }, [predictData, predictEvents]);
 
   const chips: RailStatusChip[] = useMemo(() => {
-    // Only the sign-in state, as a status, never a button: the network and server chips were noise (an unreachable
-    // server shows on the page), and a one-click sign-out was too easy to hit. A sign-in ends by itself after 12 hours.
+    // Only sign-in problems, as a status, never a button: the network and server chips were noise (an unreachable
+    // server shows on the page), and a one-click sign-out was too easy to hit. A good sign-in shows nothing (the
+    // wallet is already on the navbar); it ends by itself after 12 hours.
     const list: RailStatusChip[] = [];
     if (session.state === "signed_in") {
-      const mismatch = address != null && address !== session.wallet;
-      list.push({
-        label: mismatch ? "Wallet differs from sign-in" : `Signed in · ${shortAddress(session.wallet)}`,
-        tone: mismatch ? "warn" : "ok",
-        title: mismatch ? "The connected wallet is not the one you signed in with." : "Signed in to the Copilot",
-      });
+      if (address != null && address !== session.wallet) {
+        list.push({ label: "Wallet differs from sign-in", tone: "warn", title: "The connected wallet is not the one you signed in with." });
+      }
     } else if (session.state === "signed_out") {
       list.push({ label: "Not signed in · Sign in to use the Copilot", tone: "warn" });
     }

@@ -13,6 +13,7 @@
  * production, `gcloud auth application-default login` locally). Tests inject a fake `LlmClient`.
  */
 
+import { createHash } from "node:crypto";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { copilotConfig } from "./config";
 import type { StructuredAnswer } from "./answer-schema";
@@ -63,6 +64,11 @@ export interface LlmRequest {
   /** How much the model may reason before answering. Routing and wording need little; investigation needs more. */
   thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
   signal?: AbortSignal;
+  /**
+   * `system` + `tools` are a fixed prefix sent again within minutes (investigation turns): keep it in an explicit
+   * Vertex cache. The model reads the same text either way; only the input bill changes.
+   */
+  cachePrefix?: boolean;
 }
 
 export interface LlmResponse {
@@ -70,6 +76,8 @@ export interface LlmResponse {
   calls: Array<{ name: string; args: Record<string, unknown> }>;
   /** Total tokens the call used, for the per-user daily cap. */
   tokens: number;
+  /** Of the input, tokens served from a cache (explicit, or Vertex's own implicit one). */
+  cachedTokens?: number;
 }
 
 export interface LlmClient {
@@ -91,10 +99,80 @@ export function setLlmClient(client: LlmClient | null): void {
   injected = client;
 }
 
+/** A cache closer than this to its expiry is not used (a call may take a while); renewal starts earlier. */
+const CACHE_USE_MARGIN_MS = 30_000;
+const CACHE_RENEW_MARGIN_MS = 120_000;
+/** After a failed create (unsupported location, quota, prefix too small), plain calls for this long before retrying. */
+const CACHE_RETRY_AFTER_MS = 10 * 60_000;
+
+type PrefixCache = { name: string | null; expiresAt: number; creating: boolean; retryAt: number };
+
 class VertexClient implements LlmClient {
   private ai: GoogleGenAI;
+  /** Explicit caches of fixed prefixes, by hash of model + system + tools + tool mode. Process-local. */
+  private caches = new Map<string, PrefixCache>();
   constructor(project: string, location: string) {
     this.ai = new GoogleGenAI({ vertexai: true, project, location });
+  }
+
+  private toolConfig(req: LlmRequest) {
+    return req.tools?.length
+      ? {
+          tools: [{ functionDeclarations: req.tools as never }],
+          toolConfig: { functionCallingConfig: { mode: req.forceTool ? "ANY" : "AUTO" } } as never,
+        }
+      : {};
+  }
+
+  /**
+   * The cache to use for this request's prefix, or null (send it in full). Never waits: a missing or expiring cache
+   * is created in the background, so the call that finds none costs what it did before, and the next one is cheaper.
+   */
+  private prefixCache(req: LlmRequest): string | null {
+    if (!req.cachePrefix || !req.tools?.length || req.responseSchema || !copilotConfig.promptCacheEnabled) return null;
+    const model = copilotConfig.vertexModel;
+    const key = createHash("sha256").update(JSON.stringify([model, req.system, req.tools, !!req.forceTool])).digest("hex");
+    const now = Date.now();
+    let entry = this.caches.get(key);
+    if (!entry) {
+      if (this.caches.size >= 8) this.caches.clear(); // a deploy changed the prompt; old caches simply expire
+      entry = { name: null, expiresAt: 0, creating: false, retryAt: 0 };
+      this.caches.set(key, entry);
+    }
+    if (!entry.creating && now >= entry.retryAt && entry.expiresAt - now < CACHE_RENEW_MARGIN_MS) {
+      const e = entry;
+      e.creating = true;
+      const ttl = copilotConfig.promptCacheTtlSeconds;
+      this.ai.caches
+        .create({
+          model,
+          config: {
+            displayName: `copilot-prefix-${key.slice(0, 12)}`,
+            systemInstruction: req.system,
+            ...this.toolConfig(req),
+            ttl: `${ttl}s`,
+            httpOptions: { timeout: 20_000 },
+          },
+        })
+        .then((c) => {
+          if (!c.name) throw new Error("no cache name returned");
+          e.name = c.name;
+          e.expiresAt = c.expireTime ? Date.parse(c.expireTime) : Date.now() + ttl * 1000;
+          if (!copilotConfig.isProduction) console.info(`[copilot:vertex] prompt cache ready: ${c.name} (${c.usageMetadata?.totalTokenCount ?? "?"} tokens, ${ttl}s)`);
+        })
+        .catch((err) => {
+          e.retryAt = Date.now() + CACHE_RETRY_AFTER_MS;
+          console.warn("[copilot:vertex] prompt cache unavailable, sending the prompt in full:", err instanceof Error ? err.message : err);
+        })
+        .finally(() => {
+          e.creating = false;
+        });
+    }
+    return entry.name && entry.expiresAt - now > CACHE_USE_MARGIN_MS ? entry.name : null;
+  }
+
+  private dropCache(name: string): void {
+    for (const e of this.caches.values()) if (e.name === name) e.expiresAt = 0;
   }
 
   async generate(req: LlmRequest): Promise<LlmResponse> {
@@ -102,26 +180,33 @@ class VertexClient implements LlmClient {
       ...(req.history ?? []).map((h) => ({ role: h.role === "assistant" ? "model" : "user", parts: [{ text: h.text }] })),
       { role: "user", parts: [{ text: req.user }] },
     ];
-    const res = await this.ai.models.generateContent({
-      model: copilotConfig.vertexModel,
-      contents,
-      config: {
-        systemInstruction: req.system,
-        temperature: 0,
-        maxOutputTokens: req.maxOutputTokens ?? 512,
-        // Gemini 3.x bills thinking tokens against maxOutputTokens; unbounded thinking can leave no room for the
-        // answer (empty text). Routing and wording need little reasoning.
-        thinkingConfig: { thinkingLevel: ThinkingLevel[req.thinkingLevel ?? "LOW"] },
-        ...(req.tools?.length
-          ? {
-              tools: [{ functionDeclarations: req.tools as never }],
-              toolConfig: { functionCallingConfig: { mode: req.forceTool ? "ANY" : "AUTO" } } as never,
-            }
-          : {}),
-        ...(req.responseSchema ? { responseMimeType: "application/json", responseSchema: req.responseSchema as never } : {}),
-        ...(req.signal ? { abortSignal: req.signal } : {}),
-      },
-    });
+    const call = (cached: string | null) =>
+      this.ai.models.generateContent({
+        model: copilotConfig.vertexModel,
+        contents,
+        config: {
+          // With a cache, the system prompt, tools and tool mode live in it (Vertex rejects them in the request too).
+          ...(cached ? { cachedContent: cached } : { systemInstruction: req.system, ...this.toolConfig(req) }),
+          temperature: 0,
+          maxOutputTokens: req.maxOutputTokens ?? 512,
+          // Gemini 3.x bills thinking tokens against maxOutputTokens; unbounded thinking can leave no room for the
+          // answer (empty text). Routing and wording need little reasoning.
+          thinkingConfig: { thinkingLevel: ThinkingLevel[req.thinkingLevel ?? "LOW"] },
+          ...(req.responseSchema ? { responseMimeType: "application/json", responseSchema: req.responseSchema as never } : {}),
+          ...(req.signal ? { abortSignal: req.signal } : {}),
+        },
+      });
+    const cached = this.prefixCache(req);
+    let res;
+    try {
+      res = await call(cached);
+    } catch (err) {
+      // A cache deleted or expired early must never fail the request: the same call with the prompt in full.
+      if (!cached || req.signal?.aborted) throw err;
+      console.warn("[copilot:vertex] cached call failed, retrying with the prompt in full:", err instanceof Error ? err.message : err);
+      this.dropCache(cached);
+      res = await call(null);
+    }
     const calls = (res.functionCalls ?? []).flatMap((c) => (c.name ? [{ name: c.name, args: (c.args ?? {}) as Record<string, unknown> }] : []));
     let text: string | null = null;
     try {
@@ -131,7 +216,8 @@ class VertexClient implements LlmClient {
     }
     const used = res.usageMetadata?.totalTokenCount;
     const estimated = Math.ceil((req.system.length + req.user.length + (text?.length ?? 0) + JSON.stringify(calls).length) / 4);
-    return { text, calls, tokens: typeof used === "number" && used > 0 ? used : estimated };
+    const cachedTokens = res.usageMetadata?.cachedContentTokenCount ?? 0;
+    return { text, calls, tokens: typeof used === "number" && used > 0 ? used : estimated, cachedTokens };
   }
 }
 

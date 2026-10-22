@@ -4,7 +4,7 @@
  * claimed or sent twice even with several server instances.
  */
 
-import type { PlanView, Simulation, StepStatus, StructuredAnswer, Venue } from "../types";
+import type { PlanCompletion, PlanView, Simulation, StepStatus, StructuredAnswer, Venue } from "../types";
 import type { Slots, StepSpec } from "../plan";
 
 export interface StoredTx {
@@ -69,6 +69,8 @@ export interface WorkflowRecord {
   conversation_id: string | null;
   /** Bounded audit trail: what happened, when. No amounts beyond what the steps hold. */
   log: Array<{ at: number; event: string }>;
+  /** The reply for the completed plan, in Gemini's words, written once (`completionOf`). */
+  completion?: PlanCompletion | null;
 }
 
 export class WorkflowError extends Error {

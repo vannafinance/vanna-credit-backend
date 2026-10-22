@@ -110,8 +110,8 @@ export const DECISION_TOOLS: LlmFunctionDecl[] = [
       type: "OBJECT",
       properties: {
         headline: { type: "STRING", description: "One or two plain sentences that answer the question directly." },
-        facts: { type: "ARRAY", items: { type: "OBJECT", properties: { label: { type: "STRING" }, value: { type: "STRING" } }, required: ["label", "value"] }, description: "Supporting figures, at most 12." },
-        note: { type: "STRING", description: "Optional context or trade-off, at most two sentences. No price predictions." },
+        facts: { type: "ARRAY", items: { type: "OBJECT", properties: { label: { type: "STRING" }, value: { type: "STRING" } }, required: ["label", "value"] }, description: "Only figures the user asked for that the headline does not already state; they show as a grid under it. Leave it empty when the headline answers the question (one price, one balance, one rate, a yes or no). Never add figures they did not ask about. A set the user asked to see (every position, every pool) may list each item, at most 12." },
+        note: { type: "STRING", description: "Optional: only a caveat or trade-off that changes what the user would do, at most two sentences. Leave it out otherwise. No price predictions." },
         venue: { type: "STRING", enum: VENUES },
         show_list: {
           type: "STRING",

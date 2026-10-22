@@ -151,6 +151,17 @@ export const copilotConfig = {
   get vertexModel(): string {
     return env("VERTEX_MODEL", "gemini-3.8-flash");
   },
+  /**
+   * Explicit Vertex context cache for the investigation's fixed prefix (system prompt + tool definitions): the same
+   * text, billed at the cached input rate. Off = every call sends the prefix in full, as before.
+   */
+  get promptCacheEnabled(): boolean {
+    return env("COPILOT_PROMPT_CACHE", "on") !== "off";
+  },
+  /** Lifetime of one cache. Storage is billed per token-hour, so short; a new one is made on the next request after. */
+  get promptCacheTtlSeconds(): number {
+    return Math.min(3600, Math.max(120, envNumber("COPILOT_PROMPT_CACHE_TTL_S", 900)));
+  },
 
   /**
    * Investigation (lib/copilot/investigation): Gemini reads the account through tools and decides, like the Stellar
