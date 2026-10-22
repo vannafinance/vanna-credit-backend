@@ -122,6 +122,8 @@ export interface Preview {
   risk: RiskResult;
   simulation?: Simulation | null;
   requires_signature: boolean;
+  /** The server's facts about this build (quote, fees, sizing, a one-time setup first), shown on the card. */
+  notes?: string[];
 }
 
 /** Step lifecycle. A step runs at most once (server claims it); `uncertain` is never retried automatically. */
@@ -154,6 +156,14 @@ export interface PlanStepView {
   note?: string | null;
   /** A read leg's answer, once the plan reached it. */
   answer?: StructuredAnswer | null;
+}
+
+/** The reply for a completed plan: a headline, and one line per confirmed transaction (by step number). */
+export interface PlanCompletion {
+  headline: string;
+  steps: Array<{ n: number; text: string }>;
+  /** Gemini's wording (checked against the plan's facts); false = the step labels themselves. */
+  worded: boolean;
 }
 
 export interface PlanView {

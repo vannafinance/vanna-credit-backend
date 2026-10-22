@@ -56,8 +56,8 @@ flowchart LR
 
 | Piece | Where | Role |
 |---|---|---|
-| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval (with the 5-minute approval countdown), step progress, wallet signing. The left panel lists **Margin Positions** (the margin account: **Collateral** is what the user deposited or swapped into, the margin vault balance minus the debt of that asset, Kamino receipts included; **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral), **Earn Positions** (Earn pool deposits, the amount redeemable now), **Perps Positions** (Phoenix, from the Perps page's view) and **Predict Positions** (World.xyz shares in the wallet or Vanna's pool, from the Predict page's query), the last two only when there are any. Rows that would read 0 are hidden |
-| Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel |
+| Copilot UI | `components/copilot/*`, `app/copilot/page.tsx` | Chat, answers, clarifications, plan card, approval (with the 5-minute approval countdown), step progress, wallet signing. The left panel lists **Margin Positions** (the margin account: **Collateral** is what the user deposited or swapped into, the margin vault balance minus the debt of that asset, Kamino receipts included; **Borrowed** is the debt, so a borrow changes only Borrowed and a deposit only Collateral), **Earn Positions** (Earn pool deposits, the amount redeemable now), **Perps Positions** (Phoenix, from the Perps page's view) and **Predict Positions** (World.xyz shares in the wallet or Vanna's pool, from the Predict page's query), the last two only when there are any. Rows that would read 0 are hidden. Laid out as on the Stellar rail: the Health factor row has its gauge icon, each section heading has the logos of its first two holdings, its count and a caret (closed on every visit), and its rows sit indented under the heading, each with its token logo |
+| Copilot API | `app/api/copilot/route.ts`, `app/api/copilot/auth/*`, `app/api/copilot/workflow/[id]/*` | One chat turn; Sign-In-With-Solana login; plan approve / advance / submit / confirm / cancel / summary |
 | Copilot brain | `lib/copilot/*` | The six stages below |
 | Gemini | Vertex AI, project `solana-mcp`, model `gemini-3.8-flash`, location `global` | Understands, investigates with tools, decides |
 | Vanna Solana MCP | `Vanna_MCP_Solana` repo, Cloud Run `vanna-mcp-solana` | Reads (positions, prices, pools, capacity, history, perps, vaults, Predict) and unsigned, simulated transaction builds. Calls back into the app (`/api/prices/refresh`, `/api/jupiter/*`, `/api/perps/phoenix-*`, `/api/farm/vaults`, `/api/faucet`, `/api/predict/*`), logging in to the app's access gate with `APP_ACCESS_CODE` |
@@ -86,8 +86,8 @@ flowchart LR
    also records a per-wallet cut-off in the store, so every earlier session for that wallet stops working, not just
    this browser's cookie. A session ends 12 hours after the wallet signed in, used or not (`config.ts` `sessionTtlMs`
    = `sessionMaxMs`, so the hourly `renewSessionCookie` on opening the Copilot or a chat turn cannot extend it); the
-   user then signs in again. The left panel shows the sign-in as a status only ("Signed in · <wallet>" or "Not signed
-   in · sign in to use the Copilot"); it is not a sign-out button.
+   user then signs in again. The left panel shows only sign-in problems, as a status ("Not signed in · sign in to use
+   the Copilot", or "Wallet differs from sign-in"); a good sign-in shows nothing, and it is never a sign-out button.
    The page offers the sign-in card before anything is typed, and says "Connecting…" while a remembered wallet
    reconnects (up to 5 s) instead of offering "Connect wallet".
 3. `index.ts` (`handleChat`) checks the per-user chat rate (`limits.ts`, Firestore counters) and trims the history
@@ -157,6 +157,9 @@ The wallet for every read is the session's wallet; a read cannot be pointed else
 **Decision tools** (`investigation/decision.ts`): `answer` (an answer built from the evidence), `propose_actions` (one
 or more actions in order, with report legs), `propose_leverage` (a leveraged long), `propose_unwind` (exit positions),
 `ask_user` (one question when something essential is missing) and `decline` (outside the product).
+An `answer` is brief: the headline answers in plain sentences and `facts` (shown as a grid) hold only other figures the
+user asked for, none when the headline already answers it, never everything a read returned (prompt rule and the tool's
+field descriptions; a set the user asked to see may still list each item, at most 12).
 
 **Timing and parts that are not done.** Gemini reads the whole message, in any wording or language, and
 `propose_actions` says how it read it:
@@ -293,8 +296,23 @@ borrowing, no health factor.
 
 `workflow/funding.ts` checks the wallet can pay for every step and `preflightStep` checks the first step against live
 health. `workflow.ts` `createWorkflow` stores the plan with exact amounts, the user's wallet, the health floor and a
-sha256 digest over every executable slot (`plan.ts` `planDigest`). The UI shows a single action as a preview card and a
-plan as a plan card with its steps, warnings and simulated health. The plan is valid for 5 minutes: both cards show the
+sha256 digest over every executable slot (`plan.ts` `planDigest`). The UI shows a single action as a preview card and a plan as a plan card with its steps, warnings and simulated health.
+Either card stands on its own: the reply text written for it (summary, step list, "approve to continue") only repeated
+the card, so it is not drawn above it. The preview carries the server's notes for the build itself (`Preview.notes`:
+quote, fees, sizing, a one-time setup first) next to the risk reasons; its internal `op` slot is not shown. The plan
+card has no stage label, execution-preview strip or plan id / digest line (they repeated the steps / signatures line),
+and does not draw the plan's own warnings (sizing explanations, signature counts: the steps, the signatures line and the
+impact panel carry them); it shows only a refused approval or the expired window.
+
+Once a plan completes, the cards go and the turn becomes the reply about what was done (`completion-reply.tsx`): a
+headline, one row per confirmed transaction (what it did, and its explorer link), then the report legs inline. The words
+are Gemini's (`POST /workflow/[id]/summary`, `workflow.ts` `completionOf` -> `workflow/completion.ts`
+`composeCompletion`), written from the plan record's facts only (confirmed step labels and amounts, report answers; no
+signatures) and checked like any reply (`numbersGrounded`, no markdown, links or addresses). A step line the model leaves
+out or gets wrong keeps its own label in the past tense. The worded reply is kept on the record (`completion`), so a
+reopened chat shows the same words without another model call; the fallback (no model, or its reply refused) is the
+step labels themselves and is not kept. With Gemini's headline a report shows only its figures (its own sentence is
+already in the headline); a paused, failed or cancelled run keeps its run card. The plan is valid for 5 minutes: both cards show the
 window counting down from 4:59 (`plan-approval-card.tsx` `usePlanCountdown` / `PlanCountdown`, also used by the
 single-action footer in `assistant-turn.tsx`), Approve closes at 0:00 ("Expired: ask again"), and the clock goes away
 once the user approves (the run card replaces the approval card). The server refuses a late approval on its own. A

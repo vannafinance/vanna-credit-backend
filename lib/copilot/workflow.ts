@@ -32,6 +32,7 @@ import type {
   ConfirmRequest,
   ConfirmResponse,
   CopilotUser,
+  PlanCompletion,
   PlanStepView,
   PlanView,
   Simulation,
@@ -41,6 +42,7 @@ import type {
   UnsignedTx,
 } from "./types";
 import { buildStepTx, preflightStep, runReadStep } from "./workflow/steps";
+import { composeCompletion } from "./workflow/completion";
 import { verifySignedTx } from "./workflow/submit-verify";
 import { WorkflowError, specOf, type StoredStep, type WorkflowRecord, type WorkflowState } from "./workflow/types";
 import { getConnection } from "../solana/connection";
@@ -68,6 +70,8 @@ export interface WorkflowDeps {
   word(facts: string, kind: FailureKind, summary: string): Promise<string>;
   /** After a Predict trade confirms: the app's keeper merges the pools it touched (best effort). */
   predictMerge(marketIds: string[], user: CopilotUser): Promise<number | null>;
+  /** A completed plan's reply, in Gemini's words (the step labels when the model can't be used). */
+  summarize(rec: WorkflowRecord): Promise<PlanCompletion>;
 }
 
 let cachedStore: RecordStore<WorkflowRecord> | null = null;
@@ -92,6 +96,7 @@ export const workflowDeps: WorkflowDeps = {
   recordSpend,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   word: async (facts, kind, summary) => (await composeFailure({ message: `(the user approved this plan) ${summary}`, kind, facts, signal: AbortSignal.timeout(12_000) })).text,
+  summarize: (rec) => composeCompletion(rec, AbortSignal.timeout(15_000)),
   predictMerge: async (marketIds, user) => {
     const r = await mcp.predictMerge(marketIds, { user });
     const results = Array.isArray(r.results) ? (r.results as Array<Record<string, unknown>>) : [];
@@ -275,7 +280,7 @@ function settle(rec: WorkflowRecord, now: number): WorkflowRecord {
   if (rec.state === "proposed" || rec.state === "cancelled" || rec.state === "expired") return rec;
   const statuses = rec.steps.map((s) => s.status);
   if (statuses.some((s) => s === "failed")) return { ...rec, state: "failed" };
-  if (statuses.every((s) => DONE.has(s))) return { ...rec, state: "completed", pause_reason: null, log: logEvent(rec, now, "completed") };
+  if (statuses.every((s) => DONE.has(s))) return rec.state === "completed" ? rec : { ...rec, state: "completed", pause_reason: null, log: logEvent(rec, now, "completed") };
   if (statuses.some((s) => s === "uncertain")) {
     return { ...rec, state: "paused", pause_reason: "A transaction's outcome is unknown. Check its status before doing anything else." };
   }
@@ -283,6 +288,23 @@ function settle(rec: WorkflowRecord, now: number): WorkflowRecord {
 }
 
 const nextStep = (rec: WorkflowRecord): StoredStep | undefined => rec.steps.find((s) => !DONE.has(s.status));
+
+// ── Completion reply ────────────────────────────────────────────────────────
+
+/**
+ * The reply for a completed plan. Composed once and kept on the record, so a reopened chat shows the same words
+ * without asking the model again; the fallback (model off or its reply refused) is not kept, so a later read can still
+ * get the worded one.
+ */
+export async function completionOf(id: string, user: CopilotUser): Promise<PlanCompletion> {
+  const rec = await getWorkflow(id, user);
+  if (rec.state !== "completed") throw new WorkflowError("conflict", "This plan has not completed yet.", 409);
+  if (rec.completion) return rec.completion;
+  const composed = await workflowDeps.summarize(rec);
+  if (!composed.worded) return composed;
+  const { out } = await update(id, user, (r) => (r.completion ? { next: null, out: r.completion } : { next: { ...r, completion: composed }, out: composed }));
+  return out;
+}
 
 // ── Approve ─────────────────────────────────────────────────────────────────
 

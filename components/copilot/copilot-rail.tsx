@@ -116,6 +116,32 @@ export interface RailPosition {
   logos?: RailLogoSpec[];
 }
 
+/** The health-factor gauge beside the rail's Health factor row (the Stellar Copilot's icon). */
+function HealthIcon() {
+  return (
+    <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="flex-none text-vgray-700">
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+      <path d="m12 14 4-4" />
+    </svg>
+  );
+}
+
+/**
+ * A section's icon: the logos of the first two holdings it lists, overlapped (as the Stellar rail's Positions icon),
+ * or SOL and USDC when it lists none, so each section shows the tokens it holds.
+ */
+function SectionIcon({ positions }: { positions: RailPosition[] }) {
+  const firstTwo = positions.slice(0, 2).map((p) => p.logos?.[0] ?? tokenLogo(p.symbol));
+  const logos = firstTwo.length ? firstTwo : [tokenLogo("SOL"), tokenLogo("USDC")];
+  return (
+    <span aria-hidden style={{ position: "relative", display: "inline-block", width: logos.length > 1 ? 25 : 17, height: 17, flex: "none", transform: "scale(0.85)", transformOrigin: "left center" }}>
+      {logos.map((logo, i) => (
+        <RailLogo key={i} logo={logo} style={{ left: i * 8, zIndex: logos.length - i, boxShadow: logos.length > 1 ? "0 0 0 1.5px #fff" : undefined }} />
+      ))}
+    </span>
+  );
+}
+
 /** Down chevron for in-place sections (Margin Positions, Earn Positions, Recents). Open rotates it to point up. */
 function Caret({ open }: { open: boolean }) {
   return (
@@ -253,9 +279,10 @@ export function CopilotRailBody({
     <div style={{ minWidth: 0, padding: "4px 16px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Health factor — the number and the zone, nothing else. The dial, the scale and
           the collateral/borrowed strip stay off the rail by design. */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-        <div className="text-[14px] leading-[21px] font-semibold text-vgray-900">Health factor</div>
-        <div style={{ flex: "none", textAlign: "right", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <HealthIcon />
+        <div className="flex-1 text-[14px] leading-[21px] font-semibold text-vgray-900">Health factor</div>
+        <div className="flex flex-none items-center gap-1.5" style={{ minWidth: 0 }}>
           <div className="text-[13px] leading-[20px] font-semibold text-vgray-900" style={{ fontFamily: VANNA_FONT }}>
             {noDebt ? "∞" : healthFactor == null ? "—" : healthFactor.toFixed(2)}
           </div>
@@ -307,13 +334,16 @@ function PositionsSection({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="cp-icon-button flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
+        className="cp-icon-button flex w-full cursor-pointer items-center gap-2.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
       >
+        <SectionIcon positions={positions} />
         <span className="flex-1 text-left text-[14px] leading-[21px] font-semibold">{title}</span>
+        <span aria-hidden className="text-[12px] font-normal text-vgray-500">{positions.length}</span>
         <Caret open={open} />
       </button>
       {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0 2px" }}>
+        // Indented under the title (past the icon), as on the Stellar rail.
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "8px 0 2px", marginLeft: 35 }}>
           {positions.length === 0 ? (
             <p className="text-[12px] leading-[18px] text-vgray-400">{empty}</p>
           ) : (

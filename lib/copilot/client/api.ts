@@ -16,6 +16,7 @@ import type {
   ConfirmRequest,
   ConfirmResponse,
   NonceResponse,
+  PlanCompletion,
   PlanView,
   SessionResponse,
   SubmitRequest,
@@ -176,6 +177,11 @@ export function confirmStep(id: string, req: ConfirmRequest, signal?: AbortSigna
 /** Ends a plan on the server, so a reopened chat (or another tab) sees it stopped. Refused while a transaction is in flight. */
 export function cancelPlan(id: string, signal?: AbortSignal): Promise<{ plan: PlanView }> {
   return post<{ plan: PlanView }>(wf(id, "/cancel"), {}, signal);
+}
+
+/** A completed plan's reply: Gemini's words for what was done (kept on the plan, so asking again costs nothing). */
+export function getPlanSummary(id: string, signal?: AbortSignal): Promise<PlanCompletion> {
+  return post<{ completion: PlanCompletion }>(wf(id, "/summary"), {}, signal).then((body) => body.completion);
 }
 
 // ── Status lines ─────────────────────────────────────────────────────────────

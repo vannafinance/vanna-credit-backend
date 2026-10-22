@@ -71,7 +71,8 @@ export interface ReviewCardProps {
 
 export function ActionReviewCard({ preview, footer, hfFloor }: ReviewCardProps) {
   const swap = isSwapPreview(preview) ? swapSides(preview.slots) : null;
-  const shown = Object.entries(preview.slots).filter(([, v]) => v !== null && v !== "");
+  // `op` is the internal step name ("predict_trade"); the summary above already says what the action does.
+  const shown = Object.entries(preview.slots).filter(([k, v]) => k !== "op" && v !== null && v !== "");
   const projected = preview.risk.projected_health_factor;
 
   return (
@@ -103,9 +104,9 @@ export function ActionReviewCard({ preview, footer, hfFloor }: ReviewCardProps) 
 
       {preview.simulation && <ImpactPanel sim={preview.simulation} floor={hfFloor} />}
 
-      {preview.risk.reasons.length > 0 && (
+      {((preview.notes?.length ?? 0) > 0 || preview.risk.reasons.length > 0) && (
         <ul className="mt-3 space-y-1 text-[12.5px] leading-5 text-vgray-600">
-          {preview.risk.reasons.map((reason) => (
+          {[...(preview.notes ?? []), ...preview.risk.reasons].map((reason) => (
             <li key={reason} className="flex gap-2">
               <span aria-hidden="true" className="text-vgray-300">•</span>
               <span>{reason}</span>

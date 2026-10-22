@@ -165,7 +165,8 @@ const labelStyle: React.CSSProperties = {
   wordBreak: "keep-all",
 };
 
-export function AnswerView({ answer }: { answer: StructuredAnswer }) {
+/** `hideHeadline`: the answer sits under a reply that already says it (a finished plan's summary). */
+export function AnswerView({ answer, hideHeadline = false }: { answer: StructuredAnswer; hideHeadline?: boolean }) {
   const venue = answer.venue && answer.venue !== "none" ? answer.venue : null;
   const token = venue ? VENUE_TOKEN[venue] : null;
 
@@ -186,7 +187,7 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
 
   return (
     <div>
-      {venue && token ? (
+      {!hideHeadline && venue && token ? (
         <span
           className="mb-3 inline-flex items-center gap-1.5 rounded-full font-bold uppercase"
           style={{
@@ -208,17 +209,19 @@ export function AnswerView({ answer }: { answer: StructuredAnswer }) {
         </span>
       ) : null}
 
-      <p
-        className="m-0 font-medium"
-        style={{
-          fontSize: 19,
-          lineHeight: "28px",
-          color: "var(--cp-g900)",
-          textWrap: "pretty",
-        }}
-      >
-        {answer.headline}
-      </p>
+      {hideHeadline ? null : (
+        <p
+          className="m-0 font-medium"
+          style={{
+            fontSize: 19,
+            lineHeight: "28px",
+            color: "var(--cp-g900)",
+            textWrap: "pretty",
+          }}
+        >
+          {answer.headline}
+        </p>
+      )}
 
       {answer.kicker ? (
         <p

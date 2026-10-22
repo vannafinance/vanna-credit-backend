@@ -55,7 +55,6 @@ export interface PlanRunCardProps {
 
 export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: PlanRunCardProps) {
   const { plan, phase, pending } = run;
-  const readAnswers = plan.steps.filter((s) => s.kind === "read" && s.status === "done" && s.answer);
   const firstOpen = plan.steps.findIndex((s) => !["confirmed", "done", "skipped", "failed", "expired", "uncertain"].includes(s.status));
   const currentStepIndex = firstOpen === -1 ? Math.max(0, plan.steps.length - 1) : firstOpen;
   const busy = RUN_ACTIVE.has(phase);
@@ -146,7 +145,16 @@ export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: Pl
         </button>
       )}
 
-      {/* What the user asked to see along the way, each at its own step, as soon as the plan reaches it. */}
+      <RunReadAnswers run={run} />
+    </div>
+  );
+}
+
+/** What the user asked to see along the way, each at its own step, as soon as the plan reaches it (and a report the plan ended with). */
+function RunReadAnswers({ run }: { run: RunState }) {
+  const readAnswers = run.plan.steps.filter((s) => s.kind === "read" && s.status === "done" && s.answer);
+  return (
+    <>
       {readAnswers.map((s) => (
         <div key={s.n} className="rounded-2xl border border-vgray-100 bg-surface px-5 py-5">
           <p className="m-0 mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-vgray-500">
@@ -155,11 +163,11 @@ export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: Pl
           <AnswerView answer={s.answer as NonNullable<typeof s.answer>} />
         </div>
       ))}
-      {phase === "completed" && !readAnswers.length && run.answer && (
+      {run.phase === "completed" && !readAnswers.length && run.answer && (
         <div className="rounded-2xl border border-vgray-100 bg-surface px-5 py-5">
           <AnswerView answer={run.answer} />
         </div>
       )}
-    </div>
+    </>
   );
 }
