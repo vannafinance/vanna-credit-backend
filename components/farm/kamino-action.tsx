@@ -105,9 +105,12 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
   const [pctOn, setPctOn] = useState(0);
   const [txError, setTxError] = useState("");
 
-  // The margin-vault balance is the only source of farm liquidity — make sure it's loaded.
+  // The margin-vault balance is the only source of farm liquidity. The root MarginAccountHydrator
+  // loads it; read it here only when this wallet's account isn't in the store yet.
+  const storeOwner = useMarginAccountInfoStore((s) => s.ownerAddress);
   useEffect(() => {
-    if (userAddress) void refreshMarginAccount(userAddress);
+    if (userAddress && storeOwner !== userAddress) void refreshMarginAccount(userAddress);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userAddress]);
 
   const available = hasMarginAccount ? parseFloat(collateralBalances[token]?.amount ?? "0") || 0 : 0;
@@ -163,7 +166,6 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
         onSuccess: () => {
           setValue("");
           setPctOn(0);
-          if (userAddress) void refreshMarginAccount(userAddress);
         },
         onError: (error) => setTxError(describeError(error, "Supply failed")),
       },
@@ -294,7 +296,6 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
         onSuccess: () => {
           setValue("");
           setPctOn(0);
-          if (userAddress) void refreshMarginAccount(userAddress);
         },
         onError: (error) => setTxError(describeError(error, "Withdraw failed")),
       },

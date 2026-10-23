@@ -15,6 +15,7 @@ import { AppToaster } from "@/components/ui/app-toaster";
 import { TransactionProgressModal } from "@/components/ui/transaction-progress-modal";
 import { FlashRepayHost } from "@/components/v3/flash-repay";
 import { MarginAccountHydrator } from "@/components/margin-account-hydrator";
+import { TickRefresh } from "@/components/tick-refresh";
 
 // Self-hosted, preloaded by next/font (no render-blocking external request, so
 // it helps LCP). `display: "swap"` paints text immediately with a fallback and
@@ -85,7 +86,7 @@ export const metadata: Metadata = {
  * dependency order — theme → React Query → Solana connection + wallet adapter →
  * slot-tick subscriber → price feed — then the persistent navbar, page
  * content (scaled), and the toast portal. `MarginAccountHydrator` restores
- * the connected account's cached state on load.
+ * the connected account's cached state on load; `TickRefresh` refreshes the live reads on slot ticks.
  */
 export default function RootLayout({
   children,
@@ -104,6 +105,7 @@ export default function RootLayout({
               <LedgerSubscriberProvider>
                 <PriceProvider>
                   <MarginAccountHydrator />
+                  <TickRefresh />
                   <RpcBanner />
                   <Navbar items={navbarItems}/>
                   <ScaleWrapper>{children}</ScaleWrapper>

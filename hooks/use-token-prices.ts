@@ -2,10 +2,8 @@
 
 import { fetchWithTimeout } from "../lib/async";
 
-import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLedgerTick } from '@/contexts/ledger-subscriber';
-import { useLiveTick } from '@/lib/tick-scope';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { TOKENS, findToken } from '@/lib/solana/tokens';
 
 export interface PriceEntry {
@@ -28,20 +26,9 @@ export async function fetchPrices(): Promise<Record<string, PriceEntry>> {
   return body.prices;
 }
 
-/** Raw price entries (with staleness) for every registry token. */
+/** Raw price entries (with staleness) for every registry token. Refreshed on each slot tick (components/tick-refresh.tsx). */
 export function usePriceEntries() {
-  const { tick } = useLedgerTick();
-  const live = useLiveTick();
-  const qc = useQueryClient();
-  const lastTick = useRef(tick);
-  const query = useQuery({ queryKey: PRICES_QUERY_KEY, queryFn: fetchPrices, staleTime: 5_000 });
-  useEffect(() => {
-    if (tick === lastTick.current) return;
-    lastTick.current = tick;
-    if (!live) return; // this page shows no prices (lib/tick-scope.ts)
-    qc.invalidateQueries({ queryKey: PRICES_QUERY_KEY }, { cancelRefetch: false });
-  }, [tick, qc, live]);
-  return query;
+  return useQuery({ queryKey: PRICES_QUERY_KEY, queryFn: fetchPrices, staleTime: 5_000 });
 }
 
 /**

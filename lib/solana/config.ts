@@ -66,5 +66,5 @@ export function explorerUrl(kind: "address" | "tx", value: string): string {
   return `https://explorer.solana.com/${kind}/${value}?cluster=custom&customUrl=${encodeURIComponent(PUBLIC_RPC_URL)}`;
 }
 
-/** Jupiter aggregator v6 program (error attribution in lib/errors/normalize.ts). */
+/** Jupiter aggregator v6 program. */
 export const JUPITER_V6_PROGRAM_ID = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");

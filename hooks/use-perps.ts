@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useUserStore } from '@/store/user';
@@ -14,21 +15,25 @@ import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-pro
  * The Perps page's on-chain state: listed Phoenix markets (index / mark price, leverage cap), the
  * connected wallet's positions and its margin account. Polled every few seconds so PnL
  * follows the index price, with a single polling schedule. Works without a wallet (markets only).
+ * The returned object is stable between refreshes (useV3Account and its consumers memo on it).
  */
 export const usePerpsView = () => {
   const address = useUserStore((s) => s.address);
-  const query = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['perps', 'view', address ?? 'none'],
     queryFn: () => fetchPerpsView(address ? new PublicKey(address) : null),
     refetchInterval: 6_000,
     staleTime: 3_000,
   });
-  return {
-    view: query.data as PerpsView | undefined,
-    isLoading: query.isLoading,
-    error: query.error ? (query.error as Error).message : null,
-    refresh: () => query.refetch(),
-  };
+  return useMemo(
+    () => ({
+      view: data as PerpsView | undefined,
+      isLoading,
+      error: error ? (error as Error).message : null,
+      refresh: () => refetch(),
+    }),
+    [data, isLoading, error, refetch],
+  );
 };
 
 /** The wallet's Phoenix history (decoded from on-chain transactions); fetched while `enabled`. */

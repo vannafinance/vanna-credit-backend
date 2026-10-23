@@ -34,7 +34,7 @@ import { marginVault } from "@/lib/solana/pdas";
 import { fromRaw } from "@/lib/solana/math";
 import { showTxStep, showTxSuccess, showTxError, onTxStatus } from "@/lib/tx-progress";
 import { useVaultAccount } from "./use-vaults";
-import { markFreshReads } from "@/lib/fresh-reads";
+import { refreshAfterTx } from "@/lib/after-tx";
 
 export type VaultCall = "deposit" | "withdraw";
 
@@ -115,11 +115,7 @@ export function useVaultAction(id: string, initial: VaultCall = "deposit"): Vaul
     setPreview(null);
     setError("");
   };
-  const refresh = () => {
-    markFreshReads();
-    void qc.invalidateQueries({ queryKey: ["farm"] });
-    void qc.invalidateQueries({ queryKey: ["margin"] });
-  };
+  const refresh = () => void refreshAfterTx(qc, ["farm", "margin"]);
   const quote = async () => {
     const current = ++request.current;
     setBusy(true);

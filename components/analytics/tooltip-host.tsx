@@ -37,14 +37,15 @@ export function TooltipHost({ rootRef }: { rootRef: React.RefObject<HTMLElement 
     root.addEventListener("pointerover", over);
     root.addEventListener("pointerout", out);
     root.addEventListener("focusin", over);
-    root.addEventListener("focusout", () => setTip(null));
-    document.addEventListener("keydown", key);
     const hide = () => setTip(null);
+    root.addEventListener("focusout", hide);
+    document.addEventListener("keydown", key);
     window.addEventListener("scroll", hide, { passive: true, capture: true });
     return () => {
       root.removeEventListener("pointerover", over);
       root.removeEventListener("pointerout", out);
       root.removeEventListener("focusin", over);
+      root.removeEventListener("focusout", hide);
       document.removeEventListener("keydown", key);
       window.removeEventListener("scroll", hide, { capture: true });
     };

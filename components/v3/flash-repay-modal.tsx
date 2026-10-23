@@ -17,11 +17,10 @@ import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFlashRepayStore } from "@/store/flash-repay-store";
 import { useUserStore } from "@/store/user";
-import { useWallet, refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
+import { useWallet } from "@/hooks/use-wallet";
 import { useV3Account } from "@/hooks/use-v3-account";
-import { refreshMarginAccount } from "@/store/margin-account-info-store";
 import { explorerUrl } from "@/lib/solana/config";
-import { markFreshReads } from "@/lib/fresh-reads";
+import { refreshAfterTx } from "@/lib/after-tx";
 import { describeError } from "@/lib/solana/errors";
 import { executeFlashRepay, planFlashRepay, type FlashLoanRow, type FlashPlan, type FlashStepState } from "@/lib/solana/flash-repay";
 import { Info, Modal } from "./ui";
@@ -89,17 +88,11 @@ export default function FlashRepayModal() {
   const plan = planQ.data;
 
   // Refresh every page's data after (part of) a run.
+  // The account snapshot carries margin and wallet balances (the root hydrator copies it into the
+  // stores), so no separate browser re-read is needed.
   const refreshAll = useCallback(async () => {
-    markFreshReads();
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["margin"] }),
-      qc.invalidateQueries({ queryKey: ["earn"] }),
-      qc.invalidateQueries({ queryKey: ["perps"] }),
-      qc.invalidateQueries({ queryKey: ["flash-repay"] }),
-      address ? refreshMarginAccount(address) : Promise.resolve(),
-      address ? refreshWalletBalancesOnChain(address).catch(() => {}) : Promise.resolve(),
-    ]);
-  }, [qc, address]);
+    await Promise.all([refreshAfterTx(qc, ["margin", "earn", "perps", "farm"]), qc.invalidateQueries({ queryKey: ["flash-repay"] })]);
+  }, [qc]);
 
   /** Plans from the chain's current state and runs every step (also used by Retry). */
   const start = useCallback(
