@@ -40,6 +40,8 @@ export interface QuoteRequest {
   owner: PublicKey | null;
   /** Quote only this aggregator (the Spot page's Jupiter / Titan picker); omitted = best of both. */
   provider?: SwapProvider;
+  /** Cancels both providers' requests (a newer quote replaced this one). */
+  signal?: AbortSignal;
 }
 
 function titanAsQuote(t: TitanQuote, req: QuoteRequest): AggregatedQuote {
@@ -69,13 +71,13 @@ export async function bestSwapQuote(req: QuoteRequest): Promise<AggregatedQuote>
   if (req.provider === "titan" && !req.owner) throw new Error("Connect a wallet to get a Titan quote");
   const jupiter: Promise<AggregatedQuote | null> = !useJupiter
     ? Promise.resolve(null)
-    : (req.mode === "margin" ? quoteMarginSwap(marginReq) : fetchJupiterQuote({ inputMint: req.inputMint, outputMint: req.outputMint, amount: req.amountRaw, slippageBps: req.slippageBps })).then(
+    : (req.mode === "margin" ? quoteMarginSwap(marginReq, req.signal) : fetchJupiterQuote({ inputMint: req.inputMint, outputMint: req.outputMint, amount: req.amountRaw, slippageBps: req.slippageBps, signal: req.signal })).then(
     (q): AggregatedQuote => ({ ...q, provider: "jupiter", quotes: [] }),
   );
   const titan: Promise<AggregatedQuote | null> = useTitan && req.owner
     ? (req.mode === "margin"
-        ? quoteMarginTitanSwap(marginReq, req.owner)
-        : fetchTitanQuote({ inputMint: req.inputMint, outputMint: req.outputMint, amount: req.amountRaw, userPublicKey: req.owner.toBase58(), slippageBps: req.slippageBps, mode: "wallet" })
+        ? quoteMarginTitanSwap(marginReq, req.owner, req.signal)
+        : fetchTitanQuote({ inputMint: req.inputMint, outputMint: req.outputMint, amount: req.amountRaw, userPublicKey: req.owner.toBase58(), slippageBps: req.slippageBps, mode: "wallet", signal: req.signal })
       ).then((t) => titanAsQuote(t, req))
     : Promise.resolve(null);
   const [j, t] = await Promise.allSettled([jupiter, titan]);

@@ -187,7 +187,7 @@ const MARGIN_SWAP_MAX_ACCOUNTS = 20;
 const MARGIN_SWAP_FALLBACK_MAX_ACCOUNTS = 32;
 
 /** Exact-input quote for a margin swap (same routing as wallet swaps, shorter routes first). */
-export async function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQuote> {
+export async function quoteMarginSwap(req: MarginSwapRequest, signal?: AbortSignal): Promise<JupiterQuote> {
   const from = getToken(req.fromSymbol);
   const to = getToken(req.toSymbol);
   const quote = (maxAccounts: number) =>
@@ -197,6 +197,7 @@ export async function quoteMarginSwap(req: MarginSwapRequest): Promise<JupiterQu
       amount: toRaw(req.amount, from.decimals),
       slippageBps: req.slippageBps,
       maxAccounts,
+      signal,
     });
   try {
     return await quote(MARGIN_SWAP_MAX_ACCOUNTS);

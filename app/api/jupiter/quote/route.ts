@@ -28,7 +28,8 @@ export async function GET(request: NextRequest) {
   if (!url.searchParams.has("slippageBps")) url.searchParams.set("slippageBps", "100");
   if (!url.searchParams.has("dexes")) url.searchParams.set("dexes", FORK_DEXES);
   try {
-    const response = await fetchWithTimeout(url.toString(), { headers: jupiterHeaders({ Accept: "application/json" }), cache: "no-store" });
+    // The browser cancels superseded quotes; request.signal stops the upstream call too.
+    const response = await fetchWithTimeout(url.toString(), { headers: jupiterHeaders({ Accept: "application/json" }), cache: "no-store", signal: request.signal });
     const body = await response.json();
     return NextResponse.json(body, { status: response.status });
   } catch (error) {
