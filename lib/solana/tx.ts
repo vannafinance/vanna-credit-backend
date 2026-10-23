@@ -11,7 +11,7 @@ import {
 } from "@solana/web3.js";
 import { getConnection } from "./connection";
 import { VANNA_PROGRAM_ID } from "./config";
-import { broadcastSignedTransaction } from "./broadcast";
+import { blockhashAlongside, broadcastSignedTransaction, PLACEHOLDER_BLOCKHASH } from "./broadcast";
 import { decodeProgramError, VannaTxError } from "./errors";
 import { healStaleDexPools } from "./fork-heal";
 import type { TxSigner } from "./wallet-bridge";
@@ -88,10 +88,9 @@ async function sendV0(
   tables: AddressLookupTableAccount[],
 ): Promise<string> {
   const connection = getConnection();
-  let latest = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: opts.signer.publicKey,
-    recentBlockhash: latest.blockhash,
+    recentBlockhash: PLACEHOLDER_BLOCKHASH,
     instructions,
   }).compileToV0Message(tables);
   const tx = new VersionedTransaction(message);
@@ -99,6 +98,7 @@ async function sendV0(
   if (size > MAX_TX_BYTES) throw new Error(`Transaction too large: ${size} > ${MAX_TX_BYTES}`);
 
   opts.onStatus?.("simulating");
+  const blockhash = blockhashAlongside(connection);
   const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
   let simulation = await simulate();
   if (simulation.value.err) {
@@ -107,8 +107,7 @@ async function sendV0(
   }
   if (simulation.value.err) throw simulationError(opts.label, simulation.value.err, simulation.value.logs);
 
-  // Simulation/healing may take seconds. Give the wallet a full blockhash lifetime.
-  latest = await connection.getLatestBlockhash("confirmed");
+  const latest = await blockhash.fresh();
   tx.message.recentBlockhash = latest.blockhash;
   opts.onStatus?.("signing");
   const signed = await opts.signer.signTransaction(tx);

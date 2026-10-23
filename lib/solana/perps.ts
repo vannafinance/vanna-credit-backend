@@ -186,6 +186,13 @@ async function lookupTables(owner: PublicKey): Promise<AddressLookupTableAccount
   return table ? [table] : [];
 }
 
+/** Starts the lookup table early (it only needs the owner), so it runs alongside the price and book refresh. */
+function startLookupTables(owner: PublicKey): Promise<AddressLookupTableAccount[]> {
+  const tables = lookupTables(owner);
+  tables.catch(() => undefined); // awaited (and rethrown) where the transaction is built
+  return tables;
+}
+
 interface PerpsContext {
   ctx: BatchContext;
   venue: PhoenixVenueContext;
@@ -314,6 +321,7 @@ function lotsFor(m: PhoenixListedMarket, sizeUsd: number, priceUsd: number): big
 export async function openPerp(req: OpenPerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   opts.onStatus?.("Refreshing prices and the order book");
+  const tablesReady = startLookupTables(signer.publicKey);
   const [, liveMark] = await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
   opts.onStatus?.("Preparing your order");
   const p = await loadPerpsContext(signer.publicKey);
@@ -344,7 +352,7 @@ export async function openPerp(req: OpenPerpRequest, opts: MarginServiceOptions 
 
   if (await ensurePhoenixTrader(signer, p, opts)) return openPerp(req, opts);
   opts.onStatus?.("Building the transaction");
-  const tables = await lookupTables(signer.publicKey);
+  const tables = await tablesReady;
   const ixs: TransactionInstruction[] = [];
   if (amount > 0n) ixs.push(...(await fundIxs(p, amount)));
   const order = await phoenixCall(
@@ -398,6 +406,7 @@ async function withdrawIxs(p: PerpsContext, amount: bigint, venueEmpties: boolea
 /** Moves USDC out of Phoenix back into the margin (all of it by default; only what Phoenix pays now). */
 export async function withdrawPerpCollateral(req: WithdrawPerpCollateralRequest = {}, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
+  const tablesReady = startLookupTables(signer.publicKey);
   await ensureFreshPrices();
   const p = await loadPerpsContext(signer.publicKey);
   const collateral = p.venue.trader?.collateral ?? 0n;
@@ -406,7 +415,7 @@ export async function withdrawPerpCollateral(req: WithdrawPerpCollateralRequest 
   const amount = requested > collateral ? collateral : requested;
   if (amount > p.venue.withdrawableNow) throw new Error(`Phoenix can pay out ${Number(p.venue.withdrawableNow) / 1e6} USDC right now — try a smaller amount or wait a moment`);
   const empties = amount === collateral && p.venue.positions.length === 0;
-  const tables = await lookupTables(signer.publicKey);
+  const tables = await tablesReady;
   const ixs = await withdrawIxs(p, amount, empties);
   const signature = await send(signer, [...p.ctx.instructions, ...ixs.filter((ix) => !p.ctx.instructions.includes(ix))], "Withdraw from Phoenix", tables, opts);
   return { signature, summary: `${(Number(amount) / 1e6).toFixed(2)} USDC back in your margin account` };
@@ -420,6 +429,7 @@ export async function withdrawPerpCollateral(req: WithdrawPerpCollateralRequest 
 export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOptions = {}): Promise<PerpTxResult> {
   const signer = opts.signer ?? getActiveSigner();
   opts.onStatus?.("Refreshing prices and the order book");
+  const tablesReady = startLookupTables(signer.publicKey);
   const [, liveMark] = await Promise.all([ensureFreshPrices(), refreshBook(req.market)]);
   opts.onStatus?.("Preparing your order");
   const p = await loadPerpsContext(signer.publicKey);
@@ -434,7 +444,7 @@ export async function closePerp(req: ClosePerpRequest, opts: MarginServiceOption
     lots = lotsFor(m, req.sizeUsd, ref);
     if (lots > abs) lots = abs;
   }
-  const tables = await lookupTables(signer.publicKey);
+  const tables = await tablesReady;
   const label = `Close ${m.meta.name} ${isLong ? "long" : "short"}`;
   // A close should go through: when the book has nothing inside the requested price limit, retry
   // once with a wider one (up to MAX_CLOSE_SLIPPAGE_BPS) instead of leaving the position open.
