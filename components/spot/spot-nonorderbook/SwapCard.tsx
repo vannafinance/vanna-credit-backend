@@ -152,9 +152,12 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
   // Program-exact account model (same health factor as every V3 page).
   const { state: modelState } = useV3Account();
 
-  // Margin mode reads the margin vault — make sure the store has the account loaded.
+  // Margin mode reads the margin vault. The root MarginAccountHydrator keeps it loaded; read it here
+  // only when this wallet's account isn't in the store yet.
+  const storeOwner = useMarginAccountInfoStore((s) => s.ownerAddress);
   useEffect(() => {
-    if (swapMode === "margin" && userAddress) void refreshMarginAccount(userAddress).catch(() => {});
+    if (swapMode === "margin" && userAddress && storeOwner !== userAddress) void refreshMarginAccount(userAddress).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapMode, userAddress]);
 
   // ---------------------------------------------------------------------------------------------

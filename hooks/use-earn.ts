@@ -2,40 +2,28 @@
 
 import { fetchWithTimeout } from "../lib/async";
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLedgerTick } from '@/contexts/ledger-subscriber';
-import { useLiveTick } from '@/lib/tick-scope';
 import { useUserStore } from '@/store/user';
 import { refreshAfterTx } from '@/lib/after-tx';
 import { freshParam } from '@/lib/fresh-reads';
+import { useAccountSnapshot, type AccountApiResponse } from '@/hooks/use-account-snapshot';
 import { fetchPoolStates, type PoolState, type SerializedPoolState } from '@/lib/solana/protocol-state';
-import { fetchLenderPositions, redeem, supply, type LenderPosition } from '@/lib/solana/lend';
+import { redeem, supply, type LenderPosition } from '@/lib/solana/lend';
 import { computeEarnedInterest, fetchEarnHistory, type EarnedInterest, type EarnHistoryRow, type HistoryPage } from '@/lib/solana/history';
 import { describeError } from '@/lib/solana/errors';
 import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-progress';
 
 export const EARN_POOLS_KEY = ['earn', 'pools'] as const;
 
-/** Invalidate the query on each (throttled) slot tick. */
-function useTickInvalidate(key: readonly unknown[]) {
-  const qc = useQueryClient();
-  const { tick } = useLedgerTick();
-  const live = useLiveTick();
-  const last = useRef(tick);
-  const k = JSON.stringify(key);
-  useEffect(() => {
-    if (tick === last.current) return;
-    last.current = tick;
-    if (!live) return; // e.g. Predict only shows a slow-moving APY from the pools (lib/tick-scope.ts)
-    qc.invalidateQueries({ queryKey: JSON.parse(k) }, { cancelRefetch: false });
-  }, [tick, qc, k, live]);
-}
+/** Pool details hold slow-moving config (caps, rate curve) next to the totals the summary already ticks. */
+const POOL_DETAILS_REFRESH_MS = 30_000;
 
 /**
  * Every registry lending pool from GET /api/pools (on-chain Reserve accounts, interest projected to
- * the fork clock, APYs from the program's own rate curve).
+ * the fork clock, APYs from the program's own rate curve). Refreshed on each slot tick
+ * (components/tick-refresh.tsx).
  *
  * @returns `{ pools: Record<symbol, SerializedPoolState>, isLoading, isRefreshing, error, refresh }`.
  */
@@ -49,7 +37,6 @@ export const usePoolData = () => {
     },
     staleTime: 4_000,
   });
-  useTickInvalidate(EARN_POOLS_KEY);
   return {
     pools: query.data ?? {},
     isLoading: query.isLoading,
@@ -64,16 +51,16 @@ export const usePoolData = () => {
  * Full on-chain pool state per registry symbol (decoded Reserve + AssetConfig with bigint fields,
  * rate-curve coefficients, share mint, caps, liquidation bonus, max collateral per margin), read
  * directly from the RPC in the browser. Use this where the JSON summary from `usePoolData` is not
- * enough (Earn detail "Details" / "Collateral and Limits" / rate-curve chart).
+ * enough (Earn detail "Details" / "Collateral and Limits" / rate-curve chart). Refreshed every 30 s
+ * while shown and right after the user's own transactions (lib/after-tx.ts), not on every slot tick.
  */
 export const usePoolDetails = () => {
-  const key = ['earn', 'pool-details'] as const;
   const query = useQuery({
-    queryKey: key,
+    queryKey: ['earn', 'pool-details'],
     queryFn: (): Promise<Record<string, PoolState>> => fetchPoolStates(),
     staleTime: 4_000,
+    refetchInterval: POOL_DETAILS_REFRESH_MS,
   });
-  useTickInvalidate(key);
   return {
     details: (query.data ?? {}) as Record<string, PoolState>,
     isLoading: query.isLoading,
@@ -82,32 +69,36 @@ export const usePoolDetails = () => {
   };
 };
 
+/** The account snapshot's lender rows with their raw amounts back as bigints. */
+export function lenderPositionsFromApi(lender: AccountApiResponse['lender'] | undefined): Record<string, LenderPosition> {
+  const out: Record<string, LenderPosition> = {};
+  for (const [symbol, p] of Object.entries(lender ?? {})) out[symbol] = { ...p, sharesRaw: BigInt(p.sharesRaw), assetsRaw: BigInt(p.assetsRaw) };
+  return out;
+}
+
 /**
  * The connected wallet's lender positions (share balance × projected exchange rate), per registry
- * symbol. Empty object when disconnected.
+ * symbol. Empty object when disconnected. Read from the shared account snapshot (GET /api/account,
+ * the same server-side fetchLenderPositions), so it costs no extra request.
  */
 export const useUserPositions = () => {
   const address = useUserStore((s) => s.address);
-  const key = ['earn', 'positions', address ?? 'none'] as const;
-  const query = useQuery({
-    queryKey: key,
-    queryFn: () => fetchLenderPositions(new PublicKey(address!)),
-    enabled: Boolean(address),
-    staleTime: 4_000,
-  });
-  useTickInvalidate(['earn', 'positions']);
+  const { snapshot, isLoading, isRefreshing, error, refresh } = useAccountSnapshot(address);
+  const lender = snapshot?.api.lender;
+  const positions = useMemo(() => lenderPositionsFromApi(lender), [lender]);
   return {
-    positions: (query.data ?? {}) as Record<string, LenderPosition>,
-    isLoading: query.isLoading && Boolean(address),
-    isRefreshing: query.isFetching && !query.isLoading,
-    error: query.error ? (query.error as Error).message : null,
-    refresh: () => query.refetch(),
+    positions,
+    isLoading: isLoading && Boolean(address),
+    isRefreshing,
+    error,
+    refresh,
   };
 };
 
 /**
  * Supply / withdraw history decoded from on-chain events, plus honest earned interest per asset
- * (null — never zero — when the history can't prove the cost basis).
+ * (null — never zero — when the history can't prove the cost basis). Not refreshed on slot ticks:
+ * it changes only with the user's own transactions, which refresh it (lib/after-tx.ts).
  */
 export const useEarnTransactions = () => {
   const address = useUserStore((s) => s.address);
@@ -118,7 +109,6 @@ export const useEarnTransactions = () => {
     enabled: Boolean(address),
     staleTime: 10_000,
   });
-  useTickInvalidate(['earn', 'history']);
   const earned = useMemo<Record<string, EarnedInterest> | null>(
     () => (query.data ? computeEarnedInterest(query.data, positions) : null),
     [query.data, positions],

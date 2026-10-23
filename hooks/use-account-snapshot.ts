@@ -3,10 +3,7 @@
 import { fetchWithTimeout } from "../lib/async";
 import { freshParam } from "@/lib/fresh-reads";
 
-import { useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLedgerTick } from "@/contexts/ledger-subscriber";
-import { useLiveTick } from "@/lib/tick-scope";
+import { useQuery } from "@tanstack/react-query";
 import type { SerializedMarginSnapshot } from "@/lib/solana/margin";
 import type { LenderPosition } from "@/lib/solana/lend";
 import { marginFieldsFromSnapshot, type MarginAccountInfoStateType } from "@/store/margin-account-info-store";
@@ -45,25 +42,16 @@ async function fetchSnapshot(userAddress: string): Promise<AccountSnapshot> {
 
 /**
  * Per-wallet account snapshot from GET /api/account/:wallet (always a live chain read — never
- * persisted client-side). Revalidated on slot ticks; mutations invalidate ['margin'].
+ * persisted client-side). Revalidated on slot ticks (components/tick-refresh.tsx); transactions
+ * refresh it first (lib/after-tx.ts).
  */
 export function useAccountSnapshot(userAddress: string | null) {
-  const qc = useQueryClient();
-  const { tick } = useLedgerTick();
-  const live = useLiveTick();
-  const lastTickRef = useRef(tick);
   const query = useQuery<AccountSnapshot>({
     queryKey: [...ACCOUNT_SNAPSHOT_KEY, userAddress ?? "none"],
     queryFn: () => fetchSnapshot(userAddress!),
     enabled: Boolean(userAddress),
     staleTime: 5_000,
   });
-  useEffect(() => {
-    if (tick === lastTickRef.current) return;
-    lastTickRef.current = tick;
-    if (!live) return; // this page shows no account data (lib/tick-scope.ts)
-    qc.invalidateQueries({ queryKey: ACCOUNT_SNAPSHOT_KEY }, { cancelRefetch: false });
-  }, [tick, qc, live]);
   return {
     snapshot: query.data,
     isLoading: query.isLoading,

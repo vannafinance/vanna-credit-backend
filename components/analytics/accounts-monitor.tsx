@@ -48,7 +48,13 @@ export function AccountsMonitor({ band, onClearBand, title = "Accounts", fixedFi
   const [lookup, setLookup] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
 
   useEffect(() => { const t = setTimeout(() => { setQ(text); setPage(1); }, 300); return () => clearTimeout(t); }, [text]);
-  useEffect(() => { setPage(1); }, [band, filter]);
+  // A new band or filter starts on page 1. Reset while rendering (not in an effect), so the list is
+  // never requested for the new filter at the old page first.
+  const [pageScope, setPageScope] = useState({ band, filter });
+  if (pageScope.band !== band || pageScope.filter !== filter) {
+    setPageScope({ band, filter });
+    setPage(1);
+  }
   // Arriving from an alert (/analytics?filter=atrisk#accounts): open that list and scroll to it.
   useEffect(() => {
     const f = new URLSearchParams(window.location.search).get("filter");

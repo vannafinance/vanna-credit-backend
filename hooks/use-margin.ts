@@ -1,9 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLedgerTick } from '@/contexts/ledger-subscriber';
 import { useUserStore } from '@/store/user';
 import { refreshAfterTx } from '@/lib/after-tx';
 import {
@@ -21,23 +19,18 @@ import { onTxStatus, showTxError, showTxStep, showTxSuccess } from '@/lib/tx-pro
 
 export type { MarginHistoryRow };
 
-/** Margin-account history decoded from on-chain events, newest first. */
+/**
+ * Margin-account history decoded from on-chain events, newest first. Not refreshed on slot ticks: it
+ * changes only with the user's own transactions, which refresh it (lib/after-tx.ts).
+ */
 export const useMarginHistory = () => {
   const address = useUserStore((s) => s.address);
-  const qc = useQueryClient();
-  const { tick } = useLedgerTick();
-  const last = useRef(tick);
   const query = useQuery({
     queryKey: ['margin', 'history', address ?? 'none'],
     queryFn: () => fetchMarginHistory(new PublicKey(address!)),
     enabled: Boolean(address),
     staleTime: 10_000,
   });
-  useEffect(() => {
-    if (tick === last.current) return;
-    last.current = tick;
-    qc.invalidateQueries({ queryKey: ['margin', 'history'] }, { cancelRefetch: false });
-  }, [tick, qc]);
   return {
     history: query.data as HistoryPage<MarginHistoryRow> | undefined,
     rows: query.data?.rows ?? [],

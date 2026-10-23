@@ -5,7 +5,7 @@
  * (lib/account-model.ts) built from the on-chain view the Perps page already polls, so every page
  * shows the same health factor, account leverage, room before liquidation and liquidation prices.
  */
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useUserStore } from '@/store/user';
 import { usePerpsView } from '@/hooks/use-perps';
 import { accountNumbers, liqMultiplier, liqRoom, priceKey, type AccountNumbers, type LiqRoom, type ModelState } from '@/lib/account-model';
@@ -51,16 +51,26 @@ export function useV3Account(): V3Account {
   const now = useMemo(() => (state ? accountNumbers(state) : null), [state]);
   const room = useMemo(() => (state ? liqRoom(state) : null), [state]);
 
-  const priceOf = (symbol: string) => {
-    const key = priceKey(symbol);
-    return acct?.prices[key] ?? acct?.prices[symbol] ?? view?.markets.find((m) => m.key === key)?.indexPrice ?? 0;
-  };
-  const liqPriceOf = (symbol: string, side?: 'long' | 'short') => {
-    if (!state) return null;
-    const m = liqMultiplier(state, priceKey(symbol), side);
-    const p = priceOf(symbol);
-    return m !== null && p > 0 ? p * m : null;
-  };
+  const priceOf = useCallback(
+    (symbol: string) => {
+      const key = priceKey(symbol);
+      return acct?.prices[key] ?? acct?.prices[symbol] ?? view?.markets.find((m) => m.key === key)?.indexPrice ?? 0;
+    },
+    [acct, view],
+  );
+  const liqPriceOf = useCallback(
+    (symbol: string, side?: 'long' | 'short') => {
+      if (!state) return null;
+      const m = liqMultiplier(state, priceKey(symbol), side);
+      const p = priceOf(symbol);
+      return m !== null && p > 0 ? p * m : null;
+    },
+    [state, priceOf],
+  );
 
-  return { connected: Boolean(address), hasMargin: Boolean(acct?.hasMargin), loading: isLoading, view, state, now, room, priceOf, liqPriceOf };
+  // Stable between refreshes, so consumers' memos and effects only re-run when the account changes.
+  return useMemo(
+    () => ({ connected: Boolean(address), hasMargin: Boolean(acct?.hasMargin), loading: isLoading, view, state, now, room, priceOf, liqPriceOf }),
+    [address, acct, isLoading, view, state, now, room, priceOf, liqPriceOf],
+  );
 }
