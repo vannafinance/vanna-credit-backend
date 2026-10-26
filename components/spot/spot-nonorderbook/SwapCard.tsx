@@ -214,7 +214,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
   const amountInRaw = tokenIn ? safeRaw(amountIn, tokenIn.decimals) : null;
 
   const requestQuote = useCallback(
-    async (from: Token, to: Token, amountUi: string, raw: bigint): Promise<AggregatedQuote> =>
+    async (from: Token, to: Token, amountUi: string, raw: bigint, signal?: AbortSignal): Promise<AggregatedQuote> =>
       bestSwapQuote({
         mode: swapMode === "margin" ? "margin" : "wallet",
         inputMint: from.id,
@@ -226,6 +226,7 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
         slippageBps,
         owner: userAddress ? new PublicKey(userAddress) : null,
         provider: aggregator,
+        signal,
       }),
     [swapMode, slippageBps, userAddress, aggregator],
   );
@@ -241,15 +242,17 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
     // Show the loading affordance immediately so the UI feels responsive even though the
     // actual fetch is delayed by the debounce window.
     setIsQuoteLoading(true);
+    // Cancelled when the inputs change, so a superseded quote stops at Jupiter/Titan too.
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      requestQuote(tokenIn, tokenOut, amountIn, amountInRaw)
+      requestQuote(tokenIn, tokenOut, amountIn, amountInRaw, controller.signal)
         .then((q) => {
           if (id !== quoteRequestId.current) return;
           setQuote(q);
           setQuoteFetchedAt(Date.now());
         })
         .catch((error) => {
-          if (id !== quoteRequestId.current) return;
+          if (id !== quoteRequestId.current || controller.signal.aborted) return;
           const message = error instanceof Error ? error.message : String(error);
           setQuoteError({ noRoute: isNoRouteError(message), message, unavailable: error instanceof TitanUnavailableError });
         })
@@ -257,7 +260,10 @@ export const SwapCard = ({ baseSymbol, onPreview }: SwapCardProps) => {
           if (id === quoteRequestId.current) setIsQuoteLoading(false);
         });
     }, QUOTE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
     // amountInRaw is derived from amountIn + tokenIn; keyed on primitives to avoid re-running on
     // every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps

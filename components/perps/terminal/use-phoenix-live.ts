@@ -4,7 +4,7 @@
  * Live Phoenix market data for the Perps terminal, straight from Phoenix's public API (no key, CORS
  * open): https://docs.phoenix.trade/api/websocket.
  *
- * One WebSocket per page:
+ * One WebSocket shared by every hook instance (kept 10 s after the last one unmounts):
  * - `market` for every listed symbol → mark / oracle / mid price, 24h change, 24h volume, open
  *   interest, hourly funding (header, pair menu, the order maths);
  * - `orderbook`, `trades` and `candles` for the focused symbol only.
@@ -124,6 +124,124 @@ async function fetchFills(symbol: string): Promise<PhoenixTrade[]> {
   });
 }
 
+type Subscription = Record<string, string>;
+type Message = Record<string, unknown>;
+
+/** How long the socket stays open with no listener, so a remount (market change) reuses it. */
+const IDLE_CLOSE_MS = 10_000;
+/** How long an unheld channel stays subscribed, so a remount keeps it. */
+const UNSUBSCRIBE_GRACE_MS = 1_000;
+
+/**
+ * One shared socket for every hook instance. Subscriptions are ref-counted: switching market or
+ * timeframe unsubscribes the old channels and subscribes the new ones on the open socket instead
+ * of reconnecting. All active subscriptions are re-sent on every (re)connect.
+ */
+const phoenix = {
+  ws: null as WebSocket | null,
+  subs: new Map<string, { sub: Subscription; n: number; release: ReturnType<typeof setTimeout> | null }>(),
+  listeners: new Set<(m: Message) => void>(),
+  statusListeners: new Set<(open: boolean) => void>(),
+  retry: 0,
+  retryTimer: null as ReturnType<typeof setTimeout> | null,
+  idleTimer: null as ReturnType<typeof setTimeout> | null,
+};
+
+const isOpen = () => phoenix.ws?.readyState === WebSocket.OPEN;
+
+function sendSub(type: "subscribe" | "unsubscribe", subscription: Subscription) {
+  if (isOpen()) phoenix.ws!.send(JSON.stringify({ type, subscription }));
+}
+
+function setOpen(open: boolean) {
+  for (const l of phoenix.statusListeners) l(open);
+}
+
+function connectPhoenix() {
+  if (phoenix.ws) return;
+  const ws = new WebSocket(WS_URL);
+  phoenix.ws = ws;
+  ws.onopen = () => {
+    phoenix.retry = 0;
+    for (const { sub } of phoenix.subs.values()) sendSub("subscribe", sub);
+    setOpen(true);
+  };
+  ws.onmessage = (event) => {
+    let m: Message;
+    try {
+      m = JSON.parse(String(event.data));
+    } catch {
+      return;
+    }
+    for (const l of phoenix.listeners) l(m);
+  };
+  ws.onclose = () => {
+    if (phoenix.ws !== ws) return;
+    phoenix.ws = null;
+    setOpen(false);
+    if (phoenix.listeners.size === 0) return;
+    phoenix.retry += 1;
+    phoenix.retryTimer = setTimeout(() => {
+      phoenix.retryTimer = null;
+      if (phoenix.listeners.size > 0) connectPhoenix();
+    }, Math.min(15_000, 1_000 * 2 ** Math.min(phoenix.retry, 4)));
+  };
+  ws.onerror = () => ws.close();
+}
+
+function addPhoenixListener(onMessage: (m: Message) => void, onStatus: (open: boolean) => void): () => void {
+  if (phoenix.idleTimer) clearTimeout(phoenix.idleTimer);
+  phoenix.idleTimer = null;
+  phoenix.listeners.add(onMessage);
+  phoenix.statusListeners.add(onStatus);
+  connectPhoenix();
+  return () => {
+    phoenix.listeners.delete(onMessage);
+    phoenix.statusListeners.delete(onStatus);
+    if (phoenix.listeners.size > 0) return;
+    phoenix.idleTimer = setTimeout(() => {
+      phoenix.idleTimer = null;
+      if (phoenix.listeners.size > 0) return;
+      if (phoenix.retryTimer) clearTimeout(phoenix.retryTimer);
+      phoenix.retryTimer = null;
+      const ws = phoenix.ws;
+      phoenix.ws = null;
+      ws?.close();
+    }, IDLE_CLOSE_MS);
+  };
+}
+
+/** Holds `subs` on the shared socket until the returned release is called. */
+function holdSubscriptions(subs: Subscription[]): () => void {
+  for (const sub of subs) {
+    const key = JSON.stringify(sub);
+    const entry = phoenix.subs.get(key);
+    if (entry) {
+      entry.n += 1;
+      if (entry.release) clearTimeout(entry.release);
+      entry.release = null;
+    } else {
+      phoenix.subs.set(key, { sub, n: 1, release: null });
+      sendSub("subscribe", sub);
+    }
+  }
+  return () => {
+    for (const sub of subs) {
+      const key = JSON.stringify(sub);
+      const entry = phoenix.subs.get(key);
+      if (!entry) continue;
+      entry.n -= 1;
+      if (entry.n > 0) continue;
+      // A remount re-holds within the grace period, so its channels are never dropped.
+      entry.release = setTimeout(() => {
+        if (entry.n > 0 || phoenix.subs.get(key) !== entry) return;
+        phoenix.subs.delete(key);
+        sendSub("unsubscribe", sub);
+      }, UNSUBSCRIBE_GRACE_MS);
+    }
+  };
+}
+
 export interface PhoenixLive {
   /** Live stats per symbol ("SOL", "ETH", …); missing until the first message. */
   stats: Record<string, PhoenixMarketStats>;
@@ -136,7 +254,8 @@ export interface PhoenixLive {
 
 /**
  * Subscribes to Phoenix for `symbols` (market stats) and `focus` (book, trades, `timeframe` candles).
- * Reconnects with backoff when the socket drops.
+ * Changing market or timeframe swaps subscriptions on the shared socket; it reconnects with backoff
+ * when the socket drops.
  */
 export function usePhoenixLive(symbols: string[], focus: string, timeframe: PhoenixTimeframe): PhoenixLive {
   const [stats, setStats] = useState<Record<string, PhoenixMarketStats>>({});
@@ -145,7 +264,7 @@ export function usePhoenixLive(symbols: string[], focus: string, timeframe: Phoe
   const [book, setBook] = useState<{ key: string; book: PhoenixBook } | null>(null);
   const [trades, setTrades] = useState<{ key: string; rows: PhoenixTrade[] }>({ key: "", rows: [] });
   const [candles, setCandles] = useState<{ key: string; rows: Candle[] }>({ key: "", rows: [] });
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(() => typeof WebSocket !== "undefined" && isOpen());
   const symbolsKey = symbols.join(",");
   const candleKey = `${focus}:${timeframe}`;
 
@@ -180,88 +299,60 @@ export function usePhoenixLive(symbols: string[], focus: string, timeframe: Phoe
     return () => clearInterval(id);
   }, []);
 
+  // Message handling for the focused market; re-registering never touches the socket.
   useEffect(() => {
     pendingBook.current = null;
-    let ws: WebSocket | null = null;
-    let closed = false;
-    let retry = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const list = symbolsKey ? symbolsKey.split(",") : [];
+    return addPhoenixListener((m) => {
+      const symbol = String(m.symbol ?? "");
+      switch (m.channel) {
+        case "market":
+          if (symbol) setStats((prev) => ({ ...prev, [symbol]: toStats(m) }));
+          break;
+        case "orderbook": {
+          if (symbol !== focus) break;
+          const ob = (m.orderbook ?? m) as Record<string, unknown>;
+          pendingBook.current = { key: focus, book: { bids: toLevels(ob.bids, true), asks: toLevels(ob.asks, false) } };
+          break;
+        }
+        case "trades": {
+          if (symbol !== focus || !Array.isArray(m.trades)) break;
+          const fresh = (m.trades as Record<string, unknown>[]).map((t) => {
+            const base = num(t.baseAmount);
+            return {
+              id: String(t.tradeSequenceNumber ?? `${t.slot}-${t.slotIndex}`),
+              price: base > 0 ? num(t.quoteAmount) / base : 0,
+              size: base,
+              buy: t.side === "bid",
+              time: toMs(num(t.timestamp)),
+            };
+          });
+          setTrades((prev) => ({ key: focus, rows: [...fresh.filter((t) => t.price > 0).reverse(), ...(prev.key === focus ? prev.rows : [])].slice(0, MAX_TRADES) }));
+          break;
+        }
+        case "candle": {
+          if (symbol !== focus || m.timeframe !== timeframe || !m.candle) break;
+          const c = toCandle(m.candle as Record<string, unknown>);
+          setCandles((prev) => {
+            const rows = prev.rows;
+            if (prev.key !== `${focus}:${timeframe}` || rows.length === 0) return prev;
+            const last = rows[rows.length - 1];
+            if (c.t === last.t) return { ...prev, rows: [...rows.slice(0, -1), c] };
+            if (c.t > last.t) return { ...prev, rows: [...rows.slice(1), c] };
+            return prev;
+          });
+          break;
+        }
+      }
+    }, setConnected);
+  }, [focus, timeframe]);
 
-    const connect = () => {
-      ws = new WebSocket(WS_URL);
-      ws.onopen = () => {
-        retry = 0;
-        setConnected(true);
-        const send = (subscription: Record<string, string>) => ws?.send(JSON.stringify({ type: "subscribe", subscription }));
-        for (const s of new Set([...list, focus])) send({ channel: "market", symbol: s });
-        send({ channel: "orderbook", symbol: focus });
-        send({ channel: "trades", symbol: focus });
-        send({ channel: "candles", symbol: focus, timeframe });
-      };
-      ws.onmessage = (event) => {
-        let m: Record<string, unknown>;
-        try {
-          m = JSON.parse(String(event.data));
-        } catch {
-          return;
-        }
-        const symbol = String(m.symbol ?? "");
-        switch (m.channel) {
-          case "market":
-            if (symbol) setStats((prev) => ({ ...prev, [symbol]: toStats(m) }));
-            break;
-          case "orderbook": {
-            if (symbol !== focus) break;
-            const ob = (m.orderbook ?? m) as Record<string, unknown>;
-            pendingBook.current = { key: focus, book: { bids: toLevels(ob.bids, true), asks: toLevels(ob.asks, false) } };
-            break;
-          }
-          case "trades": {
-            if (symbol !== focus || !Array.isArray(m.trades)) break;
-            const fresh = (m.trades as Record<string, unknown>[]).map((t) => {
-              const base = num(t.baseAmount);
-              return {
-                id: String(t.tradeSequenceNumber ?? `${t.slot}-${t.slotIndex}`),
-                price: base > 0 ? num(t.quoteAmount) / base : 0,
-                size: base,
-                buy: t.side === "bid",
-                time: toMs(num(t.timestamp)),
-              };
-            });
-            setTrades((prev) => ({ key: focus, rows: [...fresh.filter((t) => t.price > 0).reverse(), ...(prev.key === focus ? prev.rows : [])].slice(0, MAX_TRADES) }));
-            break;
-          }
-          case "candle": {
-            if (symbol !== focus || m.timeframe !== timeframe || !m.candle) break;
-            const c = toCandle(m.candle as Record<string, unknown>);
-            setCandles((prev) => {
-              const rows = prev.rows;
-              if (prev.key !== `${focus}:${timeframe}` || rows.length === 0) return prev;
-              const last = rows[rows.length - 1];
-              if (c.t === last.t) return { ...prev, rows: [...rows.slice(0, -1), c] };
-              if (c.t > last.t) return { ...prev, rows: [...rows.slice(1), c] };
-              return prev;
-            });
-            break;
-          }
-        }
-      };
-      ws.onclose = () => {
-        setConnected(false);
-        if (closed) return;
-        retry += 1;
-        timer = setTimeout(connect, Math.min(15_000, 1_000 * 2 ** Math.min(retry, 4)));
-      };
-      ws.onerror = () => ws?.close();
-    };
-    connect();
-    return () => {
-      closed = true;
-      if (timer) clearTimeout(timer);
-      ws?.close();
-    };
-  }, [symbolsKey, focus, timeframe]);
+  // Channels held on the shared socket: a change swaps subscriptions instead of reconnecting.
+  useEffect(() => holdSubscriptions((symbolsKey ? symbolsKey.split(",") : []).map((symbol) => ({ channel: "market", symbol }))), [symbolsKey]);
+  useEffect(
+    () => holdSubscriptions([{ channel: "market", symbol: focus }, { channel: "orderbook", symbol: focus }, { channel: "trades", symbol: focus }]),
+    [focus],
+  );
+  useEffect(() => holdSubscriptions([{ channel: "candles", symbol: focus, timeframe }]), [focus, timeframe]);
 
   return {
     stats,

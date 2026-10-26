@@ -3,7 +3,7 @@ import { Keypair, SystemProgram, type VersionedTransaction } from "@solana/web3.
 const rpc = vi.hoisted(() => ({ getLatestBlockhash: vi.fn(), simulateTransaction: vi.fn() }));
 vi.mock("./connection", () => ({ getConnection: () => rpc }));
 vi.mock("./fork-heal", () => ({ healStaleDexPools: vi.fn().mockResolvedValue(0) }));
-vi.mock("./broadcast", () => ({ broadcastSignedTransaction: vi.fn().mockResolvedValue("sig") }));
+vi.mock("./broadcast", async (actual) => ({ ...(await actual<typeof import("./broadcast")>()), broadcastSignedTransaction: vi.fn().mockResolvedValue("sig") }));
 import { sendInstructions, prepareTransactionTables } from "./tx";
 import { broadcastSignedTransaction } from "./broadcast";
 const key = Keypair.generate();
@@ -20,15 +20,27 @@ describe("transaction lifetime", () => {
     expect(sign).not.toHaveBeenCalled();
     expect(rpc.getLatestBlockhash).not.toHaveBeenCalled();
   });
-  it("refreshes the blockhash after simulation and confirms against the new lifetime", async () => {
+  it("fetches the signing blockhash alongside simulation and confirms against its lifetime", async () => {
     rpc.simulateTransaction.mockResolvedValue({ value: { err: null } });
+    const sign = vi.fn(async (tx: VersionedTransaction) => {
+      expect(tx.message.recentBlockhash).toBe(SystemProgram.programId.toBase58()); return tx;
+    });
+    await sendInstructions([], { signer: { publicKey: key.publicKey, signTransaction: sign as never, signAllTransactions: vi.fn() }, label: "test" });
+    expect(rpc.simulateTransaction.mock.calls[0][1]).toMatchObject({ replaceRecentBlockhash: true, sigVerify: false });
+    expect(rpc.getLatestBlockhash).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(broadcastSignedTransaction).mock.calls[0][2]).toBe(100);
+  });
+  it("refetches the blockhash when simulation took long enough to eat into its lifetime", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    rpc.simulateTransaction.mockImplementation(async () => { now.mockReturnValue(20_000); return { value: { err: null } }; });
     const sign = vi.fn(async (tx: VersionedTransaction) => {
       expect(tx.message.recentBlockhash).toBe(key.publicKey.toBase58()); return tx;
     });
     await sendInstructions([], { signer: { publicKey: key.publicKey, signTransaction: sign as never, signAllTransactions: vi.fn() }, label: "test" });
-    expect(rpc.simulateTransaction.mock.calls[0][1]).toMatchObject({ replaceRecentBlockhash: true, sigVerify: false });
     expect(rpc.getLatestBlockhash).toHaveBeenCalledTimes(2);
     expect(vi.mocked(broadcastSignedTransaction).mock.calls[0][2]).toBe(200);
+    now.mockRestore();
+    rpc.simulateTransaction.mockReset();
   });
   it("never opens the wallet or sends a transaction after simulation fails", async () => {
     rpc.simulateTransaction.mockResolvedValue({ value: { err: "invalid instruction", logs: [] } });

@@ -13,7 +13,7 @@ import { fetchWithTimeout } from "../async";
 import { Buffer } from "buffer";
 import { VersionedTransaction } from "@solana/web3.js";
 import { getConnection } from "./connection";
-import { broadcastSignedTransaction } from "./broadcast";
+import { blockhashAlongside, broadcastSignedTransaction } from "./broadcast";
 import { healStaleDexPools } from "./fork-heal";
 import { getActiveSigner, type TxSigner } from "./wallet-bridge";
 import { decodeProgramError, VannaTxError } from "./errors";
@@ -43,6 +43,8 @@ export async function fetchJupiterQuote(params: {
   slippageBps?: number;
   /** Cap on the route's accounts (Jupiter's `maxAccounts`): a shorter route for margin swaps. */
   maxAccounts?: number;
+  /** Cancels the request (a newer quote replaced it). */
+  signal?: AbortSignal;
 }): Promise<JupiterQuote> {
   const qs = new URLSearchParams({
     inputMint: params.inputMint,
@@ -51,7 +53,7 @@ export async function fetchJupiterQuote(params: {
     slippageBps: String(params.slippageBps ?? 100),
   });
   if (params.maxAccounts) qs.set("maxAccounts", String(params.maxAccounts));
-  const response = await fetchWithTimeout(`${apiBase}/api/jupiter/quote?${qs.toString()}`);
+  const response = await fetchWithTimeout(`${apiBase}/api/jupiter/quote?${qs.toString()}`, { signal: params.signal });
   const body = await response.json();
   if (!response.ok || body?.error) throw new Error(body?.error ?? body?.message ?? "Quote failed");
   return body as JupiterQuote;
@@ -76,10 +78,9 @@ export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: Tx
 
   const connection = getConnection();
   const tx = VersionedTransaction.deserialize(Buffer.from(body.swapTransaction, "base64"));
-  // Jupiter builds on mainnet; the fork has its own blockhash queue.
-  let latest = await connection.getLatestBlockhash("confirmed");
-  tx.message.recentBlockhash = latest.blockhash;
+  // Jupiter builds on mainnet; the fork has its own blockhash queue (fetched alongside simulation).
   opts.onStatus?.("simulating");
+  const blockhash = blockhashAlongside(connection);
   const simulate = () => connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
   let simulation = await simulate();
   if (simulation.value.err) {
@@ -92,7 +93,7 @@ export async function executeWalletSwap(quote: JupiterQuote, opts: { signer?: Tx
     const decoded = decodeProgramError(raw);
     throw new VannaTxError(decoded?.message ?? raw.split("\n")[0], { logs, raw, code: decoded?.name });
   }
-  latest = await connection.getLatestBlockhash("confirmed");
+  const latest = await blockhash.fresh();
   tx.message.recentBlockhash = latest.blockhash;
   opts.onStatus?.("signing");
   const signed = await signer.signTransaction(tx);

@@ -59,6 +59,8 @@ export async function titanQuote(params: {
   slippageBps: number;
   mode: "wallet" | "margin";
   dexes?: string;
+  /** Aborts the upstream call when the client cancels the quote. */
+  signal?: AbortSignal;
 }): Promise<TitanRouteResponse> {
   if (!titanConfigured()) throw new Error("TITAN_API_KEY / TITAN_API_URL is not configured");
   const key = process.env.TITAN_API_KEY;
@@ -80,7 +82,7 @@ export async function titanQuote(params: {
     qs.set("createOutputTokenAccount", "true");
   }
   qs.set("dexes", params.dexes ?? FORK_DEXES);
-  const response = await fetchWithTimeout(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { Accept: "application/json", ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}) }, cache: "no-store" });
+  const response = await fetchWithTimeout(`${TITAN_API_URL}/quote/swap?${qs}`, { headers: { Accept: "application/json", ...(key ? { "x-api-key": key, Authorization: `Bearer ${key}` } : {}) }, cache: "no-store", signal: params.signal });
   const text = await response.text();
   if (!response.ok) throw new Error(`Titan quote failed (${response.status}): ${text.slice(0, 200)}`);
   const body = JSON.parse(text);

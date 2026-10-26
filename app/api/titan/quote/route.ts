@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
       slippageBps: Number(q.get("slippageBps") ?? 50),
       mode: q.get("mode") === "margin" ? "margin" : "wallet",
       dexes: q.get("dexes") ?? undefined,
+      signal: request.signal,
     });
     return NextResponse.json(route);
   } catch (error) {
