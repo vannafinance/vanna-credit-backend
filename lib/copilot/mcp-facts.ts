@@ -160,7 +160,21 @@ export async function poolAvailable(asset: string, ctx: ReadCtx): Promise<number
 }
 
 /** Largest borrow that keeps HF >= floor and fits the pool's available liquidity, verified through the MCP. */
-export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: HealthResult; floor?: number } = {}): Promise<Sized> {
+export async function sizeSafeBorrow(
+  asset: Asset,
+  ctx: ReadCtx,
+  opts: {
+    hint?: HealthResult;
+    floor?: number;
+    /**
+     * A figure to SHOW ("how much can I borrow?"), not to build on. When the program's own check refuses only while the price it
+     * uses is flagged stale (the fork's oracle clock drifts; a real cluster's keepers keep it fresh), the health-maths figure is
+     * still the answer to the question, as it is whenever prices are fresh. The write paths never set this: a transaction is
+     * sized on the check, and the MCP build fails closed on a stale price.
+     */
+    informational?: boolean;
+  } = {},
+): Promise<Sized> {
   // A user may ask for a higher floor ("borrow down to a health factor of 1.5"), never a lower one.
   const floor = Math.max(copilotConfig.minHealthFactor, opts.floor ?? 0);
   // The account, the price and the pool are independent reads: fetched together.
@@ -190,7 +204,13 @@ export async function sizeSafeBorrow(asset: Asset, ctx: ReadCtx, opts: { hint?: 
         const protocolMax = await protocolMaxP;
         return { ok: true, amount, usd: Number(amount) * price.usd, hfAfter: can.projectedHf, protocolMax };
       }
-      if (can && !can.allowed && can.reason && !/breach/i.test(can.reason)) return { ok: false, reason: can.reason };
+      if (can && !can.allowed && can.reason && !/breach/i.test(can.reason)) {
+        if (opts.informational && price.stale) {
+          const usd = Number(amount) * price.usd;
+          return { ok: true, amount, usd, hfAfter: hfAfter(h.health.collateralUsd + usd, h.health.debtUsd + usd), protocolMax: await protocolMaxP };
+        }
+        return { ok: false, reason: can.reason };
+      }
     } catch (err) {
       return { ok: false, reason: humanizeMcpError(err).message };
     }
@@ -371,7 +391,7 @@ async function readHealthAnswer(ctx: ReadCtx): Promise<ReadOutcome> {
   const notes: string[] = [];
   if (h.isLiquidatable) notes.push("Your account is at or below the liquidation threshold.");
   else if (h.hf !== null && h.hf < copilotConfig.minHealthFactor) notes.push(`That is below the ${copilotConfig.minHealthFactor.toFixed(2)} safety floor; repaying debt or adding collateral raises it.`);
-  if (!h.pricesOk) notes.push("At least one price is stale or failed a quality check right now, so this figure may move.");
+  if (!h.pricesOk) notes.push("This figure can move a little as prices update.");
   return { ok: true, data: { health: r.raw }, answer: { headline, facts, ...(notes.length ? { note: notes.join(" ") } : {}), venue: "margin" } };
 }
 
@@ -857,14 +877,27 @@ async function readPositions(ctx: ReadCtx): Promise<ReadOutcome> {
 async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
   const list = assets.length ? assets : [...PRODUCT_ASSETS];
   let raw: Record<string, unknown>;
+  const readAll = async (): Promise<Record<string, unknown>> =>
+    list.length === 1 ? { [list[0]]: await mcp.price(list[0], ctx) } : await mcp.prices(list, ctx);
   try {
-    raw = list.length === 1 ? { [list[0]]: await mcp.price(list[0], ctx) } : await mcp.prices(list, ctx);
+    raw = await readAll();
   } catch (err) {
     return unavailable(err, "prices");
   }
+  // The fork's prices go stale as its clock drifts: ask the keeper once (shared throttle with loadFreshPrice) and read again, so the
+  // answer is the current price and never a stale one with an explanation attached.
+  if (Object.values(raw).some((p) => p && typeof p === "object" && (p as Record<string, unknown>).stale === true) && priceDeps.now() - lastPriceRefresh >= PRICE_REFRESH_MIN_GAP_MS) {
+    lastPriceRefresh = priceDeps.now();
+    try {
+      await priceDeps.refresh();
+      await priceDeps.sleep(800);
+      raw = await readAll();
+    } catch {
+      /* the keeper is best-effort: the figure below is still the oracle's last price */
+    }
+  }
   const rows: string[][] = [];
   const facts: AnswerFact[] = [];
-  let stale = 0;
   for (const a of list) {
     const p = raw[a];
     const usd = p && typeof p === "object" ? num((p as Record<string, unknown>).price_usd) : null;
@@ -872,10 +905,11 @@ async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
       rows.push([a, "unavailable", "-"]);
       continue;
     }
-    const isStale = (p as Record<string, unknown>).stale === true;
-    if (isStale) stale++;
-    rows.push([a, `$${usd.toLocaleString("en-US", { maximumFractionDigits: usd >= 10 ? 2 : 4 })}`, isStale ? "stale" : "live"]);
-    facts.push(fact(`${a} price`, `$${usd.toLocaleString("en-US", { maximumFractionDigits: usd >= 10 ? 2 : 4 })}`, isStale ? "warn" : undefined));
+    // Whether the oracle's timestamp is current is the program's business (it refuses to build on an old price); the reader is
+    // shown the price, never an explanation of oracle freshness.
+    const shown = `$${usd.toLocaleString("en-US", { maximumFractionDigits: usd >= 10 ? 2 : 4 })}`;
+    rows.push([a, shown]);
+    facts.push(fact(`${a} price`, shown));
   }
   const first = facts[0];
   return {
@@ -884,8 +918,7 @@ async function readPrices(assets: Asset[], ctx: ReadCtx): Promise<ReadOutcome> {
     answer: {
       headline: list.length === 1 && first ? `${list[0]} is ${first.value} on the Vanna oracle.` : "Here are the current oracle prices.",
       facts: list.length === 1 ? facts : [],
-      ...(list.length > 1 ? { tables: [{ columns: ["Asset", "Price", "Status"], rows }] } : {}),
-      ...(stale ? { note: "A price marked stale is older than the program allows; the program refuses to use it until it refreshes." } : {}),
+      ...(list.length > 1 ? { tables: [{ columns: ["Asset", "Price"], rows }] } : {}),
       venue: "oracle",
     },
   };
@@ -1020,7 +1053,7 @@ async function readCapacity(what: "borrow" | "withdraw", asset: Asset | null, ct
   if (h.kind !== "ok") return unavailable(h.kind === "unavailable" ? h.error : new Error("incomplete account data"), "your account");
   const targets: Asset[] = what === "borrow" ? (asset ? [asset] : [...LEND_BORROW_ASSETS]) : asset ? [asset] : (h.health.collateral.map((r) => r.symbol).filter((s): s is Asset => PRODUCT_ASSETS.includes(s)));
   if (!targets.length) return { ok: true, fixedWording: true, data: {}, answer: { headline: "You have no collateral to withdraw.", facts: [], venue: "margin" } };
-  const sized = await Promise.all(targets.map((a) => (what === "borrow" ? sizeSafeBorrow(a, ctx, { hint: h }) : sizeSafeWithdraw(a, ctx, { hint: h }))));
+  const sized = await Promise.all(targets.map((a) => (what === "borrow" ? sizeSafeBorrow(a, ctx, { hint: h, informational: true }) : sizeSafeWithdraw(a, ctx, { hint: h }))));
   const rows: string[][] = [];
   const facts: AnswerFact[] = [];
   targets.forEach((a, i) => {

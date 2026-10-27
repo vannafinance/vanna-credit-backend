@@ -66,6 +66,7 @@ export async function statusLinesFor(user: CopilotUser, message: string): Promis
   if (!window.ok) return [];
   try {
     const res = await getLlm().generate({
+      lane: "compose",
       system: STATUS_SYSTEM,
       user: text,
       responseSchema: STATUS_SCHEMA as unknown as Record<string, unknown>,

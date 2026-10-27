@@ -21,6 +21,21 @@ describe("readHealth", () => {
     expect(h?.collateral[0]).toMatchObject({ symbol: "SOL", units: 5, priceUsd: 120 });
   });
 
+  it("prices a Kamino receipt by its own worth, not the underlying's price the MCP lists beside it", () => {
+    // Real account (local MCP, 26 Oct): 8,650.89 kSOL worth $1,009.62 while the row's price is SOL's $100.82.
+    const h = readHealth({
+      ...healthFixture,
+      collateral: [
+        { symbol: "SOL", ui_balance: "70.1", usd_value: "7067.60", price: { usd: "100.82169535" } },
+        { symbol: "kSOL", ui_balance: "8650.892457", usd_value: "1009.62", price: { usd: "100.82169535" } },
+      ],
+    });
+    const ksol = h?.collateral.find((r) => r.symbol === "kSOL");
+    expect(ksol?.priceUsd).toBeCloseTo(1009.62 / 8650.892457, 8);
+    expect(ksol!.units * ksol!.priceUsd!).toBeCloseTo(1009.62, 2);
+    expect(h?.collateral.find((r) => r.symbol === "SOL")?.priceUsd).toBeCloseTo(100.82169535, 8);
+  });
+
   it("no debt means hf null, not infinity and not a default", () => {
     const h = readHealth({ ...healthFixture, debt: [], total_debt_usd: "0.00", health_factor: null });
     expect(h?.hf).toBeNull();

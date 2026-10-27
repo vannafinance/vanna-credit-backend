@@ -31,8 +31,6 @@ export function RiskChip({ decision }: { decision: RiskResult["decision"] }) {
   );
 }
 
-const label = (key: string) => key.replace(/_/g, " ");
-
 function pick(slots: Preview["slots"], keys: string[]): string | null {
   for (const key of keys) {
     const v = slots[key];
@@ -71,34 +69,21 @@ export interface ReviewCardProps {
 
 export function ActionReviewCard({ preview, footer, hfFloor }: ReviewCardProps) {
   const swap = isSwapPreview(preview) ? swapSides(preview.slots) : null;
-  // `op` is the internal step name ("predict_trade"); the summary above already says what the action does.
-  const shown = Object.entries(preview.slots).filter(([k, v]) => k !== "op" && v !== null && v !== "");
   const projected = preview.risk.projected_health_factor;
 
   return (
     <section aria-label={swap ? "Swap review" : "Action review"} className="rounded-xl border border-violet-100 bg-surface p-4 sm:p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-[12px] font-semibold uppercase tracking-wide text-violet-500">{swap ? "Review swap" : "Review action"}</p>
-          <p className="mt-0.5 text-[13px] text-vgray-500">
-            Simulated by the Vanna MCP · {preview.requires_signature ? "needs your wallet signature" : "no signature needed"}
-          </p>
-        </div>
-        <RiskChip decision={preview.risk.decision} />
+      {/* The card says what will happen, in one line. The risk chip appears only when there is something to weigh (confirm / blocked):
+          "allow" is the normal case and needs no label, and how the action was checked is not the reader's concern. */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <p className="text-[15px] font-medium leading-6 text-vgray-900">{preview.human_summary}</p>
+        {preview.risk.decision !== "allow" && <RiskChip decision={preview.risk.decision} />}
       </div>
-
-      <p className="mt-3 text-[15px] leading-6 text-vgray-900">{preview.human_summary}</p>
 
       {swap ? (
         <dl className="mt-4 grid gap-2 sm:grid-cols-2">
           <Tile caption="You spend" value={`${swap.amountIn} ${swap.tokenIn}`} />
           <Tile caption="You receive · estimate" value={swap.amountOut ? `${swap.amountOut} ${swap.tokenOut}` : swap.tokenOut} />
-        </dl>
-      ) : shown.length > 0 ? (
-        <dl className="mt-4 grid gap-2 sm:grid-cols-2">
-          {shown.map(([key, value]) => (
-            <Tile key={key} caption={label(key)} value={String(value)} />
-          ))}
         </dl>
       ) : null}
 

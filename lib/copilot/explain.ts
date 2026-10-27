@@ -42,7 +42,7 @@ export function fmtFractionPct(v: string | number): string {
 
 const SIM_PATTERNS: Array<[RegExp, string]> = [
   [/insufficient funds|InsufficientFunds|0x1\b/i, "Your wallet does not hold enough of that asset (or enough SOL for fees) for this action."],
-  [/StalePrice|0x178b|stale_price|price_unavailable/i, "A price feed is stale right now, so the program refuses to use it. Try again in a minute."],
+  [/StalePrice|0x178b|stale_price|price_unavailable/i, "Prices are updating, so I could not prepare this just now. Nothing was sent. Try again in a minute."],
   // The program's check that every position in the margin account was named (IncompletePositionAccounts): about the
   // account's positions, not about a swap route.
   [/IncompletePositionAccounts|H37YVBG3eGtz89ofd7iDLc2PJgn12778392XeU2QJcGC failed: custom program error: 0x1788/i, "The program did not accept the list of positions sent with this step: it checks every asset in your margin account, and this step did not match what the program expects. Nothing was sent. Try again later; if it keeps happening, the app and the on-chain program are out of step."],

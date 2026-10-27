@@ -3,7 +3,6 @@
 import type { PlanStepView, StepStatus } from "@/lib/copilot/types";
 import { RUN_ACTIVE, type RunState } from "@/lib/copilot/client/run";
 import { ExecutionStepper, type StepperStep } from "./execution-stepper";
-import { StepApprovalCard } from "./step-approval-card";
 import { AnswerView } from "./answer-view";
 
 /**
@@ -77,6 +76,8 @@ export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: Pl
   const canContinue =
     phase === "paused" && !hasSubmitted && plan.steps.some((s) => s.status === "pending" || s.status === "expired");
 
+  // One card for the whole run: the signature button sits on the step that waits for it (no second "wallet signature needed" card).
+  const awaitingSignature = !!pending && (phase === "awaiting_signature" || phase === "signing");
   return (
     <div className="flex flex-col gap-3">
       <ExecutionStepper
@@ -84,22 +85,17 @@ export function PlanRunCard({ run, onSign, onContinue, onRecheck, onCancel }: Pl
         currentStepIndex={currentStepIndex}
         cancelled={cancelled}
         busy={busy}
-        onStop={!["completed", "failed", "cancelled", "expired"].includes(phase) && phase !== "awaiting_signature" ? onCancel : undefined}
+        {...(awaitingSignature
+          ? {
+              onSign,
+              walletOpen: phase === "signing",
+              signDisabled: !pending!.tx.simulation_success,
+              signNote: run.rejected ? null : run.message,
+              rejected: run.rejected,
+            }
+          : {})}
+        onStop={!["completed", "failed", "cancelled", "expired", "signing"].includes(phase) ? onCancel : undefined}
       />
-
-      {pending && (phase === "awaiting_signature" || phase === "signing") && (
-        <StepApprovalCard
-          step={pending.step}
-          totalSteps={plan.steps.length}
-          tx={pending.tx}
-          projectedHf={null}
-          signing={phase === "signing"}
-          rejected={run.rejected}
-          error={run.rejected ? null : run.message}
-          onSign={onSign}
-          onCancel={onCancel}
-        />
-      )}
 
       {phase === "confirming" && (
         <p role="status" className="flex items-center gap-3 text-[12.5px] leading-5 text-vgray-500">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useViewportScale } from "@/lib/hooks/useViewportScale";
 
 /**
@@ -28,6 +28,9 @@ import { useViewportScale } from "@/lib/hooks/useViewportScale";
  */
 
 /** Rail widths, from the deployed mock. */
+/** Scoped presentation mode, derived from the collapsed prop; no financial or persisted state. */
+export const CopilotRailPresentation = createContext(false);
+
 const RAIL_FULL = 292;
 const RAIL_MINI = 60;
 /** Breathing room above a pinned message, in px. */
@@ -305,37 +308,23 @@ export function CopilotShell({
           overflow: "visible",
         }}
       >
-        {collapsed ? (
+        <CopilotRailPresentation.Provider value={collapsed}>
           <div
-            style={{
-              position: "absolute",
-              inset: "0 auto 0 0",
-              width: RAIL_MINI,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 10,
-              padding: "14px 0",
-            }}
-          >
-            {railMini}
-          </div>
-        ) : (
-          <div
-            className="cp-rail-scroll"
+            className={`cp-rail-scroll cp-rail-layout ${collapsed ? "cp-rail-compact" : ""}`}
             style={{
               position: "absolute",
               inset: 0,
-              width: RAIL_FULL,
+              width: collapsed ? RAIL_MINI : RAIL_FULL,
               display: "flex",
               flexDirection: "column",
               minWidth: 0,
-              overflowX: "hidden",
-              overflowY: "auto",
+              overflowX: collapsed ? "visible" : "hidden",
+              overflowY: collapsed ? "visible" : "auto",
               overscrollBehavior: "contain",
             }}
           >
             <div
+              className="cp-rail-heading"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -345,17 +334,6 @@ export function CopilotShell({
                 flex: "none",
               }}
             >
-              <span
-                style={{
-                  fontFamily: "var(--font-plus-jakarta-sans), system-ui, sans-serif",
-                  fontSize: 12,
-                  lineHeight: "18px",
-                  fontWeight: 600,
-                  color: "var(--g900)",
-                }}
-              >
-                Copilot
-              </span>
               <button
                 type="button"
                 onClick={onToggleCollapsed}
@@ -376,10 +354,11 @@ export function CopilotShell({
                 <PanelIcon />
               </button>
             </div>
-            <div style={{ flex: "none" }}>{railTop}</div>
-            <div style={{ flex: "none", minWidth: 0 }}>{railBody}</div>
+            {collapsed && <div className="cp-legacy-mini">{railMini}</div>}
+            <div className="cp-rail-slot">{railTop}</div>
+            <div className="cp-rail-slot">{railBody}</div>
           </div>
-        )}
+        </CopilotRailPresentation.Provider>
       </aside>
 
       <main

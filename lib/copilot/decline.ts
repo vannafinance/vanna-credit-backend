@@ -106,6 +106,7 @@ export async function composeFailure(input: { message: string; kind: FailureKind
   ].join("\n\n");
   try {
     const res = await getLlm().generate({
+      lane: "compose",
       system: FAILURE_SYSTEM,
       user,
       history: (input.history ?? []).slice(-4),
@@ -147,6 +148,7 @@ export async function composeDecline(input: DeclineInput): Promise<{ text: strin
   ].join("\n\n");
   try {
     const res = await getLlm().generate({
+      lane: "compose",
       system: DECLINE_SYSTEM,
       user,
       history: (input.history ?? []).slice(-4),

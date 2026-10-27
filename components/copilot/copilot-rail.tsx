@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { zoneOf, zoneLabel } from "./health-dial";
+import { CopilotRailPresentation } from "./copilot-shell";
 import type { ConversationSummary } from "@/lib/copilot/client/conversations";
 import { logoSrc } from "@/components/v3/icons";
 import { KAMINO_RECEIPTS } from "@/lib/solana/kamino";
@@ -119,9 +120,9 @@ export interface RailPosition {
 /** The health-factor gauge beside the rail's Health factor row (the Stellar Copilot's icon). */
 function HealthIcon() {
   return (
-    <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="flex-none text-vgray-700">
+    <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="cp-health-icon flex-none text-vgray-700">
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
-      <path d="m12 14 4-4" />
+      <path className="cp-health-needle" d="m12 14 4-4" />
     </svg>
   );
 }
@@ -134,11 +135,75 @@ function SectionIcon({ positions }: { positions: RailPosition[] }) {
   const firstTwo = positions.slice(0, 2).map((p) => p.logos?.[0] ?? tokenLogo(p.symbol));
   const logos = firstTwo.length ? firstTwo : [tokenLogo("SOL"), tokenLogo("USDC")];
   return (
-    <span aria-hidden style={{ position: "relative", display: "inline-block", width: logos.length > 1 ? 25 : 17, height: 17, flex: "none", transform: "scale(0.85)", transformOrigin: "left center" }}>
+    <span aria-hidden style={{ position: "relative", display: "inline-block", width: 24, height: 17, flex: "none", transform: "scale(0.85)", transformOrigin: "left center" }}>
       {logos.map((logo, i) => (
         <RailLogo key={i} logo={logo} style={{ left: i * 8, zIndex: logos.length - i, boxShadow: logos.length > 1 ? "0 0 0 1.5px #fff" : undefined }} />
       ))}
     </span>
+  );
+}
+
+/**
+ * One rail section's two presentations (as the Stellar rail): expanded rows in the column, or, when the rail is
+ * collapsed, one icon button whose flyout shows the same content. Hover previews, click pins.
+ */
+function RailFlyout({ label, icon, summary, heading, children, order }: {
+  label: string; icon: ReactNode; summary?: ReactNode;
+  heading: ReactNode; children: ReactNode; order: number;
+}) {
+  const compact = useContext(CopilotRailPresentation);
+  const [open, setOpen] = useState(false);
+  const pinned = useRef(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [position, setPosition] = useState({ left: 68, top: 0 });
+  const clear = () => { if (timer.current) clearTimeout(timer.current); };
+  const preview = () => {
+    clear();
+    const rect = trigger.current?.getBoundingClientRect();
+    if (rect) setPosition({ left: Math.max(8, Math.min(rect.right + 8, window.innerWidth - 280)), top: Math.max(8, Math.min(rect.top, window.innerHeight - 180)) });
+    setOpen(true);
+  };
+  const leave = () => {
+    clear();
+    timer.current = setTimeout(() => {
+      if (!pinned.current && !panel.current?.contains(document.activeElement)) setOpen(false);
+    }, 160);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => { pinned.current = false; setOpen(false); };
+    const outside = (event: PointerEvent) => {
+      if (!trigger.current?.contains(event.target as Node) && !panel.current?.contains(event.target as Node)) close();
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { close(); trigger.current?.focus(); } };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", close);
+    const scroll = (event: Event) => { if (!panel.current?.contains(event.target as Node)) close(); };
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [open]);
+  if (!compact) return <div className="cp-rail-section" style={{ order }}>{heading}{children}</div>;
+  return (
+    <div className="cp-rail-section" style={{ order }}>
+      <button ref={trigger} type="button" className="cp-rail-mix cp-icon-button" aria-label={label} aria-expanded={open} aria-haspopup="dialog" onMouseEnter={preview} onMouseLeave={leave} onFocus={preview} onBlur={leave} onClick={() => { pinned.current = !pinned.current; if (pinned.current) preview(); else setOpen(false); }}>
+        {icon}{summary}
+      </button>
+      {open && createPortal(
+        <div ref={panel} className="cp-root cp-rail-flyout" role="dialog" aria-label={label} style={{ ...position, maxHeight: `calc(100dvh - ${position.top + 8}px)` }} onMouseEnter={clear} onMouseLeave={leave} onFocus={clear} onBlur={leave}>
+          {heading}{children}
+        </div>,
+        document.body,
+      )}
+    </div>
   );
 }
 
@@ -147,7 +212,7 @@ function Caret({ open }: { open: boolean }) {
   return (
     <span
       aria-hidden
-      className="inline-flex flex-none text-vgray-400"
+      className="cp-rail-caret inline-flex flex-none text-vgray-400"
       style={{ transform: open ? "rotate(180deg)" : "none" }}
     >
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M6 9l6 6 6-6" /></svg>
@@ -178,9 +243,12 @@ export function CopilotRailTop({
   onNewChat: () => void;
   chips: RailStatusChip[];
 }) {
+  // The collapsed rail has New chat in its icon column, and a status chip has no room there.
+  const compact = useContext(CopilotRailPresentation);
+  if (compact) return null;
   return (
     <>
-      <div style={{ padding: "0 16px 4px" }}>
+      <div className="cp-rail-new" style={{ padding: "0 16px 4px" }}>
         <button
           type="button"
           onClick={onNewChat}
@@ -191,7 +259,7 @@ export function CopilotRailTop({
           New chat
         </button>
       </div>
-      <div style={{ padding: "2px 16px 12px", display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {chips.length > 0 && <div style={{ padding: "2px 16px 12px", display: "flex", flexWrap: "wrap", gap: 6 }}>
         {chips.map((chip) => {
           const Tag = chip.onClick ? "button" : "span";
           return (
@@ -208,7 +276,7 @@ export function CopilotRailTop({
             </Tag>
           );
         })}
-      </div>
+      </div>}
     </>
   );
 }
@@ -256,10 +324,12 @@ export function CopilotRailBody({
 
   if (!hasWallet) {
     return (
-      <div style={{ minWidth: 0, padding: "4px 16px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
-        <p className="text-[13px] leading-[20px] text-vgray-500">
-          Connect your wallet to see your health factor and positions.
-        </p>
+      <div className="cp-rail-body">
+        <RailFlyout order={2} label="Health factor" icon={<HealthIcon />} summary={<span className="text-[11px] font-semibold text-vgray-900">—</span>} heading={<></>}>
+          <p className="px-2 pb-2 text-[13px] leading-[20px] text-vgray-500">
+            Connect your wallet to see your health factor and positions.
+          </p>
+        </RailFlyout>
         <RecentsList
           recentsOpen={recentsOpen}
           onToggle={() => setRecentsOpen((v) => !v)}
@@ -276,11 +346,12 @@ export function CopilotRailBody({
   const zone = noDebt ? "healthy" : zoneOf(healthFactor);
 
   return (
-    <div style={{ minWidth: 0, padding: "4px 16px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className="cp-rail-body">
       {/* Health factor — the number and the zone, nothing else. The dial, the scale and
           the collateral/borrowed strip stay off the rail by design. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <HealthIcon />
+      <RailFlyout order={2} label="Health factor" icon={<HealthIcon />} summary={<span className="text-[11px] font-semibold text-vgray-900"><span className="cp-hf-value">{noDebt ? "∞" : healthFactor == null ? "—" : healthFactor.toFixed(2)}</span></span>} heading={
+      <div className="cp-rail-row cp-health-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span className="inline-flex w-6 flex-none"><HealthIcon /></span>
         <div className="flex-1 text-[14px] leading-[21px] font-semibold text-vgray-900">Health factor</div>
         <div className="flex flex-none items-center gap-1.5" style={{ minWidth: 0 }}>
           <div className="text-[13px] leading-[20px] font-semibold text-vgray-900" style={{ fontFamily: VANNA_FONT }}>
@@ -291,6 +362,7 @@ export function CopilotRailBody({
           </div>
         </div>
       </div>
+      }>{null}</RailFlyout>
 
       <PositionsSection title="Margin Positions" open={positionsOpen} onToggle={() => setPositionsOpen((v) => !v)} positions={positions} />
       <PositionsSection title="Earn Positions" open={earnOpen} onToggle={() => setEarnOpen((v) => !v)} positions={earnPositions} empty="Nothing supplied to the Earn pool." />
@@ -314,7 +386,7 @@ export function CopilotRailBody({
   );
 }
 
-/** One collapsible list of holdings (Margin Positions, Earn Positions). */
+/** One collapsible list of holdings (Margin Positions, Earn Positions…); a flyout when the rail is collapsed. */
 function PositionsSection({
   title,
   open,
@@ -328,22 +400,25 @@ function PositionsSection({
   positions: RailPosition[];
   empty?: string;
 }) {
+  // The collapsed rail shows the list in its flyout; there is no dropdown to open there.
+  const compact = useContext(CopilotRailPresentation);
+  const shown = open || compact;
   return (
-    <div>
+    <RailFlyout order={4} label={title} icon={<SectionIcon positions={positions} />} heading={
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="cp-icon-button flex w-full cursor-pointer items-center gap-2.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
+        className="cp-rail-row cp-icon-button flex w-full cursor-pointer items-center gap-2.5 text-vgray-900 transition-colors"
       >
         <SectionIcon positions={positions} />
         <span className="flex-1 text-left text-[14px] leading-[21px] font-semibold">{title}</span>
         <span aria-hidden className="text-[12px] font-normal text-vgray-500">{positions.length}</span>
         <Caret open={open} />
       </button>
-      {open && (
-        // Indented under the title (past the icon), as on the Stellar rail.
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "8px 0 2px", marginLeft: 35 }}>
+    }>
+      {shown && (
+        <div className="cp-position-list">
           {positions.length === 0 ? (
             <p className="text-[12px] leading-[18px] text-vgray-400">{empty}</p>
           ) : (
@@ -365,7 +440,7 @@ function PositionsSection({
           )}
         </div>
       )}
-    </div>
+    </RailFlyout>
   );
 }
 
@@ -387,19 +462,20 @@ function RecentsList({
   onDelete: (id: string) => void;
 }) {
   return (
-    <div style={{ minWidth: 0 }}>
+    <RailFlyout order={5} label="Recents" icon={<RecentIcon size={18} />} heading={
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={recentsOpen}
-        className="flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-vgray-900 transition-colors hover:text-violet-500"
+        className="cp-rail-row cp-icon-button flex w-full cursor-pointer items-center gap-2.5 text-vgray-900 transition-colors"
       >
-        <RecentIcon size={14} />
+        <span className="inline-flex w-6 flex-none"><RecentIcon size={16} /></span>
         <span className="flex-1 text-left text-[14px] leading-[21px] font-semibold">Recents</span>
         <Caret open={recentsOpen} />
       </button>
+    }>
       {recentsOpen && (
-        <div style={{ padding: "6px 0 4px", display: "flex", flexDirection: "column" }}>
+        <div className="cp-recents-list" style={{ padding: "2px 0 4px", display: "flex", flexDirection: "column" }}>
           {conversations.length === 0 ? (
             <p className="text-[12px] leading-[18px] text-vgray-400">No chats yet.</p>
           ) : (
@@ -417,7 +493,7 @@ function RecentsList({
           )}
         </div>
       )}
-    </div>
+    </RailFlyout>
   );
 }
 

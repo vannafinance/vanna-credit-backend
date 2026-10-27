@@ -16,6 +16,7 @@ import { TransactionProgressModal } from "@/components/ui/transaction-progress-m
 import { FlashRepayHost } from "@/components/v3/flash-repay";
 import { MarginAccountHydrator } from "@/components/margin-account-hydrator";
 import { TickRefresh } from "@/components/tick-refresh";
+import { CopilotWalletSession } from "@/components/copilot/wallet-session";
 
 // Self-hosted, preloaded by next/font (no render-blocking external request, so
 // it helps LCP). `display: "swap"` paints text immediately with a fallback and
@@ -106,6 +107,7 @@ export default function RootLayout({
                 <PriceProvider>
                   <MarginAccountHydrator />
                   <TickRefresh />
+                  <CopilotWalletSession />
                   <RpcBanner />
                   <Navbar items={navbarItems}/>
                   <ScaleWrapper>{children}</ScaleWrapper>

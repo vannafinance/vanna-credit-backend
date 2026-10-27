@@ -119,8 +119,8 @@ function PlanArea({ response, run, plan, busy, onModify }: Pick<AssistantTurnPro
 
   return (
     <>
-      {response.preview && run.plan.steps.length === 1 && <ActionReviewCard preview={response.preview} hfFloor={run.plan.hf_floor} />}
-      <div className={response.preview && run.plan.steps.length === 1 ? "mt-3" : undefined}>
+      {/* A single action is ONE card once approved: the execution card (the review card above it was a second card for the same step). */}
+      <div>
         <PlanRunCard
           run={run}
           onSign={() => plan.sign(id)}
@@ -212,7 +212,10 @@ export function AssistantTurn({ response, run, isLatest, busy, plan, onPickClari
       )}
 
       {response.kind === "needs_login" && isLatest && <NeedsLoginCard {...login} />}
-      {hasPlanCard && <PlanArea response={response} run={run} plan={plan} busy={busy} onModify={onModify} />}
+      {/* A card with no reply words above it still comes from Vanna: the mark sits beside it like it does beside every other reply. */}
+      {hasPlanCard && (cardDrawn && !showRow
+        ? <AssistantRow><PlanArea response={response} run={run} plan={plan} busy={busy} onModify={onModify} /></AssistantRow>
+        : <PlanArea response={response} run={run} plan={plan} busy={busy} onModify={onModify} />)}
     </div>
   );
 }
