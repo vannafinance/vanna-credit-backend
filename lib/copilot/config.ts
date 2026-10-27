@@ -112,15 +112,15 @@ export const copilotConfig = {
     return this.isProduction ? "" : "localhost:3000";
   },
   /**
-   * A sign-in ends 12 hours after the wallet signed it, used or not: `sessionTtlMs` (how long past its last use) equals
+   * A sign-in ends 24 hours after the wallet signed it, used or not: `sessionTtlMs` (how long past its last use) equals
    * `sessionMaxMs` (how long past the signature), so a renewal can never extend it. Sign-out still voids it at once,
    * on every device.
    */
   get sessionTtlMs(): number {
-    return 12 * 60 * 60 * 1000;
+    return 24 * 60 * 60 * 1000;
   },
   get sessionMaxMs(): number {
-    return 12 * 60 * 60 * 1000;
+    return 24 * 60 * 60 * 1000;
   },
   /** A renewal re-issues the cookie at most this often, not on every request. */
   get sessionRenewAfterMs(): number {
@@ -150,6 +150,26 @@ export const copilotConfig = {
   },
   get vertexModel(): string {
     return env("VERTEX_MODEL", "gemini-3.8-flash");
+  },
+  /** Writes the words the user reads (replies, summaries, refusals). It phrases facts the code already verified, so it does not need the research model. */
+  get vertexComposeModel(): string {
+    return env("VERTEX_COMPOSE_MODEL", "gemini-3.5-flash");
+  },
+  /** Greetings only: small and fast, and it must accept MINIMAL thinking (3.7 and 3.8 do not). */
+  get vertexSocialModel(): string {
+    return env("VERTEX_SOCIAL_MODEL", "gemini-3.5-flash-lite");
+  },
+  /** Tried when a primary call is slow or the model is unavailable. Empty, or the same as the primary, turns failover off. */
+  get vertexFallbackModel(): string {
+    return env("VERTEX_FALLBACK_MODEL", "gemini-3.5-flash");
+  },
+  /** A primary call that outlasts this is moved to the fallback (24 Oct, Stellar: 3.8 took 18-104 s on requests 3.5 answered in 1.6-5 s). */
+  get modelSlowMs(): number {
+    return envNumber("COPILOT_MODEL_SLOW_MS", 15_000);
+  },
+  /** After a failover the primary is left alone this long, so a degraded spell costs one slow call, not one per call. */
+  get modelBreakerMs(): number {
+    return envNumber("COPILOT_MODEL_BREAKER_MS", 5 * 60_000);
   },
   /**
    * Explicit Vertex context cache for the investigation's fixed prefix (system prompt + tool definitions): the same

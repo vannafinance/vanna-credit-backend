@@ -62,13 +62,18 @@ export interface LlmRequest {
   responseSchema?: Record<string, unknown>;
   maxOutputTokens?: number;
   /** How much the model may reason before answering. Routing and wording need little; investigation needs more. */
-  thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
+  thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
   signal?: AbortSignal;
   /**
    * `system` + `tools` are a fixed prefix sent again within minutes (investigation turns): keep it in an explicit
    * Vertex cache. The model reads the same text either way; only the input bill changes.
    */
   cachePrefix?: boolean;
+  /**
+   * What the call is for. `research` (default) reads and decides; `compose` only words facts the code already verified, so it runs
+   * on the cheaper, faster model; `social` answers a greeting on the smallest one. Both fall back to the fallback model when the chosen one is slow or unavailable.
+   */
+  lane?: "research" | "compose" | "social";
 }
 
 export interface LlmResponse {
@@ -104,15 +109,32 @@ const CACHE_USE_MARGIN_MS = 30_000;
 const CACHE_RENEW_MARGIN_MS = 120_000;
 /** After a failed create (unsupported location, quota, prefix too small), plain calls for this long before retrying. */
 const CACHE_RETRY_AFTER_MS = 10 * 60_000;
+/** After a failed creation the next try comes soon, then backs off (60 s, 2, 4, 8 min, capped at CACHE_RETRY_AFTER_MS). A timeout on the first call after a restart is common (27 Oct: 0% cached for the whole test); waiting 10 minutes for the next try lost the cache for the session. */
+const CACHE_FIRST_RETRY_MS = 60_000;
+/**
+ * A call that reads the cached prefix gets this long before it is repeated with the prompt in full. A cache that the
+ * model cannot serve (26 Oct: gemini-3.8-flash created one, then the first call that used it never returned) otherwise
+ * held the investigation until its own 50 s deadline and the keyword router answered. A healthy cached call takes 1-3 s.
+ */
+/** The one tiny call that reads a new cache before any user call does; tests recognise it by this text. */
+export const CACHE_WARMUP_TEXT = "Reply with OK.";
+const cachedCallTimeoutMs = (): number => {
+  const configured = Number(process.env.COPILOT_CACHED_CALL_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 12_000;
+};
 
-type PrefixCache = { name: string | null; expiresAt: number; creating: boolean; retryAt: number };
+/** The model took longer than its limit to answer a call that read its cache: it is slow now, so the fallback model answers. */
+class ModelSlowError extends Error {}
 
-class VertexClient implements LlmClient {
+type PrefixCache = { name: string | null; expiresAt: number; creating: boolean; retryAt: number; failures: number };
+
+/** Exported for the cache-failure test, which injects a fake SDK client. */
+export class VertexClient implements LlmClient {
   private ai: GoogleGenAI;
   /** Explicit caches of fixed prefixes, by hash of model + system + tools + tool mode. Process-local. */
   private caches = new Map<string, PrefixCache>();
-  constructor(project: string, location: string) {
-    this.ai = new GoogleGenAI({ vertexai: true, project, location });
+  constructor(project: string, location: string, ai?: GoogleGenAI) {
+    this.ai = ai ?? new GoogleGenAI({ vertexai: true, project, location });
   }
 
   private toolConfig(req: LlmRequest) {
@@ -128,15 +150,14 @@ class VertexClient implements LlmClient {
    * The cache to use for this request's prefix, or null (send it in full). Never waits: a missing or expiring cache
    * is created in the background, so the call that finds none costs what it did before, and the next one is cheaper.
    */
-  private prefixCache(req: LlmRequest): string | null {
+  private prefixCache(req: LlmRequest, model: string): string | null {
     if (!req.cachePrefix || !req.tools?.length || req.responseSchema || !copilotConfig.promptCacheEnabled) return null;
-    const model = copilotConfig.vertexModel;
     const key = createHash("sha256").update(JSON.stringify([model, req.system, req.tools, !!req.forceTool])).digest("hex");
     const now = Date.now();
     let entry = this.caches.get(key);
     if (!entry) {
       if (this.caches.size >= 8) this.caches.clear(); // a deploy changed the prompt; old caches simply expire
-      entry = { name: null, expiresAt: 0, creating: false, retryAt: 0 };
+      entry = { name: null, expiresAt: 0, creating: false, retryAt: 0, failures: 0 };
       this.caches.set(key, entry);
     }
     if (!entry.creating && now >= entry.retryAt && entry.expiresAt - now < CACHE_RENEW_MARGIN_MS) {
@@ -150,18 +171,30 @@ class VertexClient implements LlmClient {
             displayName: `copilot-prefix-${key.slice(0, 12)}`,
             systemInstruction: req.system,
             ...this.toolConfig(req),
+            // gemini-3.8-flash never finished creating a cache without a contents entry (26 Oct: 30-65 s, then aborted); with one it
+            // takes about 9 s and a call that reads it has 99.9% of its prompt cached. The entry carries no information.
+            contents: [{ role: "user", parts: [{ text: "The instructions and tools above are cached for this session." }] }],
             ttl: `${ttl}s`,
-            httpOptions: { timeout: 20_000 },
+            httpOptions: { timeout: 60_000 },
           },
         })
-        .then((c) => {
+        .then(async (c) => {
           if (!c.name) throw new Error("no cache name returned");
+          // The first read of a new cache can take several seconds (3-7 s measured); one small call reads it here, in the
+          // background, so no user's call is the first reader. The cache is used only once that call has returned.
+          await this.ai.models.generateContent({
+            model,
+            contents: [{ role: "user", parts: [{ text: CACHE_WARMUP_TEXT }] }],
+            config: { cachedContent: c.name, maxOutputTokens: 16, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }, abortSignal: AbortSignal.timeout(45_000) },
+          });
           e.name = c.name;
           e.expiresAt = c.expireTime ? Date.parse(c.expireTime) : Date.now() + ttl * 1000;
+          e.failures = 0;
           if (!copilotConfig.isProduction) console.info(`[copilot:vertex] prompt cache ready: ${c.name} (${c.usageMetadata?.totalTokenCount ?? "?"} tokens, ${ttl}s)`);
         })
         .catch((err) => {
-          e.retryAt = Date.now() + CACHE_RETRY_AFTER_MS;
+          e.retryAt = Date.now() + Math.min(CACHE_RETRY_AFTER_MS, CACHE_FIRST_RETRY_MS * 2 ** e.failures);
+          e.failures += 1;
           console.warn("[copilot:vertex] prompt cache unavailable, sending the prompt in full:", err instanceof Error ? err.message : err);
         })
         .finally(() => {
@@ -171,18 +204,42 @@ class VertexClient implements LlmClient {
     return entry.name && entry.expiresAt - now > CACHE_USE_MARGIN_MS ? entry.name : null;
   }
 
-  private dropCache(name: string): void {
-    for (const e of this.caches.values()) if (e.name === name) e.expiresAt = 0;
+  /** A cache that failed a call is not used again; `hold` also stops a new one being created for a while. */
+  private dropCache(name: string, hold = false): void {
+    for (const e of this.caches.values()) if (e.name === name) {
+      e.expiresAt = 0;
+      e.name = null;
+      if (hold) e.retryAt = Date.now() + CACHE_RETRY_AFTER_MS;
+    }
   }
 
-  async generate(req: LlmRequest): Promise<LlmResponse> {
+  /** Models the primary of which was moved away from, and until when. Process-local. */
+  private breaker = new Map<string, number>();
+
+  private modelFor(req: LlmRequest): string {
+    return req.lane === "social" ? copilotConfig.vertexSocialModel : req.lane === "compose" ? copilotConfig.vertexComposeModel : copilotConfig.vertexModel;
+  }
+
+  /** One call to one model, with the explicit-cache handling (a cache that fails a call is dropped and the call repeated in full). */
+  private async run(
+    req: LlmRequest,
+    model: string,
+    useCache: boolean,
+    extra?: AbortSignal,
+    canFailOver = false,
+  ): Promise<Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>> {
     const contents = [
       ...(req.history ?? []).map((h) => ({ role: h.role === "assistant" ? "model" : "user", parts: [{ text: h.text }] })),
       { role: "user", parts: [{ text: req.user }] },
     ];
-    const call = (cached: string | null) =>
-      this.ai.models.generateContent({
-        model: copilotConfig.vertexModel,
+    let cacheLimit: AbortSignal | undefined;
+    const call = (cached: string | null) => {
+      // Only a call that reads the cache is time-boxed by the cache limit; the caller's own signal (and the slow-call limit) still apply.
+      cacheLimit = cached ? AbortSignal.timeout(cachedCallTimeoutMs()) : undefined;
+      const signals = [req.signal, extra, cacheLimit].filter((s): s is AbortSignal => !!s);
+      const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+      return this.ai.models.generateContent({
+        model,
         contents,
         config: {
           // With a cache, the system prompt, tools and tool mode live in it (Vertex rejects them in the request too).
@@ -193,19 +250,45 @@ class VertexClient implements LlmClient {
           // answer (empty text). Routing and wording need little reasoning.
           thinkingConfig: { thinkingLevel: ThinkingLevel[req.thinkingLevel ?? "LOW"] },
           ...(req.responseSchema ? { responseMimeType: "application/json", responseSchema: req.responseSchema as never } : {}),
-          ...(req.signal ? { abortSignal: req.signal } : {}),
+          ...(signal ? { abortSignal: signal } : {}),
         },
       });
-    const cached = this.prefixCache(req);
-    let res;
+    };
+    const cached = useCache ? this.prefixCache(req, model) : null;
     try {
-      res = await call(cached);
+      return await call(cached);
     } catch (err) {
       // A cache deleted or expired early must never fail the request: the same call with the prompt in full.
-      if (!cached || req.signal?.aborted) throw err;
+      if (!cached || req.signal?.aborted || extra?.aborted) throw err;
+      // A cached call that ran out of time means the MODEL is slow right now (a cache that fails fast is a different thing). Repeating the
+      // call on the same slow model only doubles the wait (26 Oct: 12 s, then another full call, then the failover): the fallback answers.
+      if (canFailOver && cacheLimit?.aborted) {
+        this.dropCache(cached, true);
+        throw new ModelSlowError(err instanceof Error ? err.message : "cached call timed out");
+      }
       console.warn("[copilot:vertex] cached call failed, retrying with the prompt in full:", err instanceof Error ? err.message : err);
-      this.dropCache(cached);
-      res = await call(null);
+      this.dropCache(cached, true);
+      return call(null);
+    }
+  }
+
+  async generate(req: LlmRequest): Promise<LlmResponse> {
+    const primary = this.modelFor(req);
+    const fallback = copilotConfig.vertexFallbackModel.trim();
+    const canFailOver = !!fallback && fallback !== primary;
+    let res;
+    if (canFailOver && (this.breaker.get(primary) ?? 0) > Date.now()) {
+      res = await this.run(req, fallback, false);
+    } else {
+      const slow = canFailOver ? AbortSignal.timeout(copilotConfig.modelSlowMs) : undefined;
+      try {
+        res = await this.run(req, primary, true, slow, canFailOver);
+      } catch (err) {
+        if (!canFailOver || req.signal?.aborted || !(slow?.aborted || err instanceof ModelSlowError || isModelUnavailable(err))) throw err;
+        this.breaker.set(primary, Date.now() + copilotConfig.modelBreakerMs);
+        console.warn(`[copilot:vertex] ${primary} ${slow?.aborted || err instanceof ModelSlowError ? "was slow" : "was unavailable"}; answering from ${fallback} and leaving it alone for ${Math.round(copilotConfig.modelBreakerMs / 1000)}s`);
+        res = await this.run(req, fallback, false);
+      }
     }
     const calls = (res.functionCalls ?? []).flatMap((c) => (c.name ? [{ name: c.name, args: (c.args ?? {}) as Record<string, unknown> }] : []));
     let text: string | null = null;
@@ -219,6 +302,14 @@ class VertexClient implements LlmClient {
     const cachedTokens = res.usageMetadata?.cachedContentTokenCount ?? 0;
     return { text, calls, tokens: typeof used === "number" && used > 0 ? used : estimated, cachedTokens };
   }
+}
+
+/** A failure that means "this model is not serving right now" (rate limit, overload, retired id), not a problem with the request. */
+export function isModelUnavailable(err: unknown): boolean {
+  const status = Number((err as { status?: unknown; code?: unknown })?.status ?? (err as { code?: unknown })?.code);
+  if (status === 429 || status === 404 || (status >= 500 && status < 600)) return true;
+  const text = err instanceof Error ? `${err.name} ${err.message}` : String(err);
+  return /\b(429|500|502|503|504)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|overloaded|not found|DEADLINE_EXCEEDED/i.test(text);
 }
 
 export function getLlm(): LlmClient {
@@ -602,6 +693,7 @@ export async function wordAnswer(args: {
   const dataText = JSON.stringify(args.data).slice(0, 12_000);
   try {
     const res = await getLlm().generate({
+      lane: "compose",
       system: WORDING_SYSTEM,
       user: `QUESTION: ${args.question.slice(0, 400)}\n\nDATA (json):\n${dataText}\n\nFIGURES:\n${figures}`,
       responseSchema: WORDING_SCHEMA as unknown as Record<string, unknown>,

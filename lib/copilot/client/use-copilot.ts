@@ -29,6 +29,8 @@ import {
 } from "./conversations";
 import { createRunController, initialRunState, type RunController, type RunState } from "./run";
 import { signInWithWallet, SignInCancelledError } from "./siws";
+import { autoSignIn } from "./auto-signin";
+import { COPILOT_SESSION_EVENT } from "@/components/copilot/wallet-session";
 import { getActiveSigner } from "@/lib/solana/wallet-bridge";
 import { refreshWalletBalancesOnChain } from "@/hooks/use-wallet";
 import { refreshMarginAccount } from "@/store/margin-account-info-store";
@@ -133,14 +135,27 @@ export function useCopilot() {
         setSession({ state: "signed_in", wallet: res.wallet, expiresAt: res.expires_at ?? null });
       } else {
         setSession({ state: "signed_out" });
+        // A wallet that is already connected on the site should not be asked to sign in through a card: prove it here too
+        // (shared with the site-wide component, so there is never a second prompt, and a "no" is respected).
+        const wallet = adapter.publicKey?.toBase58();
+        if (wallet && adapter.connected && adapter.signMessage) {
+          const proved = await autoSignIn({ wallet, signMessage: adapter.signMessage });
+          if (proved?.authenticated && proved.wallet) {
+            setSession({ state: "signed_in", wallet: proved.wallet, expiresAt: proved.expires_at ?? null });
+          }
+        }
       }
     } catch {
       setSession({ state: "unreachable" });
     }
-  }, []);
+  }, [adapter.publicKey, adapter.connected, adapter.signMessage]);
 
   useEffect(() => {
     void refreshSession();
+    // The site signs a connecting wallet in by itself; pick that session up without a reload.
+    const onSession = () => void refreshSession();
+    window.addEventListener(COPILOT_SESSION_EVENT, onSession);
+    return () => window.removeEventListener(COPILOT_SESSION_EVENT, onSession);
   }, [refreshSession]);
 
   // ── history (browser only, per signed-in wallet) ──────────────────────────

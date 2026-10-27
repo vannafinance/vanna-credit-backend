@@ -21,6 +21,14 @@ export interface ExecutionStepperProps {
   onRetry?: (stepIndex: number) => void;
   /** A step waits for the wallet: the button sits on that step's row. */
   onSign?: () => void;
+  /** The wallet prompt is open right now: the button says so and cannot be pressed twice. */
+  walletOpen?: boolean;
+  /** The transaction failed its simulation, so it must not be offered for signing. */
+  signDisabled?: boolean;
+  /** Under the button: a declined prompt or the last error, in plain words. */
+  signNote?: string | null;
+  /** The wallet declined the last prompt: the same transaction can be approved again. */
+  rejected?: boolean;
   /** Ends the run after the step in flight. Hidden once the run is over. */
   onStop?: () => void;
   busy?: boolean;
@@ -46,6 +54,10 @@ export function ExecutionStepper({
   currentStepIndex,
   onRetry,
   onSign,
+  walletOpen = false,
+  signDisabled = false,
+  signNote = null,
+  rejected = false,
   onStop,
   busy = false,
   cancelled = false,
@@ -153,14 +165,20 @@ export function ExecutionStepper({
                 )}
 
                 {waitsHere && (
-                  <div className="mt-1 flex flex-wrap items-center gap-3">
-                    {onSign && (
-                      <button type="button" onClick={onSign} disabled={busy}
-                        className="rounded-lg bg-[image:var(--cp-gradient)] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50">
-                        Sign in wallet
-                      </button>
+                  <div className="mt-1 flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {onSign && (
+                        <button type="button" onClick={onSign} disabled={walletOpen || signDisabled}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[image:var(--cp-gradient)] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50">
+                          {walletOpen ? <><Loader2 size={13} className="animate-spin" /><span>Waiting for your wallet…</span></> : "Approve"}
+                        </button>
+                      )}
+                      <span className="text-[12px] text-vgray-400">Your wallet will open to approve this one step.</span>
+                    </div>
+                    {rejected && !signNote && (
+                      <p role="status" className="text-[12.5px] leading-5 text-vgray-500">You declined this in your wallet. Nothing was sent. Approve again when you are ready, or cancel.</p>
                     )}
-                    <span className="text-[12px] text-vgray-400">Your wallet will open to approve this one step.</span>
+                    {signNote && <p role="alert" className="text-[12.5px] leading-5 text-[var(--cp-danger-fg)]">{signNote}</p>}
                   </div>
                 )}
 

@@ -34,6 +34,8 @@ import { HF_PREFIX, MAX_PLAN_STEPS, OUT_PREFIX, balancesTouched, labelFor, perce
 import { conditionalRefusal, routeMessage } from "./router";
 import { productRefusal } from "./domain-firewall";
 import { composeDecline, composeFailure, type FailureKind } from "./decline";
+import { composeGreeting, isSocial } from "./social";
+import { matchFastRead } from "./fast-read";
 import { investigate } from "./investigation";
 import { llmConfigured } from "./vertex";
 import type { ChatRequest, ChatResponse, Preview, PlanView } from "./types";
@@ -135,6 +137,23 @@ async function handleChatTurn(input: ChatInput): Promise<ChatResponse> {
         const declined = await composeDecline({ message, reason: fw.reason, fallback: fw.message, history, signal });
         tokens += declined.tokens;
         return byModel({ kind: "blocked", message: declined.text, ...base });
+      }
+      // A bare greeting or thanks is answered by the smallest model, without the investigation (social.ts). (The firewall only names it
+      // "greeting" when the model is not deciding, so the narrow match in social.ts is the gate.)
+      if (isSocial(message)) {
+        const greeted = await composeGreeting({ message, signal });
+        tokens += greeted.tokens;
+        debugNote("social", { used: greeted.used });
+        const greeting = { kind: "answer" as const, message: greeted.text, answer: { headline: greeted.text, facts: [], venue: "none" as const }, ...base };
+        return greeted.used ? byModel(greeting) : greeting;
+      }
+      // The two most common questions, matched whole and exactly, are one live read and no model (fast-read.ts). A failed read
+      // falls through to the investigation, which explains it.
+      const fast = matchFastRead(message);
+      if (fast) {
+        const out = await runRead(fast, ctx);
+        debugNote("fast_read", { kind: fast.kind, ok: out.ok });
+        if (out.ok) return { kind: "answer", message: answerToText(out.answer), answer: out.answer, ...base };
       }
       let decided: Intent | null = null;
       if (modelDecides) {

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChat } from "../index";
 import { mcp, MCPError } from "../mcp-client";
 import { setLimitStoreForTests, tokensUsedToday } from "../limits";
-import { priceDeps } from "../mcp-facts";
+import { priceDeps, resetPriceRefresh } from "../mcp-facts";
 import { setLlmClient, type LlmClient, type LlmRequest } from "../vertex";
 import { workflowDeps, type WorkflowRecord } from "../workflow";
 import { pendingDeps, type ConversationRecord } from "../workflow/pending";
@@ -255,11 +255,126 @@ describe("read lane", () => {
   });
 });
 
+describe("greetings and exact reads skip the investigation", () => {
+  it("a bare greeting is answered on the social lane with no reads", async () => {
+    const llm = fakeLlm(() => ({ text: "Hi! I can read your account and prepare transactions you approve in your wallet." }));
+    setLlmClient(llm);
+    process.env.COPILOT_INVESTIGATION = "on";
+    const res = await chat("hi");
+    process.env.COPILOT_INVESTIGATION = "off";
+    expect(res.kind).toBe("answer");
+    expect(res.message).toMatch(/Hi!/);
+    expect(llm.requests.map((r) => r.lane)).toEqual(["social"]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("a bare health question is one read and no model call", async () => {
+    fake.health = HEALTH_WITH_DEBT;
+    const llm = fakeLlm(() => ({ text: "should not be asked" }));
+    setLlmClient(llm);
+    process.env.COPILOT_INVESTIGATION = "on";
+    const res = await chat("what is my health factor?");
+    process.env.COPILOT_INVESTIGATION = "off";
+    expect(res.kind).toBe("answer");
+    expect(res.answer?.headline).toBe("Your health factor is 3.00 on your margin account.");
+    expect(llm.requests).toEqual([]);
+  });
+
+  it("a bare borrowing-capacity question is the code's own sizing and no model call", async () => {
+    fake.health = HEALTH_WITH_DEBT;
+    fake.canBorrow = { allowed: true, projected_health_factor: "2.0", current_health_factor: "3.0" };
+    const llm = fakeLlm(() => ({ text: "should not be asked" }));
+    setLlmClient(llm);
+    process.env.COPILOT_INVESTIGATION = "on";
+    const res = await chat("how much can i borrow?");
+    process.env.COPILOT_INVESTIGATION = "off";
+    expect(res.kind).toBe("answer");
+    expect(JSON.stringify(res.answer?.tables ?? [])).toMatch(/SOL/);
+    expect(llm.requests).toEqual([]);
+  });
+
+  it("a failed exact read falls through instead of answering with nothing", async () => {
+    fake.health = new MCPError("boom", { code: "mcp_unreachable", retryable: true });
+    const llm = fakeLlm(() => ({ text: null }));
+    setLlmClient(llm);
+    process.env.COPILOT_INVESTIGATION = "on";
+    const res = await chat("what is my health factor?");
+    process.env.COPILOT_INVESTIGATION = "off";
+    expect(["unavailable", "answer", "error", "clarification"]).toContain(res.kind);
+    expect(llm.requests.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a stale oracle price is refreshed, never explained", () => {
+  it("a price read that finds the price stale asks the keeper and answers with the refreshed price", async () => {
+    resetPriceRefresh();
+    let reads = 0;
+    priceDeps.refresh = vi.fn(async () => undefined);
+    priceDeps.sleep = vi.fn(async () => undefined);
+    vi.spyOn(mcp, "price").mockImplementation(async () => ({ price_usd: reads++ === 0 ? "100.01" : "100.20", stale: reads === 1 }));
+    const res = await chat("price of SOL");
+    expect(priceDeps.refresh).toHaveBeenCalledTimes(1);
+    expect(res.answer?.headline).toBe("SOL is $100.2 on the Vanna oracle.");
+    expect(res.answer?.note).toBeUndefined();
+  });
+
+  it("a price that stays stale is shown as a price, with no talk of staleness", async () => {
+    resetPriceRefresh();
+    priceDeps.refresh = vi.fn(async () => undefined);
+    priceDeps.sleep = vi.fn(async () => undefined);
+    vi.spyOn(mcp, "price").mockImplementation(async () => ({ price_usd: "100.01", stale: true }));
+    const res = await chat("price of SOL");
+    expect(res.answer?.headline).toBe("SOL is $100.01 on the Vanna oracle.");
+    expect(JSON.stringify(res)).not.toMatch(/stale|refresh|program refuses|older than/i);
+    expect(res.answer?.facts?.[0]?.tone).toBeUndefined();
+  });
+
+  it("several assets: one table of prices, no Status column", async () => {
+    resetPriceRefresh();
+    priceDeps.refresh = vi.fn(async () => undefined);
+    priceDeps.sleep = vi.fn(async () => undefined);
+    vi.spyOn(mcp, "prices").mockImplementation(async (symbols: string[]) => Object.fromEntries(symbols.map((s) => [s, { symbol: s, price_usd: "1", stale: true }])));
+    const res = await chat("show me the prices of SOL and USDC");
+    expect(JSON.stringify(res)).not.toMatch(/stale|Status/);
+  });
+});
+
+describe("how much can I borrow, with a stale oracle price", () => {
+  const staleOracle = () => {
+    resetPriceRefresh();
+    priceDeps.refresh = vi.fn(async () => undefined);
+    priceDeps.sleep = vi.fn(async () => undefined);
+    fake.health = HEALTH_WITH_DEBT;
+    vi.spyOn(mcp, "price").mockImplementation(async (symbol: string) => ({ price_usd: PRICES[symbol], stale: true }));
+    // The program's own check refuses to build on a stale price.
+    fake.canBorrow = { allowed: false, reason: "oracle price is stale", projected_health_factor: null, current_health_factor: "3.0" };
+  };
+
+  it("still shows every asset's figure, from the health maths, and says nothing about staleness", async () => {
+    staleOracle();
+    const res = await chat("how much can i borrow?");
+    const table = JSON.stringify(res.answer?.tables ?? []);
+    expect(table).toMatch(/SOL/);
+    expect(table).toMatch(/USDC/);
+    expect(table).toMatch(/USDT/);
+    expect(table).not.toMatch(/none|unavailable/i);
+    expect(JSON.stringify(res)).not.toMatch(/stale|refresh|oracle price/i);
+  });
+
+  it("a real refusal (the health factor would breach) is still a refusal, stale price or not", async () => {
+    staleOracle();
+    fake.canBorrow = { allowed: false, reason: "health factor would breach the floor", projected_health_factor: "1.05", current_health_factor: "3.0" };
+    const res = await chat("how much can i borrow?");
+    expect(JSON.stringify(res.answer?.tables ?? [])).toMatch(/none/i);
+  });
+});
+
 describe("model wording is constrained to the facts", () => {
   it("accepts wording whose numbers are all in the data", async () => {
     fake.health = HEALTH_WITH_DEBT;
     setLlmClient(fakeLlm(() => ({ text: JSON.stringify({ headline: "Your margin account sits at a health factor of 3.00, well above liquidation at 1.10." }) })));
-    const res = await chat("what's my health factor?");
+    // Not the bare question: that one is answered without a model (fast-read.ts), so this asks it another way.
+    const res = await chat("how is my health factor looking?");
     expect(res.answer?.headline).toMatch(/well above liquidation/);
   });
 

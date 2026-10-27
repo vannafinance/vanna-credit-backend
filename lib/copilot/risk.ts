@@ -8,7 +8,7 @@
  */
 
 import type { RiskResult, Simulation } from "./types";
-import { assetDecimals } from "./intent";
+import { assetDecimals, receiptUnderlying } from "./intent";
 
 import { LIQUIDATION_HF } from "./protocol-constants";
 
@@ -58,7 +58,10 @@ function rows(raw: unknown, unitsKey: "ui_balance" | "ui_debt"): PositionRow[] |
     const units = num(o[unitsKey]);
     const usd = num(o.usd_value);
     if (typeof o.symbol !== "string" || units === null || usd === null) return null;
-    const price = o.price && typeof o.price === "object" ? num((o.price as Record<string, unknown>).usd) : null;
+    const reported = o.price && typeof o.price === "object" ? num((o.price as Record<string, unknown>).usd) : null;
+    // For a Kamino receipt (kSOL…) the MCP lists the UNDERLYING's price (SOL's) beside units of the receipt, which is
+    // worth far less per unit. usd_value is the receipt's real worth, so price it by that.
+    const price = receiptUnderlying(o.symbol) && units > 0 ? usd / units : reported;
     out.push({ symbol: o.symbol, units, usd, priceUsd: price, unitsText: String(o[unitsKey]) });
   }
   return out;

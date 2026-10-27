@@ -76,6 +76,7 @@ export async function composeCompletion(rec: WorkflowRecord, signal?: AbortSigna
   const facts = completionFacts(rec);
   try {
     const res = await getLlm().generate({
+      lane: "compose",
       system: SYSTEM,
       user: `FACTS (from the server, accurate):\n${facts}`,
       responseSchema: SCHEMA as unknown as Record<string, unknown>,

@@ -110,7 +110,7 @@ describe("SIWS login", () => {
 });
 
 const HOUR = 3600_000;
-const HOUR12 = 12 * HOUR;
+const HOUR12 = 24 * HOUR;
 
 describe("session cookie", () => {
   const reqWith = (cookie: string) => new Request("http://x.test/api", { headers: { cookie } });
@@ -121,7 +121,7 @@ describe("session cookie", () => {
     expect(header).toContain("HttpOnly");
     expect(header).toContain("SameSite=Lax");
     expect(header).not.toContain("Secure"); // the test env is not production
-    expect(s.maxAgeS).toBe(12 * 3600);
+    expect(s.maxAgeS).toBe(24 * 3600);
     const user = await getUser(reqWith(`other=1; ${SESSION_COOKIE}=${s.value}`));
     expect(user?.wallet).toBe(wallet);
   });
@@ -160,13 +160,13 @@ describe("session cookie", () => {
     expect((await getUser(reqWith(`${SESSION_COOKIE}=${fresh.value}`)))?.wallet).toBe(wallet);
   });
 
-  it("ends 12 hours after the sign-in, however often it is used", async () => {
+  it("ends 24 hours after the sign-in, however often it is used", async () => {
     let t = 1_000_000_000;
     authClock.now = () => t;
     const first = createSession(wallet);
     const cookie = `${SESSION_COOKIE}=${first.value}`;
-    // Used every hour: never renewed past the 12 hours, and it keeps working until then.
-    for (let i = 0; i < 11; i++) {
+    // Used every hour: never renewed past the 24 hours, and it keeps working until then.
+    for (let i = 0; i < 23; i++) {
       t += HOUR;
       expect(renewSessionCookie(await getUser(reqWith(cookie)))).toBeNull();
       expect((await getUser(reqWith(cookie)))?.wallet).toBe(wallet);
