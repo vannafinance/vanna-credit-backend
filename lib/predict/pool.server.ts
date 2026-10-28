@@ -210,6 +210,9 @@ export async function listPoolMarketIds(): Promise<string[]> {
 export async function readPoolStates(marketIds: string[]): Promise<Map<string, PoolState>> {
   const out = new Map<string, PoolState>();
   if (!marketIds.length) return out;
+  // The USDC share value is the slowest read and needs nothing below: start it first.
+  const valueReady = usdcValueOf();
+  valueReady.catch(() => undefined); // awaited (and rethrown) below
   const allow = await readAllowlist(marketIds);
   const conn = getConnection();
   const pools = marketIds.map((id) => poolPda(new PublicKey(id)));
@@ -219,7 +222,7 @@ export async function readPoolStates(marketIds: string[]): Promise<Map<string, P
   accounts.forEach((a) => {
     if (a) keys.push(a.poolYes, a.poolNo, a.poolVannaShares, a.yesShareMint, a.noShareMint, a.poolUsdc);
   });
-  const [infos, value] = await Promise.all([keys.length ? getMultipleAccountsChunked(conn, keys) : Promise.resolve([]), usdcValueOf()]);
+  const [infos, value] = await Promise.all([keys.length ? getMultipleAccountsChunked(conn, keys) : Promise.resolve([]), valueReady]);
   let k = 0;
   marketIds.forEach((id, i) => {
     const a = accounts[i];
