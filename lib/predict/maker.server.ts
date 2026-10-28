@@ -75,10 +75,27 @@ async function setTokenAmount(account: PublicKey, amount: bigint): Promise<void>
 /** Makes sure the maker has SOL for fees / rent and a CASH float for filling trades. */
 export async function ensureMakerReady(): Promise<Keypair> {
   const maker = getForkMaker();
-  await ensureSol(maker.publicKey, MAKER_MIN_SOL, MAKER_TOPUP_SOL);
-  const ata = await ensureCashAccount(maker.publicKey);
-  if ((await readTokenAmount(ata)) < MAKER_MIN_CASH) await setTokenAmount(ata, MAKER_TOPUP_CASH);
+  if (Date.now() - makerHealthyAt < MAKER_RECHECK_MS) return maker;
+  makerCheck ??= checkMaker(maker).finally(() => (makerCheck = null));
+  await makerCheck;
   return maker;
+}
+
+/** A maker holding at least twice both minimums is not re-read for this long (a trade uses a sliver). */
+const MAKER_RECHECK_MS = 30_000;
+let makerHealthyAt = 0;
+let makerCheck: Promise<void> | null = null;
+
+/** One read for both floats (was: SOL balance, CASH account exists, CASH amount), then top up. */
+async function checkMaker(maker: Keypair): Promise<void> {
+  const ata = cashAta(maker.publicKey);
+  const [account, cash] = await getConnection().getMultipleAccountsInfo([maker.publicKey, ata], "confirmed");
+  const lamports = account?.lamports ?? 0;
+  if (lamports < MAKER_MIN_SOL) await callCheatcode("surfnet_setAccount", [maker.publicKey.toBase58(), { lamports: MAKER_TOPUP_SOL }]);
+  if (!cash) await ensureCashAccount(maker.publicKey);
+  const amount = tokenAmountOf(cash?.data as Buffer | undefined);
+  if (amount < MAKER_MIN_CASH) await setTokenAmount(ata, MAKER_TOPUP_CASH);
+  if (lamports >= 2 * MAKER_MIN_SOL && amount >= 2n * MAKER_MIN_CASH) makerHealthyAt = Date.now();
 }
 
 /** Test faucet: adds `cash` CASH (UI units) and tops SOL up for fees. */
