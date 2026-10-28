@@ -301,7 +301,8 @@ export async function farmDeposit(req: FarmDepositRequest, opts: MarginServiceOp
   if (total <= 0n) throw new Error("Enter an amount");
 
   await ensureFreshPrices();
-  const ctx = await loadContext(signer.publicKey);
+  // The reserve rate does not depend on the margin account: read both at once.
+  const [ctx, rate] = await Promise.all([loadContext(signer.publicKey), readRate(r)]);
   if (!ctx.snapshot.exists) throw new Error("Create a margin account first");
   const underlying = assetFor(ctx.assetMap, token);
   const receiptAsset = findAssetByMint(ctx, r.collateralMint);
@@ -314,7 +315,6 @@ export async function farmDeposit(req: FarmDepositRequest, opts: MarginServiceOp
   await appendDeposits(ctx, deposits);
   await appendBorrows(ctx, borrows);
 
-  const rate = await readRate(r);
   const expectedReceipts = receiptsForUnderlying(rate, total);
   const cpiAccounts = kaminoCallAccounts(
     "deposit",
@@ -355,7 +355,7 @@ export async function farmWithdraw(req: FarmWithdrawRequest, opts: MarginService
   const r = receiptForUnderlying(token.symbol);
   if (!r) throw new Error(`No Kamino vault for ${token.symbol}`);
   await ensureFreshPrices();
-  const ctx = await loadContext(signer.publicKey);
+  const [ctx, rate] = await Promise.all([loadContext(signer.publicKey), readRate(r)]);
   const underlying = assetFor(ctx.assetMap, token);
   const receiptAsset = findAssetByMint(ctx, r.collateralMint);
   const held = ctx.snapshot.collateral.find((c) => c.assetIndex === receiptAsset.assetIndex)?.amountRaw ?? 0n;
@@ -363,7 +363,6 @@ export async function farmWithdraw(req: FarmWithdrawRequest, opts: MarginService
   if (amount <= 0n) throw new Error("Nothing to withdraw");
   if (amount > held) throw new Error(`You hold only ${fromRaw(held, CTOKEN_DECIMALS)} ${r.symbol}`);
 
-  const rate = await readRate(r);
   const expected = underlyingForReceipts(rate, amount);
   const cpiAccounts = kaminoCallAccounts(
     "redeem",

@@ -27,6 +27,7 @@ import { useUserStore } from "@/store/user";
 import { useMarginAccountInfoStore, refreshMarginAccount } from "@/store/margin-account-info-store";
 import { useTokenPrices } from "@/hooks/use-token-prices";
 import { useFarmDeposit, useFarmWithdraw } from "@/lib/farm/use-farm";
+import { usePrewarmPrices } from "@/hooks/use-prewarm-prices";
 import type { FarmPoolConfig } from "@/lib/farm/pools";
 import type { FarmPosition } from "@/lib/solana/farm";
 import { NETWORK_LABEL } from "@/lib/solana/config";
@@ -115,6 +116,8 @@ function SupplyPanel({ pool, position }: { pool: FarmPoolConfig; position: FarmP
 
   const available = hasMarginAccount ? parseFloat(collateralBalances[token]?.amount ?? "0") || 0 : 0;
   const amount = parseFloat(value) || 0;
+  // The deposit refreshes fork prices first (~5 s); start it while the user is still typing.
+  usePrewarmPrices(Boolean(userAddress) && amount > 0);
   const receipt = receiptForUnderlying(token);
   const rateQuery = useQuery({
     queryKey: ["farm", "receipt-rate", pool.reserve],
@@ -281,6 +284,7 @@ function WithdrawPanel({ pool, position }: { pool: FarmPoolConfig; position: Far
 
   const percent = parseFloat(value);
   const valid = Number.isFinite(percent) && percent > 0 && percent <= 100;
+  usePrewarmPrices(Boolean(userAddress && position) && valid);
   const withdraw = useFarmWithdraw();
   const isPending = withdraw.isPending;
 
