@@ -70,8 +70,21 @@ export function liquidationFailed(margin: string, error: string) {
   });
 }
 
-export function loopFailed(error: string) {
-  return notify(`🔴 ${mode}<b>Loop failed</b>\n<code>${esc(error.slice(0, 300))}</code>`, { key: "loop", everyMs: HOUR });
+/** Error text without the long account lists RPC errors carry ("failed to get info for accounts A,B,C…"). */
+const shortError = (error: string) =>
+  error
+    .replace(/[1-9A-HJ-NP-Za-km-z]{32,44}(?:,[1-9A-HJ-NP-Za-km-z]{32,44})+/g, (list) => {
+      const keys = list.split(",");
+      return `${keys[0].slice(0, 4)}… (+${keys.length - 1} more)`;
+    })
+    .slice(0, 300);
+
+export function loopFailed(error: string, inARow: number) {
+  return notify(`🔴 ${mode}<b>Loop failing</b>: ${inARow} times in a row, it is not checking accounts\n<code>${esc(shortError(error))}</code>`, { key: "loop", everyMs: HOUR });
+}
+
+export function loopRecovered(after: number) {
+  return notify(`🟢 ${mode}<b>Loop recovered</b> after ${after} failed attempts`, { key: "loop-ok", everyMs: HOUR });
 }
 
 /** `lowSol`: the SOL balance when it is under the minimum; `emptyTokens`: borrowable tokens the wallet holds none of. */

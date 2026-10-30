@@ -133,12 +133,19 @@ async function main() {
   if (telegramEnabled && config.shardIndex === 0) {
     superviseCommands(() => stopping);
   }
+  // One failed loop is usually the fork's RPC failing a read for a moment (it fetches unknown
+  // accounts from mainnet and can be rate-limited); the next loop recovers. Alert only when the
+  // loop keeps failing.
+  let failedInARow = 0;
   while (!stopping) {
     try {
       await loop(keypair, strategies);
+      if (failedInARow >= config.loopFailuresToAlert) void alerts.loopRecovered(failedInARow);
+      failedInARow = 0;
     } catch (error) {
-      log("ERROR", "loop failed", { error: describeError(error).slice(0, 500) });
-      void alerts.loopFailed(describeError(error));
+      failedInARow++;
+      log(failedInARow >= config.loopFailuresToAlert ? "ERROR" : "WARNING", "loop failed", { inARow: failedInARow, error: describeError(error).slice(0, 500) });
+      if (failedInARow === config.loopFailuresToAlert) void alerts.loopFailed(describeError(error), failedInARow);
     }
     if (!stopping) await new Promise((resolve) => setTimeout(resolve, config.pollMs));
   }

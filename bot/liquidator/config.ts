@@ -25,6 +25,8 @@ export const config = {
   failureCooldownMs: num("FAILURE_COOLDOWN_MS", 120_000),
   /** After a round that found nothing worth doing (below min profit, no strategy, dry run), re-plan the account after this long. */
   skipCooldownMs: num("SKIP_COOLDOWN_MS", 60_000),
+  /** Telegram "loop failing" alert after this many failed loops in a row (one failure is usually a passing RPC hiccup). */
+  loopFailuresToAlert: Math.max(1, num("LOOP_FAILURES_TO_ALERT", 3)),
   /** Fork only: rewrite the fork's price accounts before liquidating (the fork has no live pusher). */
   forkPriceRefresh: env("FORK_PRICE_REFRESH", "true") === "true",
   /** FORK ONLY: refill every borrowable token from the fork's cheatcodes when it runs low. Never on mainnet. */
