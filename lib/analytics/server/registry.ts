@@ -94,6 +94,11 @@ export const knownMargins = (): Array<{ address: string; owner: string }> =>
 export const registryError = () => registry.lastError;
 export const firstSeenTime = (address: string): number | null => registry.firstSeen.get(address) ?? null;
 
+/** Newest block time (unix seconds) of a program transaction seen touching each margin, in this process. */
+const lastActivity = new Map<string, number>();
+/** When a margin was last seen in a program transaction (null if not in this process's scan). */
+export const lastActivityTime = (address: string): number | null => lastActivity.get(address) ?? null;
+
 /** Verified margin account → authority, or null. */
 function marginAuthority(key: PublicKey, info: { owner: PublicKey; data: Buffer } | null): PublicKey | null {
   if (!info || !info.owner.equals(VANNA_PROGRAM_ID) || info.data.length < 40) return null;
@@ -201,6 +206,7 @@ async function inspect(batch: ConfirmedSignatureInfo[]) {
       if (!registry.margins.has(a)) continue;
       const prev = registry.firstSeen.get(a);
       if (prev === undefined || t.time < prev) registry.firstSeen.set(a, t.time);
+      if (t.time > (lastActivity.get(a) ?? 0)) lastActivity.set(a, t.time);
     }
   }
   for (const s of done) {

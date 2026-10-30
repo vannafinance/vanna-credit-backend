@@ -46,6 +46,18 @@ const CHUNK = 100;
 const CHUNK_PAUSE_MS = 120;
 /** How long a remembered "which vaults exist" answer is trusted before a full probe. */
 const PROBE_TTL_MS = 15 * 60_000;
+let probeTtlMs = PROBE_TTL_MS;
+/**
+ * How long a full vault probe is trusted (default 15 min, which the site uses). The liquidator bot
+ * sets it longer: a vault it hasn't probed can only ADD collateral, so it can never hide a
+ * liquidatable account, and most unprobed vaults don't exist (on the fork each such read is a
+ * mainnet fetch that can be rate-limited).
+ */
+export const setVaultProbeTtl = (ms: number) => {
+  probeTtlMs = ms;
+};
+/** Forget which vaults an account holds, so its next read probes all of them. */
+export const forgetVaults = (address: string) => KNOWN_VAULTS.delete(address);
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface SharedContext {
@@ -161,7 +173,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
     if (!m) continue;
     const addr = m.address.toBase58();
     const known = KNOWN_VAULTS.get(addr);
-    const fresh = known && Date.now() - known.at < PROBE_TTL_MS;
+    const fresh = known && Date.now() - known.at < probeTtlMs;
     for (const a of ctx.collateralAssets) {
       if (fresh && !known!.indexes.includes(a.assetIndex)) continue;
       probeKeys.push(marginVault(m.address, a.mint, a.tokenProgram)); probeOwners.push(a.tokenProgram); probeOf.push({ margin: addr, index: a.assetIndex });
@@ -178,7 +190,7 @@ export async function readAccountRows(ctx: SharedContext, margins: Array<{ addre
     if (!m) continue;
     const addr = m.address.toBase58();
     const known = KNOWN_VAULTS.get(addr);
-    if (!known || Date.now() - known.at >= PROBE_TTL_MS) probedFully.add(addr);
+    if (!known || Date.now() - known.at >= probeTtlMs) probedFully.add(addr);
   }
   // Remember which vaults hold something (a fully probed account's answer; others keep theirs plus anything new).
   for (const addr of probedFully) KNOWN_VAULTS.set(addr, { at: Date.now(), indexes: [...(amountsBy.get(addr)?.keys() ?? [])] });

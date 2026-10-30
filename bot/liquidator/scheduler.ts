@@ -34,6 +34,9 @@ interface Tracked {
 }
 
 const tracked = new Map<string, Tracked>();
+/** Accounts to read on the next loop whatever their tier (new activity, or the program disagreed with us). */
+const forced = new Set<string>();
+export const markDue = (address: string) => forced.add(address);
 
 /** USD price of an asset in the shared context, or null. */
 export function usdPrice(ctx: Pick<SharedContext, "prices">, assetIndex: number): number | null {
@@ -67,7 +70,7 @@ export function intervalFor(healthFactor: number | null, liquidatable: boolean, 
 export function dueMargins<M extends { address: string }>(margins: M[], ctx: Pick<SharedContext, "prices">, now = Date.now()): M[] {
   return margins.filter((m) => {
     const t = tracked.get(m.address);
-    if (!t) return true;
+    if (!t || forced.has(m.address)) return true;
     const estimate = estimateHealth(t, ctx);
     const health = Math.min(t.row.healthFactor ?? Infinity, estimate ?? Infinity);
     const hasDebt = (t.row.debtUsd ?? 0) > 0;
@@ -79,6 +82,7 @@ export function dueMargins<M extends { address: string }>(margins: M[], ctx: Pic
 /** Remembers freshly read rows with the prices they were valued at. */
 export function record(rows: AccountRow[], ctx: Pick<SharedContext, "prices">, now = Date.now()) {
   for (const row of rows) {
+    forced.delete(row.address);
     const indexes = [...row.collateral.map((l) => l.assetIndex), ...row.debts.map((l) => l.assetIndex)];
     tracked.set(row.address, { row, readAt: now, prices: new Map(indexes.map((i) => [i, usdPrice(ctx, i)])) });
   }
@@ -93,4 +97,7 @@ export function prune(known: Set<string>) {
 export const trackedRows = (): AccountRow[] => [...tracked.values()].map((t) => t.row);
 
 /** For tests. */
-export const resetScheduler = () => tracked.clear();
+export const resetScheduler = () => {
+  tracked.clear();
+  forced.clear();
+};

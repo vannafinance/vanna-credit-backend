@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AccountRow } from "@/lib/analytics/types";
-import { dueMargins, estimateHealth, intervalFor, record, resetScheduler, trackedRows } from "./scheduler";
+import { dueMargins, estimateHealth, intervalFor, markDue, record, resetScheduler, trackedRows } from "./scheduler";
 
 const SOL = 2, USDC = 0;
 const ctxAt = (solUsd: number) => ({
@@ -72,5 +72,14 @@ describe("dueMargins", () => {
   it("re-reads liquidatable accounts every loop", () => {
     record([row("a", 1050, 1000)], ctxAt(100), 0);
     expect(dueMargins([{ address: "a" }], ctxAt(100), 1).map((m) => m.address)).toEqual(["a"]);
+  });
+
+  it("reads a marked account on the next loop whatever its tier, once", () => {
+    record([row("a", 5000, 1000)], ctxAt(100), 0);
+    expect(dueMargins([{ address: "a" }], ctxAt(100), 1_000)).toEqual([]);
+    markDue("a");
+    expect(dueMargins([{ address: "a" }], ctxAt(100), 1_000).map((m) => m.address)).toEqual(["a"]);
+    record([row("a", 5000, 1000)], ctxAt(100), 1_000);
+    expect(dueMargins([{ address: "a" }], ctxAt(100), 2_000)).toEqual([]);
   });
 });

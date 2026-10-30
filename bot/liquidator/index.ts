@@ -17,8 +17,8 @@
  * is hooks (bot/liquidator/hooks.ts). This loop does not change for either.
  */
 import type { Keypair } from "@solana/web3.js";
-import { coverage, knownMargins, tick } from "@/lib/analytics/server/registry";
-import { loadSharedContext, readAccountRows } from "@/lib/analytics/server/accounts";
+import { coverage, knownMargins, lastActivityTime, tick } from "@/lib/analytics/server/registry";
+import { forgetVaults, loadSharedContext, readAccountRows, setVaultProbeTtl } from "@/lib/analytics/server/accounts";
 import { refreshForkPrices } from "@/lib/solana/server/fork-prices";
 import { SOLANA_RPC_URL } from "@/lib/solana/config";
 import { describeError } from "@/lib/solana/errors";
@@ -34,12 +34,14 @@ import { shardOf } from "./shard";
 import { lastTelegramPoll, superviseCommands } from "./commands";
 import { topUpOnFork } from "./fork-faucet";
 import { liquidateAccount } from "./engine";
-import { dueMargins, prune, record, trackedRows } from "./scheduler";
+import { dueMargins, markDue, prune, record, trackedRows } from "./scheduler";
 import { setSnapshot } from "./state";
 import { enabledStrategies, type LiquidationStrategy } from "./strategies";
 import { loadKeypair, readWallet } from "./wallet";
 
 const cooldownUntil = new Map<string, number>();
+/** Newest program-transaction time already acted on, per margin. */
+const seenActivity = new Map<string, number>();
 let stopping = false;
 
 async function loop(keypair: Keypair, strategies: LiquidationStrategy[]) {
@@ -55,6 +57,17 @@ async function loop(keypair: Keypair, strategies: LiquidationStrategy[]) {
   const mine = knownMargins().filter((m) => shardOf(m.address, config.shardCount) === config.shardIndex);
   // Only accounts that are due are read from chain (scheduler.ts); the rest are re-valued in memory.
   prune(new Set(mine.map((m) => m.address)));
+  // An account with a new program transaction (a deposit, swap, borrow…) may hold a token we
+  // haven't probed: probe all its vaults on this read.
+  for (const m of mine) {
+    const at = lastActivityTime(m.address);
+    if (at === null || at <= (seenActivity.get(m.address) ?? 0)) continue;
+    if (seenActivity.has(m.address)) {
+      forgetVaults(m.address);
+      markDue(m.address);
+    }
+    seenActivity.set(m.address, at);
+  }
   const due = dueMargins(mine, shared);
   const rows = await readAccountRows(shared, due);
   record(rows, shared);
@@ -71,6 +84,15 @@ async function loop(keypair: Keypair, strategies: LiquidationStrategy[]) {
       const last = results[results.length - 1]?.outcome;
       if (last && last !== "liquidated" && last !== "healthy") cooldownUntil.set(row.address, Date.now() + config.skipCooldownMs);
     } catch (error) {
+      if (/PositionHealthy|healthy and is not eligible/i.test(describeError(error))) {
+        // The program sees collateral we don't (a vault we haven't probed): not a failure. Probe all
+        // of the account's vaults on the next read.
+        forgetVaults(row.address);
+        markDue(row.address);
+        cooldownUntil.set(row.address, Date.now() + config.skipCooldownMs);
+        log("INFO", "program says healthy, re-probing the account's vaults", { margin: row.address });
+        continue;
+      }
       cooldownUntil.set(row.address, Date.now() + config.failureCooldownMs);
       log("ERROR", "liquidation failed", { margin: row.address, error: describeError(error).slice(0, 500) });
       void alerts.liquidationFailed(row.address, describeError(error));
@@ -108,6 +130,7 @@ async function main() {
   const keypair = loadKeypair();
   const strategies = enabledStrategies(config.strategies);
   if (config.forkPriceRefresh) setPriceRefresher(() => refreshForkPrices());
+  setVaultProbeTtl(config.vaultProbeTtlMs);
   log("INFO", "liquidator starting", {
     ...config,
     liquidator: keypair.publicKey.toBase58(),

@@ -27,6 +27,10 @@ export const config = {
   skipCooldownMs: num("SKIP_COOLDOWN_MS", 60_000),
   /** Telegram "loop failing" alert after this many failed loops in a row (one failure is usually a passing RPC hiccup). */
   loopFailuresToAlert: Math.max(1, num("LOOP_FAILURES_TO_ALERT", 3)),
+  /** How long a full probe of an account's vaults is trusted. A vault the bot hasn't probed can only
+   * add collateral (it can't hide a liquidatable account); new activity or a PositionHealthy answer
+   * re-probes the account at once. */
+  vaultProbeTtlMs: num("VAULT_PROBE_TTL_MS", 6 * 60 * 60_000),
   /** Fork only: rewrite the fork's price accounts before liquidating (the fork has no live pusher). */
   forkPriceRefresh: env("FORK_PRICE_REFRESH", "true") === "true",
   /** FORK ONLY: refill every borrowable token from the fork's cheatcodes when it runs low. Never on mainnet. */
